@@ -1,0 +1,33 @@
+[
+    {
+        "id": "2287ac72-8343-4530-87a0-db8a769ec1bf",
+        "type": "indicator",
+        "title": "Qtde. Status",
+        "num_op": "Contagem",
+        "num_field": "Status",
+        "use_den": false,
+        "den_op": null,
+        "den_field": null,
+        "style": "Medidor (Gauge)",
+        "gauge_min": null,
+        "gauge_max_static": null,
+        "target_type": "Valor Din\u00e2mico",
+        "target_op": "Contagem",
+        "target_field": "Issues"
+    },
+    {
+        "id": "38765e5d-de81-468d-9347-9a2b3b433306",
+        "type": "dispers\u00e3o",
+        "x": "Data de Cria\u00e7\u00e3o",
+        "y": "Lead Time (dias)",
+        "title": "Lead Time (dias) vs Data de Cria\u00e7\u00e3o"
+    },
+    {
+        "id": "7d43c1bf-6c1f-44bc-a922-f09606203774",
+        "type": "barra",
+        "dimension": "Criado por",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Criado por'"
+    }
+]
