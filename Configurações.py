@@ -4,6 +4,11 @@ from jira_connector import connect_to_jira, get_projects
 import json
 import os
 from config import *
+from security import (
+    save_user_credentials, get_user_credentials, 
+    get_all_profiles, encrypt_token, decrypt_token,
+    delete_profile
+)
 
 st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
 st.session_state['available_standard_fields'] = AVAILABLE_STANDARD_FIELDS
@@ -39,43 +44,75 @@ with st.sidebar:
 
 st.header("⚙️ Configurações e Conexão")
 
-# Bloco de status de conexão amigável
-if 'jira_client' in st.session_state and st.session_state.jira_client is not None:
-    with st.container(border=True):
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            st.success("Conectado", icon="✅")
-        with col2:
-            st.markdown(f"**Utilizador:** `{st.secrets.get('JIRA_USER_EMAIL', 'N/A')}`")
-            st.markdown(f"**Servidor:** `{st.session_state.jira_client._options['server']}`")
-    st.info("Tudo pronto! Pode começar a navegar pelas páginas de análise na barra lateral.")
-else:
-    st.warning("Você não está conectado. Por favor, conecte-se abaixo para continuar.")
+st.header("👤 Perfis de Conexão")
+st.markdown("Crie ou selecione um perfil para guardar e gerir as suas credenciais do Jira de forma segura e individual.")
 
-st.divider()
+# --- Seleção e Gestão de Perfis ---
+profiles = get_all_profiles()
+selected_profile = st.selectbox("Selecione um Perfil Existente", options=profiles, index=None, placeholder="Escolha um perfil...")
 
-# Formulário de Conexão
-with st.container(border=True):
-    st.subheader("1. Conexão com o Jira")
-    st.markdown("Suas credenciais são carregadas do arquivo `.streamlit/secrets.toml` e podem ser alteradas abaixo.")
+if selected_profile:
+    if st.button(f"Apagar Perfil '{selected_profile}'", type="secondary"):
+        delete_profile(selected_profile)
+        st.success(f"Perfil '{selected_profile}' apagado.")
+        # Limpa o estado da conexão se o perfil ativo for apagado
+        if st.session_state.get('active_profile') == selected_profile:
+            for key in ['jira_client', 'active_profile']:
+                if key in st.session_state:
+                    del st.session_state[key]
+        st.rerun()
+
+# --- Formulário para Criar/Atualizar um Perfil ---
+with st.form("credential_form"):
+    st.subheader("Criar ou Atualizar Perfil")
     
-    jira_server = st.text_input("URL do Servidor Jira", value=st.secrets.get("JIRA_SERVER", ""))
-    user_email = st.text_input("Email do Usuário Jira", value=st.secrets.get("JIRA_USER_EMAIL", ""))
-    api_token = st.text_input("Token da API Jira", type="password", value=st.secrets.get("JIRA_API_TOKEN", ""))
+    profile_name = st.text_input("Nome do Perfil (ex: seu nome ou nome do projeto)", value=selected_profile or "")
+    
+    # Carrega os dados se um perfil for selecionado
+    creds = get_user_credentials(profile_name) if profile_name else None
+    
+    jira_server = st.text_input("URL do Servidor Jira", value=creds['jira_url'] if creds else "")
+    user_email = st.text_input("Email do Usuário Jira", value=creds['jira_email'] if creds else "")
+    
+    # Se já existem credenciais, não mostramos o token, apenas um campo para o alterar
+    if creds and creds.get('encrypted_token'):
+        st.info("🔑 Um token já está guardado para este perfil. Preencha o campo abaixo apenas se quiser alterá-lo.")
+        api_token = st.text_input("Novo Token da API Jira (opcional)", type="password")
+    else:
+        api_token = st.text_input("Token da API Jira", type="password")
+        
+    submitted = st.form_submit_button("Guardar e Conectar com este Perfil")
 
-    if st.button("Conectar ao Jira"):
-        if not all([jira_server, user_email, api_token]):
-            st.error("Por favor, preencha todas as credenciais.")
+    if submitted:
+        if not all([profile_name, jira_server, user_email]):
+            st.error("Por favor, preencha o Nome do Perfil, URL e Email.")
         else:
-            with st.spinner("Conectando..."):
-                client = connect_to_jira(jira_server, user_email, api_token)
-                if client:
-                    st.session_state.jira_client = client
-                    st.session_state.projects = get_projects(client)
-                    st.success("Conectado com sucesso! Redirecionando para as métricas...")
-                    st.switch_page("pages/2_📊_Métricas_de_Fluxo.py")
-                else:
-                    st.error("Falha na conexão. Verifique suas credenciais e a URL do servidor.")
+            final_token = api_token # Usa o novo token se fornecido
+            if not api_token and creds and creds.get('encrypted_token'):
+                final_token = decrypt_token(creds['encrypted_token']) # Reutiliza o token antigo se nenhum novo for fornecido
+            
+            if not final_token:
+                st.error("O Token da API é obrigatório para um novo perfil ou para uma atualização.")
+            else:
+                with st.spinner("A testar a conexão e a guardar as credenciais..."):
+                    client = connect_to_jira(jira_server, user_email, final_token)
+                    if client:
+                        encrypted_token = encrypt_token(final_token)
+                        save_user_credentials(profile_name, jira_server, user_email, encrypted_token)
+                        
+                        st.session_state.jira_client = client
+                        st.session_state.active_profile = profile_name
+                        st.success(f"Conectado com sucesso como '{profile_name}'!")
+                        st.switch_page("pages/2_📊_Métricas_de_Fluxo.py")
+                    else:
+                        st.error("Falha na conexão. Verifique as credenciais.")
+
+# --- Status da Conexão Atual ---
+st.divider()
+if 'jira_client' in st.session_state and st.session_state.get('active_profile'):
+    st.success(f"Você está conectado com o perfil: **{st.session_state.active_profile}**")
+else:
+    st.warning("Nenhum perfil conectado nesta sessão.")
 
 st.divider()
 st.header("2. Gestão de Campos e Status para Análise")

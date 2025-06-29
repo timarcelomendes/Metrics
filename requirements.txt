@@ -5,3 +5,6 @@ jira
 plotly
 numpy
 scikit-learn
+pymongo
+cryptography
+dnspython
