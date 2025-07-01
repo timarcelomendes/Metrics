@@ -29,5 +29,81 @@
         "measure": "Contagem de Issues",
         "agg": "Contagem",
         "title": "An\u00e1lise de 'Contagem de Issues' por 'Criado por'"
+    },
+    {
+        "id": "58b30ca7-3d01-4e23-8a1f-01cafdb694a8",
+        "type": "indicator",
+        "title": "Ex: M\u00e9dia de Pontos por Issue",
+        "icon": "\ud83d\ude80",
+        "num_op": "Contagem",
+        "num_field": "Issues",
+        "use_den": false,
+        "den_op": null,
+        "den_field": null,
+        "style": "N\u00famero Grande",
+        "gauge_min": null,
+        "gauge_max_static": null,
+        "target_type": null,
+        "target_op": null,
+        "target_field": null,
+        "show_delta": false
+    },
+    {
+        "id": "2d77ce27-fe4f-4f51-b0bf-01cf8adf1a00",
+        "type": "indicator",
+        "title": "Ex: M\u00e9dia de Pontos por Issue",
+        "icon": "\ud83d\ude80",
+        "num_op": "Soma",
+        "num_field": "Story Points",
+        "use_den": false,
+        "den_op": null,
+        "den_field": null,
+        "style": "N\u00famero Grande",
+        "gauge_min": 0,
+        "gauge_max_static": 100,
+        "target_type": "Fixo",
+        "target_op": null,
+        "target_field": null,
+        "show_delta": true
+    },
+    {
+        "id": "8579084a-107a-419f-85be-e8ec8943b2e3",
+        "type": "treemap",
+        "dimension": "Tipo de Issue",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Tipo de Issue'"
+    },
+    {
+        "id": "8c156c89-5144-43ba-b223-77c6277e0ecf",
+        "type": "treemap",
+        "dimension": "Labels",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Labels'"
+    },
+    {
+        "id": "9ea33380-1f02-4168-bcce-55a8dcee56c7",
+        "type": "funil",
+        "dimension": "Status",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Status'"
+    },
+    {
+        "id": "faa07444-19e8-4496-8f0b-91fbd2eaad56",
+        "type": "tabela",
+        "dimension": "Labels",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Labels'"
+    },
+    {
+        "id": "c003a161-82dd-4388-8b66-217716e71511",
+        "type": "tabela",
+        "dimension": "Status",
+        "measure": "Contagem de Issues",
+        "agg": "Contagem",
+        "title": "An\u00e1lise de 'Contagem de Issues' por 'Status'"
     }
 ]
