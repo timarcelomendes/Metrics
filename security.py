@@ -3,8 +3,18 @@
 import streamlit as st
 from pymongo import MongoClient
 from cryptography.fernet import Fernet
+from passlib.context import CryptContext
 
-# --- Funções de Criptografia ---
+# --- Configuração de Hashing ---
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+# --- Funções de Criptografia de Token ---
 def get_cipher():
     key = st.secrets["ENCRYPTION_KEY"]
     return Fernet(key.encode())
@@ -17,29 +27,32 @@ def decrypt_token(encrypted_token: str):
 
 # --- Funções da Base de Dados ---
 @st.cache_resource
-def get_db_collection():
+def get_users_collection():
+    """Conecta-se ao MongoDB e retorna a coleção de utilizadores."""
     connection_string = st.secrets["MONGO_CONNECTION_STRING"]
     client = MongoClient(connection_string)
     db = client.get_database("dashboard_metrics")
-    return db.get_collection("user_credentials")
+    return db.get_collection("users")
 
-def save_user_credentials(profile_name, url, email, encrypted_token):
-    collection = get_db_collection()
+def find_user(email):
+    """Encontra um utilizador pelo email."""
+    collection = get_users_collection()
+    return collection.find_one({'email': email})
+
+def create_user(email, hashed_password):
+    """Cria um novo utilizador na base de dados."""
+    collection = get_users_collection()
+    collection.insert_one({'email': email, 'hashed_password': hashed_password})
+
+def save_jira_credentials(email, url, api_email, encrypted_token):
+    """Guarda as credenciais do Jira para um utilizador."""
+    collection = get_users_collection()
     collection.update_one(
-        {'profile_name': profile_name},
-        {'$set': {'jira_url': url, 'jira_email': email, 'encrypted_token': encrypted_token}},
+        {'email': email},
+        {'$set': {
+            'jira_url': url,
+            'jira_email': api_email,
+            'encrypted_token': encrypted_token
+        }},
         upsert=True
     )
-
-def get_user_credentials(profile_name):
-    collection = get_db_collection()
-    return collection.find_one({'profile_name': profile_name})
-
-def get_all_profiles():
-    collection = get_db_collection()
-    profiles = collection.find({}, {'profile_name': 1, '_id': 0})
-    return [p['profile_name'] for p in profiles]
-
-def delete_profile(profile_name):
-    collection = get_db_collection()
-    collection.delete_one({'profile_name': profile_name})

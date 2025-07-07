@@ -1,12 +1,9 @@
-# 1_⚙️_Configurações.py
-
+# pages/2_⚙️_Configurações.py
 import streamlit as st
-from jira_connector import connect_to_jira, get_projects
 import json, os
 from config import *
-from security import *
 
-st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="Configurações Globais", page_icon="⚙️", layout="wide")
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -19,83 +16,28 @@ def save_config(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
 
+if 'email' not in st.session_state:
+    st.warning("Por favor, faça login para aceder às configurações.")
+    st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑")
+    st.stop()
+
 with st.sidebar:
     try: st.image("images/gauge-logo.png", width=150)
-    except Exception: st.write("Gauge Metrics")
-
-st.header("⚙️ Configurações e Conexão")
-
-if 'jira_client' in st.session_state and st.session_state.jira_client is not None and st.session_state.get('active_profile'):
-    with st.container(border=True):
-        col1, col2 = st.columns([1, 4])
-        with col1: st.success("Conectado", icon="✅")
-        with col2:
-            st.markdown(f"**Perfil Ativo:** `{st.session_state.active_profile}`")
-            st.markdown(f"**Servidor:** `{st.session_state.jira_client._options['server']}`")
-    st.info("Tudo pronto! Pode navegar pelas páginas de análise na barra lateral.")
-else:
-    st.warning("Nenhum perfil conectado nesta sessão. Crie ou selecione um perfil e conecte-se.")
-
+    except Exception: pass
+st.header("⚙️ Configurações Globais da Aplicação")
+st.markdown("As configurações definidas aqui afetam todos os utilizadores e todas as análises.")
 st.divider()
 
-with st.container(border=True):
-    st.subheader("1. Perfis de Conexão")
-    profiles = get_all_profiles()
-    selected_profile = st.selectbox("Selecione um Perfil Existente", options=[""] + profiles, index=0, format_func=lambda x: "Selecione para carregar ou apagar..." if x == "" else x)
-
-    if selected_profile:
-        if st.button(f"Apagar Perfil '{selected_profile}'", type="secondary"):
-            delete_profile(selected_profile)
-            if st.session_state.get('active_profile') == selected_profile:
-                for key in ['jira_client', 'active_profile', 'projects']:
-                    if key in st.session_state: del st.session_state[key]
-            st.success(f"Perfil '{selected_profile}' apagado."); st.rerun()
-
-    with st.form("credential_form"):
-        st.markdown("**Criar ou Atualizar Perfil:**")
-        profile_name = st.text_input("Nome do Perfil", value=selected_profile or "")
-        creds = get_user_credentials(profile_name) if profile_name and not selected_profile else get_user_credentials(selected_profile) if selected_profile else {}
-        creds = creds or {}
-        col1, col2 = st.columns(2)
-        jira_server = col1.text_input("URL do Servidor Jira", value=creds.get('jira_url', ''))
-        user_email = col2.text_input("Email do Usuário Jira", value=creds.get('jira_email', ''))
-        if creds.get('encrypted_token'):
-            st.info("🔑 Um token já está guardado. Preencha abaixo apenas se quiser alterá-lo.")
-            api_token = st.text_input("Novo Token da API Jira (opcional)", type="password")
-        else:
-            api_token = st.text_input("Token da API Jira", type="password")
-        
-        if st.form_submit_button("Guardar e Conectar com este Perfil", type="primary", use_container_width=True):
-            if not all([profile_name, jira_server, user_email]): st.error("Por favor, preencha o Nome do Perfil, URL e Email.")
-            else:
-                final_token = api_token if api_token else decrypt_token(creds['encrypted_token']) if creds.get('encrypted_token') else None
-                if not final_token: st.error("O Token da API é obrigatório para um novo perfil ou para uma atualização.")
-                else:
-                    with st.spinner(f"A conectar com o perfil '{profile_name}'..."):
-                        client = connect_to_jira(jira_server, user_email, final_token)
-                        if client:
-                            projects = get_projects(client)
-                            if projects:
-                                encrypted_token = encrypt_token(final_token); save_user_credentials(profile_name, jira_server, user_email, encrypted_token)
-                                st.session_state.jira_client = client; st.session_state.active_profile = profile_name; st.session_state.projects = projects
-                                st.session_state['available_standard_fields'] = AVAILABLE_STANDARD_FIELDS
-                                st.success(f"Conexão bem-sucedida! {len(projects)} projetos encontrados."); st.rerun()
-                            else: st.warning("Conexão com o Jira bem-sucedida, mas nenhum projeto foi encontrado. Verifique as permissões da sua conta no Jira.")
-                        else: st.error("Falha na conexão. Verifique se a URL, Email e Token estão corretos.")
-st.divider()
-
-st.header("2. Configurações Globais de Análise")
 tab1, tab2, tab3 = st.tabs(["Mapeamento de Status", "Campos Padrão", "Campos Personalizados"])
-
 with tab1:
     st.subheader("Mapeamento de Status do Workflow")
     status_mapping = load_config(STATUS_MAPPING_FILE, {})
     initial_states_str = st.text_area("Status Iniciais", value=", ".join(status_mapping.get('initial', DEFAULT_INITIAL_STATES)))
     done_states_str = st.text_area("Status Finais", value=", ".join(status_mapping.get('done', DEFAULT_DONE_STATES)))
     if st.button("Salvar Mapeamento de Status"):
-        new_initial = [s.strip().lower() for s in initial_states_str.split(',') if s.strip()]; new_done = [s.strip().lower() for s in done_states_str.split(',') if s.strip()]
+        new_initial = [s.strip().lower() for s in initial_states_str.split(',') if s.strip()]
+        new_done = [s.strip().lower() for s in done_states_str.split(',') if s.strip()]
         save_config({'initial': new_initial, 'done': new_done}, STATUS_MAPPING_FILE); st.success("Mapeamento guardado!")
-
 with tab2:
     st.subheader("Seleção de Campos Padrão do Jira")
     selected_standard_fields = load_config(STANDARD_FIELDS_FILE, [])
@@ -105,7 +47,6 @@ with tab2:
     if st.button("Salvar Seleção de Campos Padrão"):
         new_selection = [name for name, toggled in toggles.items() if toggled]; save_config(new_selection, STANDARD_FIELDS_FILE)
         st.success("Seleção guardada!"); st.rerun()
-
 with tab3:
     st.subheader("Gestão de Campos Personalizados")
     custom_fields = load_config(CUSTOM_FIELDS_FILE, [])

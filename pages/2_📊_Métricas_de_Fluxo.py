@@ -226,9 +226,10 @@ with st.sidebar:
 
 # --- CONTEÚDO PRINCIPAL ---
 with main_content:
-    st.header("📊 Métricas de Iteração e Fluxo")
     if st.session_state.get('jira_client'):
-        st.caption(f"Conectado a: {st.session_state.jira_client._options['server']}")
+        st.caption(f"Conectado como: {st.session_state.get('email', '')}")
+        
+    st.header("📊 Métricas de Iteração e Fluxo")
     
     view = st.session_state.get('view_to_show')
     if view == 'board_view':

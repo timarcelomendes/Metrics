@@ -8,3 +8,4 @@ scikit-learn
 pymongo
 cryptography
 dnspython
+passlib[bcrypt]
