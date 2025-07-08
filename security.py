@@ -15,6 +15,7 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 # --- Funções de Criptografia de Token ---
+@st.cache_resource
 def get_cipher():
     key = st.secrets["ENCRYPTION_KEY"]
     return Fernet(key.encode())
@@ -41,18 +42,22 @@ def find_user(email):
 
 def create_user(email, hashed_password):
     """Cria um novo utilizador na base de dados."""
-    collection = get_users_collection()
-    collection.insert_one({'email': email, 'hashed_password': hashed_password})
+    get_users_collection().insert_one({'email': email, 'hashed_password': hashed_password})
 
 def save_jira_credentials(email, url, api_email, encrypted_token):
     """Guarda as credenciais do Jira para um utilizador."""
-    collection = get_users_collection()
-    collection.update_one(
+    get_users_collection().update_one(
         {'email': email},
         {'$set': {
             'jira_url': url,
             'jira_email': api_email,
             'encrypted_token': encrypted_token
-        }},
-        upsert=True
+        }}
+    )
+
+def save_last_project(email, project_key):
+    """Guarda a chave do último projeto selecionado pelo utilizador na base de dados."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'last_project_key': project_key}}
     )

@@ -65,8 +65,9 @@ def display_burnup_forecast():
 
 # --- LÓGICA DA PÁGINA ---
 if 'email' not in st.session_state:
-    st.warning("Por favor, faça login primeiro na página principal.")
-    st.page_link("1_⚙️_Configurações.py", label="Ir para Login", icon="🔑")
+    st.warning("Por favor, conecte-se ao Jira na página de **🔑 Login** para navegar.")
+    if st.button("Ir para a tela de login e **acessar!**"):
+        st.switch_page("1_🔑_Login.py")
     st.stop()
 
 if 'jira_client' not in st.session_state:
@@ -84,12 +85,16 @@ if 'jira_client' not in st.session_state:
                 st.stop()
     else:
         st.warning("Credenciais do Jira não encontradas. Por favor, adicione-as na página 'Minha Conta'.")
-        st.page_link("pages/5_👤_Minha_Conta.py", label="Configurar Credenciais", icon="👤")
+        st.page_link("pages/5_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤")
         st.stop()
 
 with st.sidebar:
-    try: st.image("images/gauge-logo.png", width=150)
-    except Exception: st.write("Gauge Metrics")
+    # Constrói o caminho para a imagem, subindo um nível ('..') para a raiz do projeto
+    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
+    try:
+        st.image(logo_path, width=150)
+    except Exception:
+        pass
     st.divider()
     
     st.markdown("#### 1. Selecione o Projeto")

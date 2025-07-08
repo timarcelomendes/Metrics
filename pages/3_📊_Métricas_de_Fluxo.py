@@ -10,7 +10,7 @@ from metrics_calculator import *
 from sklearn.linear_model import LinearRegression
 import json, os
 from config import * 
-
+from security import decrypt_token, find_user
 
 st.set_page_config(page_title="Métricas de Iteração", page_icon="📊", layout="wide")
 
@@ -153,18 +153,42 @@ def display_scrum_metrics():
         df_times_sprint = pd.DataFrame(time_data).dropna(subset=['Lead Time (dias)', 'Cycle Time (dias)'])
         create_delivery_time_scatter_plot(df_times_sprint, "scrum")
 
-# --- LÓGICA PRINCIPAL DA PÁGINA ---
-if 'jira_client' not in st.session_state or st.session_state.jira_client is None:
-    st.warning("⚠️ Por favor, conecte-se ao Jira na página de Configurações.")
-    st.page_link("1_⚙️_Configurações.py", label="Ir para Configurações", icon="⚙️")
+# --- Bloco de Autenticação e Conexão ---
+if 'email' not in st.session_state:
+    st.warning("⚠️ Acesso Negado: Por favor, faça login para aceder a esta página.")
+    st.page_link("1_🔑_Login.py", label="Ir para a página de Login", icon="🔑")
     st.stop()
 
-# --- BARRA LATERAL COM NOVO DESIGN ---
+# Verifica se as credenciais do Jira estão configuradas para este utilizador
+if 'jira_client' not in st.session_state or st.session_state.jira_client is None:
+    user_data = find_user(st.session_state['email'])
+    if user_data and user_data.get('encrypted_token'):
+        with st.spinner("A conectar ao Jira com as suas credenciais..."):
+            token = decrypt_token(user_data['encrypted_token'])
+            client = connect_to_jira(user_data['jira_url'], user_data['jira_email'], token)
+            if client:
+                st.session_state.jira_client = client
+                st.session_state.projects = get_projects(client)
+                st.rerun() # Recarrega a página para aplicar o estado
+            else:
+                st.error("Não foi possível conectar ao Jira com as suas credenciais guardadas.")
+                st.page_link("pages/3_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤")
+                st.stop()
+    else:
+        st.warning("Credenciais do Jira não encontradas para o seu perfil.")
+        st.page_link("pages/3_👤_Minha_Conta.py", label="Configurar Credenciais Agora", icon="👤")
+        st.stop()
+
+main_content = st.container()
+
+# --- BARRA LATERAL CORRIGIDA ---
 with st.sidebar:
+    # Constrói o caminho para a imagem, subindo um nível ('..') para a raiz do projeto
+    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
     try:
-        st.image("images/gauge-logo.png", width=150)
+        st.image(logo_path, width=150)
     except Exception:
-        st.header("Gauge Metrics")
+        pass
     st.divider()
     
     projects = st.session_state.get('projects', {})
@@ -228,7 +252,7 @@ with st.sidebar:
 with main_content:
     if st.session_state.get('jira_client'):
         st.caption(f"Conectado como: {st.session_state.get('email', '')}")
-        
+
     st.header("📊 Métricas de Iteração e Fluxo")
     
     view = st.session_state.get('view_to_show')
