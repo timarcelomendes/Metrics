@@ -2,12 +2,14 @@
 
 import streamlit as st
 from security import find_user, create_user, verify_password, get_password_hash
-from config import AVAILABLE_STANDARD_FIELDS
+from security import save_user_dashboard
+from security import find_user, create_user, verify_password, get_password_hash, get_global_configs
 
 st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
 
-if 'available_standard_fields' not in st.session_state:
-    st.session_state['available_standard_fields'] = AVAILABLE_STANDARD_FIELDS
+# Carrega as configs globais na primeira execução
+if 'global_configs' not in st.session_state:
+    st.session_state['global_configs'] = get_global_configs()
 
 if 'email' in st.session_state:
     st.success(f"Login realizado como **{st.session_state['email']}**.")
@@ -35,10 +37,14 @@ with st.container(border=True):
                 user = find_user(email)
                 if user and verify_password(password, user['hashed_password']):
                     st.session_state['email'] = user['email']
-                    # --- LÓGICA ATUALIZADA ---
-                    # Guarda o último projeto visitado na sessão, se existir
+                    
+                    # Guarda os dados do utilizador e as configs globais na sessão
+                    st.session_state['user_data'] = user
+                    st.session_state['global_configs'] = get_global_configs() # Garante que está atualizado
+                    
                     if user.get('last_project_key'):
                         st.session_state['last_project_key'] = user.get('last_project_key')
+                        
                     st.success("Login bem-sucedido! A carregar o seu dashboard...")
                     st.switch_page("pages/2_🏠_Meu_Dashboard.py")
                 else:

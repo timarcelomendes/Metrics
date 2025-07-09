@@ -4,6 +4,7 @@ import streamlit as st
 from pymongo import MongoClient
 from cryptography.fernet import Fernet
 from passlib.context import CryptContext
+from config import *
 
 # --- Configuração de Hashing ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -28,12 +29,70 @@ def decrypt_token(encrypted_token: str):
 
 # --- Funções da Base de Dados ---
 @st.cache_resource
+def get_db_client():
+    """Retorna uma instância do cliente MongoDB."""
+    return MongoClient(st.secrets["MONGO_CONNECTION_STRING"])
+
 def get_users_collection():
-    """Conecta-se ao MongoDB e retorna a coleção de utilizadores."""
-    connection_string = st.secrets["MONGO_CONNECTION_STRING"]
-    client = MongoClient(connection_string)
+    client = get_db_client()
     db = client.get_database("dashboard_metrics")
     return db.get_collection("users")
+
+def get_app_configs_collection():
+    """Retorna a coleção de configurações globais da aplicação."""
+    client = get_db_client()
+    db = client.get_database("dashboard_metrics")
+    return db.get_collection("app_configs")
+
+def save_global_configs(new_configs):
+    """Guarda o documento de configurações globais inteiro."""
+    collection = get_app_configs_collection()
+    collection.update_one(
+        {'_id': 'global_settings'},
+        {'$set': new_configs},
+        upsert=True
+    )
+
+def get_global_configs():
+    """
+    Busca as configs globais, as cria, ou as corrige se estiverem em formato antigo.
+    """
+    collection = get_app_configs_collection()
+    configs = collection.find_one({'_id': 'global_settings'})
+
+    if configs is None:
+        configs = {
+            '_id': 'global_settings',
+            'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
+            'status_mapping': { 'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES },
+            'custom_fields': []
+        }
+        collection.insert_one(configs)
+        return configs
+
+    needs_update = False
+    
+    # Autocorreção para campos padrão (já implementado, mas mantido para robustez)
+    if 'available_standard_fields' in configs:
+        for name, details in configs['available_standard_fields'].items():
+            if isinstance(details, str):
+                configs['available_standard_fields'][name] = {'id': details, 'type': 'Texto'}
+                needs_update = True
+    
+    # ===== NOVA LÓGICA DE AUTOCORREÇÃO PARA CAMPOS PERSONALIZADOS =====
+    if 'custom_fields' in configs:
+        for field in configs['custom_fields']:
+            # Se a chave 'type' não existir no dicionário do campo
+            if 'type' not in field:
+                # Adiciona com um valor padrão 'Texto'
+                field['type'] = 'Texto'
+                needs_update = True
+    
+    if needs_update:
+        save_global_configs(configs)
+        st.toast("Estrutura de configuração antiga atualizada automaticamente!", icon="✅")
+
+    return configs
 
 def find_user(email):
     """Encontra um utilizador pelo email."""
@@ -61,3 +120,22 @@ def save_last_project(email, project_key):
         {'email': email},
         {'$set': {'last_project_key': project_key}}
     )
+
+def save_user_dashboard(email, dashboard_layout):
+    """Guarda ou atualiza a lista completa de itens do dashboard para um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'dashboard_layout': dashboard_layout}}
+    )
+
+def save_user_custom_fields(email, custom_fields):
+    """Guarda a lista de campos personalizados de um utilizador."""
+    get_users_collection().update_one(
+        {'email': email}, 
+        {'$set': {'custom_fields': custom_fields}})
+
+def save_user_standard_fields(email, standard_fields):
+    """Guarda a lista de campos padrão selecionados por um utilizador."""
+    get_users_collection().update_one(
+        {'email': email}, 
+        {'$set': {'standard_fields': standard_fields}})

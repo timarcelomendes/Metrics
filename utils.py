@@ -4,14 +4,6 @@ import streamlit as st
 import json, os, pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from jira_connector import get_all_project_issues
-from config import STANDARD_FIELDS_FILE, CUSTOM_FIELDS_FILE, STORY_POINTS_FIELD_ID
-from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_lead_time
-
-def on_project_change():
-    """Limpa o dataframe de dados ao trocar de projeto."""
-    if 'dynamic_df' in st.session_state:
-        st.session_state['dynamic_df'] = None
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -27,15 +19,45 @@ def save_config(data, file_path):
 def render_chart(chart_config, df):
     chart_type = chart_config.get('type'); fig = None; template = "plotly_white"
     try:
-        title = ""
+        title = chart_config.get('title', 'Gráfico')
+
+        # --- NOVA ETAPA DE VALIDAÇÃO ---
+        # Verifica se todas as colunas necessárias para o gráfico existem no dataframe
+        required_cols = []
+        if 'x' in chart_config: required_cols.append(chart_config['x'])
+        if 'y' in chart_config: required_cols.append(chart_config['y'])
+        if 'dimension' in chart_config: required_cols.append(chart_config['dimension'])
+        if 'measure' in chart_config and chart_config['measure'] != 'Contagem de Issues':
+            required_cols.append(chart_config['measure'])
+        if 'columns' in chart_config: required_cols.extend(chart_config['columns'])
+        
+        missing_cols = [col for col in required_cols if col not in df.columns]
+
+        if missing_cols:
+            st.warning(f"Não foi possível renderizar esta visualização.", icon="⚠️")
+            st.error(f"Motivo: O(s) campo(s) **{', '.join(missing_cols)}** não foi/foram encontrado(s) nos dados atuais.")
+            st.info("Isto pode acontecer se um Campo Personalizado foi removido ou renomeado nas configurações. Por favor, edite ou remova esta visualização.")
+            return # Interrompe a renderização deste gráfico
+
         if chart_type in ['dispersão', 'linha']:
             fig = px.scatter(df, x=chart_config['x'], y=chart_config['y'], color="Tipo de Issue", title=title, hover_name="Issue", template=template) if chart_type == 'dispersão' else px.line(df.sort_values(by=chart_config['x']), x=chart_config['x'], y=chart_config['y'], color="Tipo de Issue", markers=True, title=title, hover_name="Issue", template=template)
         
-        elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil', 'tabela']:
+        # ===== CORREÇÃO: Trata o caso da 'tabela' primeiro e separadamente =====
+        elif chart_type == 'tabela':
+            columns_to_show = chart_config.get('columns', [])
+            if columns_to_show:
+                st.dataframe(df[columns_to_show], use_container_width=True)
+            else:
+                st.info("Nenhuma coluna selecionada para esta tabela.")
+            return # Sai da função, pois a tabela não usa o objeto 'fig'
+
+        elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
             measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
             if measure == 'Contagem de Issues':
                 grouped_df = df.groupby(dimension).size().reset_index(name='Contagem'); y_axis, values_col = 'Contagem', 'Contagem'
-            else:
+            elif agg == 'Contagem Distinta':
+                grouped_df = df.groupby(dimension)[measure].nunique().reset_index(); y_axis = values_col = measure
+            else: # Soma ou Média
                 agg_func = 'sum' if agg == 'Soma' else 'mean'; grouped_df = df.groupby(dimension)[measure].agg(agg_func).reset_index(); y_axis = values_col = measure
             
             if chart_type == 'barra': fig = px.bar(grouped_df, x=dimension, y=y_axis, color=dimension, title=title, template=template)
@@ -43,9 +65,7 @@ def render_chart(chart_config, df):
             elif chart_type == 'pizza': fig = px.pie(grouped_df, names=dimension, values=values_col, title=title, template=template)
             elif chart_type == 'treemap': fig = px.treemap(grouped_df, path=[px.Constant("Todos"), dimension], values=values_col, color=y_axis, title=title, color_continuous_scale='Blues', template=template)
             elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=title, template=template)
-            elif chart_type == 'tabela':
-                st.dataframe(grouped_df.sort_values(by=y_axis, ascending=False), use_container_width=True); return
-        
+                
         elif chart_type == 'indicator':
             def calculate_value(op, field, data_frame):
                 if not op or not field: return 0
@@ -83,67 +103,7 @@ def render_chart(chart_config, df):
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
 
+    except KeyError as e:
+        st.error(f"Erro de configuração: o campo {e} não foi encontrado nos dados para o gráfico '{chart_config.get('title', 'Desconhecido')}'.")
     except Exception as e:
-        st.error(f"Erro ao gerar a visualização: {e}")
-
-def common_sidebar():
-    """Cria e gere a barra lateral comum a todas as páginas de análise."""
-    with st.sidebar:
-        try:
-            st.image("images/gauge-logo.svg", width=150)
-        except Exception:
-            st.write("Gauge Metrics")
-        st.divider()
-        st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
-        
-        st.header("Fonte de Dados")
-        projects = st.session_state.get('projects', {})
-        
-        project_name = st.selectbox(
-            "Selecione um Projeto", 
-            options=list(projects.keys()), 
-            key="project_selector_dynamic", 
-            on_change=on_project_change, 
-            index=None, 
-            placeholder="Escolha um projeto..."
-        )
-        
-        if project_name:
-            st.session_state.project_key = projects.get(project_name)
-            st.session_state.project_name = project_name
-            
-            if st.button("Carregar Dados do Projeto", use_container_width=True, type="primary"):
-                with st.spinner("Buscando e preparando dados..."):
-                    issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
-                    selected_standard_fields = load_config(STANDARD_FIELDS_FILE, [])
-                    custom_fields_to_fetch = load_config(CUSTOM_FIELDS_FILE, [])
-                    data = []
-                    AVAILABLE_STANDARD_FIELDS_LOCAL = st.session_state.get('available_standard_fields', {})
-                    for i in issues:
-                        completion_date = find_completion_date(i)
-                        issue_data = {
-                            'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date, 'Mês de Conclusão': completion_date.strftime('%Y-%m') if completion_date else None, 
-                            'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 
-                            'Tipo de Issue': i.fields.issuetype.name, 'Responsável': i.fields.assignee.displayName if i.fields.assignee else 'Não atribuído', 
-                            'Criado por': i.fields.reporter.displayName if i.fields.reporter else 'N/A', 'Status': i.fields.status.name, 
-                            'Prioridade': i.fields.priority.name if i.fields.priority else 'N/A', 'Story Points': getattr(i.fields, STORY_POINTS_FIELD_ID, 0) or 0, 
-                            'Labels': ', '.join(i.fields.labels) if i.fields.labels else 'Nenhum'
-                        }
-                        for field_name in selected_standard_fields:
-                            field_id = AVAILABLE_STANDARD_FIELDS_LOCAL.get(field_name)
-                            if field_id:
-                                value = getattr(i.fields, field_id, None)
-                                if isinstance(value, list): issue_data[field_name] = ', '.join([getattr(v, 'name', str(v)) for v in value]) if value else 'Nenhum'
-                                elif hasattr(value, 'name'): issue_data[field_name] = value.name
-                                elif value: issue_data[field_name] = str(value).split('T')[0]
-                                else: issue_data[field_name] = 'N/A'
-                        for field in custom_fields_to_fetch:
-                            field_name, field_id = field['name'], field['id']
-                            value = getattr(i.fields, field_id, None)
-                            if hasattr(value, 'displayName'): issue_data[field_name] = value.displayName
-                            elif hasattr(value, 'value'): issue_data[field_name] = value.value
-                            elif value is not None: issue_data[field_name] = str(value)
-                            else: issue_data[field_name] = 'N/A'
-                        data.append(issue_data)
-                    st.session_state.dynamic_df = pd.DataFrame(data)
-                    st.rerun()
+        st.error(f"Erro ao gerar a visualização '{chart_config.get('title', 'Desconhecido')}': {e}")
