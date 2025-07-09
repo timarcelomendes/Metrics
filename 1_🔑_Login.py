@@ -1,8 +1,6 @@
 # 1_🔑_Login.py
 
 import streamlit as st
-from security import find_user, create_user, verify_password, get_password_hash
-from security import save_user_dashboard
 from security import find_user, create_user, verify_password, get_password_hash, get_global_configs
 
 st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")

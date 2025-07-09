@@ -98,32 +98,45 @@ with st.sidebar:
                 st.session_state.loaded_project_key = project_key
                 st.rerun()
 
-# --- CONTEÚDO PRINCIPAL ---
+# --- CONTEÚDO PRINCIPAL COM LÓGICA POR PROJETO ---
 st.header("🏠 Meu Dashboard Personalizado")
-
-# Verifica se os dados carregados correspondem ao projeto selecionado na sidebar
-if st.session_state.get('loaded_project_key') != st.session_state.get('project_key') and st.session_state.get('project_key'):
-     st.info("⬅️ Os dados exibidos podem não corresponder ao projeto selecionado. Clique em 'Visualizar / Atualizar Dashboard' na barra lateral para atualizar.")
 
 df = st.session_state.get('dynamic_df')
 if df is None:
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar / Atualizar Dashboard' para começar.")
     st.stop()
-if df.empty:
-    st.warning(f"Nenhuma issue encontrada para o projeto **{st.session_state.project_name}**."); st.stop()
-    
-st.caption(f"A exibir visualizações para o projeto: **{st.session_state.project_name}**.")
-user_data = find_user(st.session_state['email'])
-dashboard_items = user_data.get('dashboard_layout', [])
-st.session_state.dashboard_items = dashboard_items
 
-col1, col2 = st.columns([3, 1])
-with col1: st.metric("Visualizações no Dashboard", f"{len(dashboard_items)} / 12")
-with col2: num_columns = st.radio("Layout em Colunas:", [1, 2], index=1, horizontal=True, key="dashboard_cols")
+# --- LÓGICA DE MIGRAÇÃO DE DADOS E CARREGAMENTO DO DASHBOARD ---
+user_data = find_user(st.session_state['email'])
+all_dashboards = user_data.get('dashboard_layout', {})
+
+# Bloco de Auto-Correção / Migração
+if isinstance(all_dashboards, list):
+    st.toast("Detetado formato de dashboard antigo. A migrar...", icon="⚠️")
+    # Assume que o dashboard antigo pertence ao projeto atualmente selecionado
+    current_project_key = st.session_state.get('project_key')
+    if current_project_key:
+        all_dashboards = {current_project_key: all_dashboards}
+        save_user_dashboard(st.session_state['email'], all_dashboards)
+        st.success("Dashboard migrado para o formato por projeto com sucesso!")
+        st.rerun()
+    else:
+        # Se nenhum projeto estiver selecionado, não faz nada para evitar perda de dados
+        all_dashboards = {}
+
+# Seleciona apenas o layout do projeto atual
+current_project_key = st.session_state.get('project_key')
+dashboard_items = all_dashboards.get(current_project_key, [])
+
+st.caption(f"A exibir visualizações para o projeto: **{st.session_state.get('project_name', 'Nenhum')}**.")
+col1, col2 = st.columns([3, 1]);
+with col1: st.caption(f"Exibindo {len(dashboard_items)} de um máximo de 12 visualizações para este projeto.")
+with col2: num_columns = st.radio("Nº de Colunas:", [1, 2], index=1, horizontal=True)
 st.divider()
 
 if not dashboard_items:
-    st.info("O seu dashboard está vazio."); st.page_link("pages/5_🔬_Análise_Dinâmica.py", label="Criar a sua primeira visualização", icon="➕")
+    st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
+    st.page_link("pages/5_🔬_Análise_Dinâmica.py", label="Criar a sua primeira visualização", icon="➕")
 else:
     cols = st.columns(num_columns, gap="large")
     for i, chart_to_render in enumerate(list(dashboard_items)):
@@ -135,13 +148,11 @@ else:
                     st.markdown(f"##### {card_icon} {card_title}")
                 with header_cols[1]:
                     if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Visualização"):
-                        st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🔬_Análise_Dinâmica.py")
+                        st.session_state['chart_to_edit'] = chart_to_render
+                        st.switch_page("pages/5_🔬_Análise_Dinâmica.py")
                 with header_cols[2]:
                     if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Visualização"):
-                        # Lê, modifica e guarda
-                        current_dashboard = find_user(st.session_state['email']).get('dashboard_layout', [])
-                        updated_dashboard = [item for item in current_dashboard if item['id'] != chart_to_render['id']]
-                        save_user_dashboard(st.session_state['email'], updated_dashboard)
+                        all_dashboards[current_project_key] = [item for item in dashboard_items if item['id'] != chart_to_render['id']]
+                        save_user_dashboard(st.session_state['email'], all_dashboards)
                         st.rerun()
-
                 render_chart(chart_to_render, df)

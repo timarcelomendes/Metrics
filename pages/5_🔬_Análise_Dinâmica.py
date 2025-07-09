@@ -149,29 +149,43 @@ with config_container:
         show_delta = st.toggle("Mostrar variação vs. média?", value=chart_data.get('show_delta', False)) if kpi_style == 'Número Grande' and num_op != 'Contagem' else False
         chart_config = {'id': str(uuid.uuid4()), 'type': 'indicator', 'title': kpi_title, 'icon': kpi_icon, 'num_op': num_op, 'num_field': num_field, 'use_den': use_den, 'den_op': den_op, 'den_field': den_field, 'style': kpi_style, 'gauge_min': gauge_min, 'gauge_max_static': gauge_max_static, 'target_type': target_type, 'target_op': target_op, 'target_field': target_field, 'show_delta': show_delta, 'gauge_bar_color': bar_color, 'gauge_target_color': target_color, 'creator_type': chart_creator_type}
 
+# --- BOTÕES DE AÇÃO COM LÓGICA POR PROJETO ---
 st.divider()
 if editing_mode:
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Salvar Alterações", type="primary", use_container_width=True, icon="💾"):
-            dashboard_items = find_user(st.session_state['email']).get('dashboard_layout', [])
-            item_index = next((i for i, item in enumerate(dashboard_items) if item["id"] == chart_data["id"]), None)
-            if item_index is not None:
-                new_chart_config = chart_config; new_chart_config['id'] = chart_data['id']
-                dashboard_items[item_index] = new_chart_config; save_user_dashboard(st.session_state['email'], dashboard_items)
-                st.success("Visualização atualizada!"); del st.session_state['chart_to_edit']; st.page_link("pages/2_🏠_Meu_Dashboard.py", label="Voltar ao Dashboard", icon="🏠")
-            else: st.error("Erro ao encontrar a visualização para atualizar.")
-    with col2:
-        if st.button("Cancelar Edição", use_container_width=True): del st.session_state['chart_to_edit']; st.rerun()
+    # ... (Lógica do modo de edição)
+    if st.button("Salvar Alterações", ...):
+        all_dashboards = find_user(st.session_state['email']).get('dashboard_layout', {})
+        current_project_key = st.session_state.get('project_key')
+        project_dashboard = all_dashboards.get(current_project_key, [])
+        
+        item_index = next((i for i, item in enumerate(project_dashboard) if item["id"] == chart_data["id"]), None)
+        
+        if item_index is not None:
+            new_chart_config = chart_config; new_chart_config['id'] = chart_data['id']
+            project_dashboard[item_index] = new_chart_config
+            all_dashboards[current_project_key] = project_dashboard
+            save_user_dashboard(st.session_state['email'], all_dashboards)
+            st.success("Visualização atualizada!"); del st.session_state['chart_to_edit']; 
+            st.page_link("pages/2_🏠_Meu_Dashboard.py", label="Voltar ao Dashboard", icon="🏠")
+        else: 
+            st.error("Erro ao encontrar a visualização para atualizar.")
 else:
-    if len(st.session_state.get('dashboard_items', [])) >= 12: st.warning("Limite de 12 visualizações no dashboard atingido.")
+    # Lógica para adicionar ao dashboard do projeto correto
+    all_dashboards = find_user(st.session_state['email']).get('dashboard_layout', {})
+    current_project_key = st.session_state.get('project_key')
+    project_dashboard = all_dashboards.get(current_project_key, [])
+    
+    if len(project_dashboard) >= 12:
+        st.warning("Limite de 12 visualizações no dashboard deste projeto atingido.")
     else:
-        if st.button("Adicionar ao Meu Dashboard", type="primary", use_container_width=True, icon="➕"):
+        if st.button("Adicionar ao Meu Dashboard", ...):
             if chart_config: 
-                dashboard_items = find_user(st.session_state['email']).get('dashboard_layout', [])
-                dashboard_items.append(chart_config); save_user_dashboard(st.session_state['email'], dashboard_items)
-                st.success(f"Visualização '{chart_config.get('title')}' adicionada!"); st.session_state.pop('chart_to_edit', None)
-            else: st.warning("Configuração inválida.")
+                project_dashboard.append(chart_config)
+                all_dashboards[current_project_key] = project_dashboard
+                save_user_dashboard(st.session_state['email'], all_dashboards)
+                st.success(f"Visualização adicionada ao dashboard do projeto {st.session_state.project_name}!")
+            else: 
+                st.warning("Configuração de visualização inválida.")
 st.divider()
 st.subheader("Pré-visualização da Configuração Atual")
 if chart_config:

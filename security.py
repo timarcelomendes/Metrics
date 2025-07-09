@@ -28,7 +28,7 @@ def decrypt_token(encrypted_token: str):
     return get_cipher().decrypt(encrypted_token.encode()).decode()
 
 # --- Funções da Base de Dados ---
-@st.cache_resource
+@st.cache_resource(show_spinner="Aguarde, a estabelecer conexão segura...")
 def get_db_client():
     """Retorna uma instância do cliente MongoDB."""
     return MongoClient(st.secrets["MONGO_CONNECTION_STRING"])
