@@ -3,17 +3,21 @@
 import streamlit as st
 import os
 from security import find_user, create_user, verify_password, get_password_hash, get_global_configs
+from pathlib import Path
+
 
 st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
 
-# --- NOVO: Adiciona a logo na sidebar ---
+# Adiciona a logo na sidebar
 with st.sidebar:
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
+    project_root = Path(__file__).parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.image(logo_path, width=150)
-    except Exception as e:
-        # Se a imagem não for encontrada, não quebra a aplicação
-        st.error(f"Logo não encontrada: {e}", icon="🖼️")
+        st.logo(
+            logo_path,
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics")
 
 # Carrega as configs globais na primeira execução
 if 'global_configs' not in st.session_state:

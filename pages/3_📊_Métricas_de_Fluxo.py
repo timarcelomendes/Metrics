@@ -11,6 +11,8 @@ from sklearn.linear_model import LinearRegression
 import json, os
 from config import * 
 from security import decrypt_token, find_user
+from pathlib import Path
+
 
 st.set_page_config(page_title="Métricas de Iteração", page_icon="📊", layout="wide")
 
@@ -183,13 +185,14 @@ main_content = st.container()
 
 # --- BARRA LATERAL CORRIGIDA ---
 with st.sidebar:
-    # Constrói o caminho para a imagem, subindo um nível ('..') para a raiz do projeto
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.image(logo_path, width=150)
-    except Exception:
-        pass
-    st.divider()
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
     
     projects = st.session_state.get('projects', {})
     
@@ -247,6 +250,10 @@ with st.sidebar:
             else: st.session_state.start_date, st.session_state.end_date = (None, None)
             if st.button("Analisar Visão Geral do Projeto", use_container_width=True, type="primary"):
                 st.session_state.view_to_show = 'project_overview'
+
+    if st.button("Logout", use_container_width=True):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
 
 # --- CONTEÚDO PRINCIPAL ---
 with main_content:

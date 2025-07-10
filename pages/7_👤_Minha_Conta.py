@@ -3,6 +3,7 @@ import streamlit as st
 from jira_connector import connect_to_jira
 from security import find_user, save_jira_credentials, encrypt_token, decrypt_token
 import os
+from pathlib import Path
 
 st.set_page_config(page_title="Minha Conta", page_icon="👤", layout="wide")
 
@@ -51,12 +52,18 @@ with st.container(border=True):
                     else:
                         st.error("Falha na conexão com o Jira. Verifique os dados inseridos.")
 
-# ... (Barra lateral com logo e botão de Logout)
+# Barra lateral com logo e botão de Logout
 with st.sidebar:
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
-    try: st.image(logo_path, width=150)
-    except: pass
-    st.divider()
+    # Constrói o caminho para da logo a partir da raiz do projeto
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+
     if st.button("Logout", use_container_width=True):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Login.py")

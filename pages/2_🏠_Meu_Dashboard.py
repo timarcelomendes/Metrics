@@ -8,6 +8,7 @@ from metrics_calculator import *
 from security import *
 from utils import *
 from config import *
+from pathlib import Path
 
 st.set_page_config(page_title="Meu Dashboard", page_icon="🏠", layout="wide")
 
@@ -37,10 +38,14 @@ if 'jira_client' not in st.session_state or st.session_state.jira_client is None
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
-    try: st.image(logo_path, width=150)
-    except: pass
-    st.divider()
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.header("Fonte de Dados")
     projects = st.session_state.get('projects', {})
@@ -98,6 +103,10 @@ with st.sidebar:
                 st.session_state.loaded_project_key = project_key
                 st.rerun()
 
+    if st.button("Logout", use_container_width=True):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
+
 # --- CONTEÚDO PRINCIPAL COM LÓGICA POR PROJETO ---
 st.header("🏠 Meu Dashboard Personalizado")
 
@@ -128,10 +137,15 @@ if isinstance(all_dashboards, list):
 current_project_key = st.session_state.get('project_key')
 dashboard_items = all_dashboards.get(current_project_key, [])
 
-st.caption(f"A exibir visualizações para o projeto: **{st.session_state.get('project_name', 'Nenhum')}**.")
-col1, col2 = st.columns([3, 1]);
-with col1: st.caption(f"Exibindo {len(dashboard_items)} de um máximo de 12 visualizações para este projeto.")
-with col2: num_columns = st.radio("Nº de Colunas:", [1, 2], index=1, horizontal=True)
+with st.container(border=True):
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.metric("Visualizações no Dashboard", f"{len(dashboard_items)} / 12")
+    with col2:
+        # Substituído o st.radio por st.toggle
+        use_two_columns = st.toggle("Layout com 2 Colunas", value=True, help="Ative para duas colunas, desative para uma.")
+        num_columns = 2 if use_two_columns else 1
+
 st.divider()
 
 if not dashboard_items:
