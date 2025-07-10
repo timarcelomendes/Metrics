@@ -1,5 +1,6 @@
 # jira_connector.py
 
+import streamlit as st
 import os
 from jira import JIRA
 from functools import lru_cache
@@ -47,14 +48,13 @@ def get_boards(jira_client, project_key):
         return []
 
 @lru_cache(maxsize=32)
-def get_sprints(jira_client, board_id):
-    """Busca todas as sprints de um quadro específico."""
+def get_sprints(client: JIRA, board_id: int, state='active,closed'):
+    """Busca sprints de um quadro, por padrão ativas e fechadas."""
     try:
-        sprints = jira_client.sprints(board_id, state='closed,active')
-        return {s.name: s.id for s in sprints}
+        return client.sprints(board_id, state=state)
     except Exception as e:
-        print(f"Erro ao buscar sprints para o quadro ID {board_id}: {e}")
-        return {}
+        # Não mostra erro na interface, apenas retorna lista vazia
+        return []
 
 def get_sprint_issues(jira_client, sprint_id):
     """Busca todas as issues de uma sprint específica."""
@@ -103,4 +103,29 @@ def get_issues_by_fix_version(jira_client, project_key, version_id):
         return jira_client.search_issues(jql_query, expand='changelog', maxResults=False)
     except Exception as e:
         print(f"Erro ao buscar issues para a versão {version_id}: {e}")
+        return []
+    
+
+def get_sprints_in_range(client: JIRA, project_key: str, start_date, end_date):
+    """Busca todas as sprints de um projeto que foram concluídas dentro de um período de datas."""
+    try:
+        boards = client.boards(projectKeyOrID=project_key)
+        all_sprints = []
+        for board in boards:
+            # Busca tanto sprints fechadas quanto ativas
+            sprints = get_sprints(client, board.id, 'closed,active')
+            for sprint in sprints:
+                # Filtra as fechadas pelo período de datas
+                if sprint.state == 'closed' and hasattr(sprint, 'completeDate'):
+                    complete_date = pd.to_datetime(sprint.completeDate).date()
+                    if start_date <= complete_date <= end_date:
+                        all_sprints.append(sprint)
+                # Inclui todas as ativas, independentemente da data
+                elif sprint.state == 'active':
+                    all_sprints.append(sprint)
+
+        # Ordena por data de conclusão (as ativas ficam no topo) e depois por nome
+        return sorted(all_sprints, key=lambda s: (getattr(s, 'completeDate', '9999-12-31'), s.name), reverse=True)
+    except Exception as e:
+        st.error(f"Erro ao buscar sprints: {e}")
         return []

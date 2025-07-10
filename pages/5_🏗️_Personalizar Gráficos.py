@@ -1,4 +1,4 @@
-# pages/3_🔬_Análise_Dinâmica.py
+# pages/5_🏗️_Personalizar Visões.py
 
 import streamlit as st
 import pandas as pd
@@ -20,11 +20,11 @@ def on_project_change():
     if 'dynamic_df' in st.session_state: del st.session_state['dynamic_df']
     if 'chart_to_edit' in st.session_state: del st.session_state['chart_to_edit']
 
+# --- LÓGICA PRINCIPAL ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
 
 with st.sidebar:
-    # Constrói o caminho para da logo a partir da raiz do projeto
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
@@ -44,29 +44,37 @@ with st.sidebar:
         st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
         is_data_loaded = 'dynamic_df' in st.session_state and st.session_state.dynamic_df is not None and not st.session_state.dynamic_df.empty
         with st.expander("Carregar Dados", expanded=not is_data_loaded):
+            st.info("Carregue os dados do projeto para criar ou editar visualizações.")
             if st.button("Carregar / Atualizar Dados", use_container_width=True, type="primary"):
                 with st.spinner("Buscando e preparando dados..."):
                     issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
-                    data = []; global_configs = get_global_configs(); user_data = find_user(st.session_state['email']);
+                    data = []; global_configs = get_global_configs(); user_data = find_user(st.session_state['email'])
                     selected_standard_fields = user_data.get('standard_fields', []); custom_fields_to_fetch = global_configs.get('custom_fields', [])
                     for i in issues:
                         completion_date = find_completion_date(i)
                         issue_data = {'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date, 'Mês de Conclusão': completion_date.strftime('%Y-%m') if completion_date else None, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 'Tipo de Issue': i.fields.issuetype.name, 'Responsável': i.fields.assignee.displayName if i.fields.assignee else 'Não atribuído', 'Criado por': i.fields.reporter.displayName if i.fields.reporter else 'N/A', 'Status': i.fields.status.name, 'Prioridade': i.fields.priority.name if i.fields.priority else 'N/A', 'Labels': ', '.join(i.fields.labels) if i.fields.labels else 'Nenhum'}
+                        for field_name in selected_standard_fields:
+                            field_details = global_configs.get('available_standard_fields', {}).get(field_name, {})
+                            field_id = field_details.get('id')
+                            if field_id:
+                                value = getattr(i.fields, field_id, None)
+                                if isinstance(value, list): issue_data[field_name] = ', '.join([getattr(v, 'name', str(v)) for v in value]) if value else 'Nenhum'
+                                elif hasattr(value, 'name'): issue_data[field_name] = value.name
+                                elif value: issue_data[field_name] = str(value).split('T')[0]
+                                else: issue_data[field_name] = 'N/A'
                         for field in custom_fields_to_fetch:
-                            field_name, field_id = field['name'], field['id']; value = getattr(i.fields, field_id, None)
-                            if hasattr(value, 'displayName'): issue_data[field_name] = value.displayName
-                            elif hasattr(value, 'value'): issue_data[field_name] = value.value
-                            elif value is not None: issue_data[field_name] = value
-                            else: issue_data[field_name] = None
+                            field_name_custom, field_id_custom = field['name'], field['id']
+                            value = getattr(i.fields, field_id_custom, None)
+                            if hasattr(value, 'displayName'): issue_data[field_name_custom] = value.displayName
+                            elif hasattr(value, 'value'): issue_data[field_name_custom] = value.value
+                            elif value is not None: issue_data[field_name_custom] = value
+                            else: issue_data[field_name_custom] = None
                         data.append(issue_data)
                     st.session_state.dynamic_df = pd.DataFrame(data); st.rerun()
-                    
-                    st.divider()
-    
-        if st.button("Logout", use_container_width=True):
-            for key in list(st.session_state.keys()): del st.session_state[key]
-            st.switch_page("1_🔑_Login.py")
-        
+
+    if st.button("Logout", use_container_width=True):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
 
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
@@ -97,9 +105,10 @@ global_configs = get_global_configs(); user_data = find_user(st.session_state['e
 active_standard_fields = user_data.get('standard_fields', []); active_custom_fields = [f['name'] for f in global_configs.get('custom_fields', [])]
 base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']; base_date_cols = ['Data de Criação', 'Data de Conclusão', 'Mês de Conclusão']; base_categorical_cols = ['Tipo de Issue', 'Responsável', 'Status', 'Prioridade', 'Criado por', 'Labels']
 configured_date_cols = [f for f in active_standard_fields if 'Data' in f]; configured_categorical_cols = [f for f in active_standard_fields if 'Data' not in f]
-numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in global_configs.get('custom_fields', []) if f['type'] == 'Número']))); date_cols = sorted(list(set(base_date_cols + configured_date_cols)))
+numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in global_configs.get('custom_fields', []) if f['type'] == 'Número'])))
+date_cols = sorted(list(set(base_date_cols + configured_date_cols)))
 categorical_cols = sorted(list(set(base_categorical_cols + configured_categorical_cols + [f['name'] for f in global_configs.get('custom_fields', []) if f['type'] == 'Texto'])))
-measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols; all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols)))
+measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols; 
 all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols)))
 
 with config_container:
@@ -169,51 +178,33 @@ if editing_mode:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Salvar Alterações", type="primary", use_container_width=True, icon="💾"):
-            all_dashboards = find_user(st.session_state['email']).get('dashboard_layout', {})
-            current_project_key = st.session_state.get('project_key')
-            project_dashboard = all_dashboards.get(current_project_key, [])
-            
-            item_index = next((i for i, item in enumerate(project_dashboard) if item["id"] == chart_data["id"]), None)
-            
+            dashboard_items = find_user(st.session_state['email']).get('dashboard_layout', {}).get(st.session_state.get('project_key'), [])
+            item_index = next((i for i, item in enumerate(dashboard_items) if item["id"] == chart_data["id"]), None)
             if item_index is not None:
-                new_chart_config = chart_config
-                new_chart_config['id'] = chart_data['id'] # Garante que o ID original seja mantido
-                project_dashboard[item_index] = new_chart_config
-                all_dashboards[current_project_key] = project_dashboard
+                new_chart_config = chart_config; new_chart_config['id'] = chart_data['id']
+                dashboard_items[item_index] = new_chart_config
+                all_dashboards = find_user(st.session_state['email']).get('dashboard_layout', {})
+                all_dashboards[st.session_state.get('project_key')] = dashboard_items
                 save_user_dashboard(st.session_state['email'], all_dashboards)
-                st.success("Visualização atualizada com sucesso!")
-                del st.session_state['chart_to_edit']
-                st.page_link("pages/2_🏠_Meu_Dashboard.py", label="Voltar ao Dashboard", icon="🏠")
-            else:
-                st.error("Erro ao encontrar a visualização para atualizar.")
-    
-    # --- BOTÃO DE CANCELAR EDIÇÃO ---
+                st.success("Visualização atualizada!"); del st.session_state['chart_to_edit']; st.page_link("pages/2_🏠_Meu_Dashboard.py", label="Voltar ao Dashboard", icon="🏠")
+            else: st.error("Erro ao encontrar a visualização para atualizar.")
     with col2:
-        if st.button("Cancelar Edição", use_container_width=True):
-            del st.session_state['chart_to_edit']
-            st.rerun()
+        if st.button("Cancelar Edição", use_container_width=True): del st.session_state['chart_to_edit']; st.rerun()
 else:
-    # Lógica para adicionar ao dashboard do projeto correto
     all_dashboards = find_user(st.session_state['email']).get('dashboard_layout', {})
-    current_project_key = st.session_state.get('project_key')
-    project_dashboard = all_dashboards.get(current_project_key, [])
-    
+    project_dashboard = all_dashboards.get(st.session_state.get('project_key'), [])
     if len(project_dashboard) >= 12:
         st.warning("Limite de 12 visualizações no dashboard deste projeto atingido.")
     else:
-        if st.button("Adicionar ao Dashboard", type="primary", use_container_width=True, icon="➕"):
+        if st.button("Adicionar ao Meu Dashboard", type="primary", use_container_width=True, icon="➕"):
             if chart_config:
-                project_dashboard.append(chart_config)
-                all_dashboards[current_project_key] = project_dashboard
+                project_dashboard.append(chart_config); all_dashboards[st.session_state.get('project_key')] = project_dashboard
                 save_user_dashboard(st.session_state['email'], all_dashboards)
-                st.success(f"Visualização '{chart_config.get('title')}' adicionada ao dashboard do projeto {st.session_state.project_name}!")
-            else:
-                st.warning("Configuração de visualização inválida.")
-
+                st.success(f"Visualização '{chart_config.get('title')}' adicionada ao dashboard!"); st.session_state.pop('chart_to_edit', None)
+            else: st.warning("Configuração de visualização inválida.")
 st.divider()
 st.subheader("Pré-visualização da Configuração Atual")
 if chart_config:
-    with st.container(border=True):
-        render_chart(chart_config, df) # Assumindo que você usa filtered_df para a pré-visualização
+    with st.container(border=True): render_chart(chart_config, filtered_df)
 else:
     st.info("Configure uma visualização acima para ver a pré-visualização.")

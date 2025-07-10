@@ -5,276 +5,176 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import os
+import numpy as np
 from jira_connector import *
 from metrics_calculator import *
-from sklearn.linear_model import LinearRegression
-import json, os
-from config import * 
-from security import decrypt_token, find_user
+from security import *
+from config import *
 from pathlib import Path
+from utils import *
 
-
-st.set_page_config(page_title="Métricas de Iteração", page_icon="📊", layout="wide")
-
-# --- RESERVANDO O ESPAÇO PRINCIPAL DA TELA ---
-main_content = st.container()
-
-def load_status_mapping():
-    """Carrega o mapeamento de status do ficheiro de configuração."""
-    default_mapping = {'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES}
-    if os.path.exists(STATUS_MAPPING_FILE):
-        with open(STATUS_MAPPING_FILE, 'r', encoding='utf-8') as f:
-            try:
-                config = json.load(f)
-                config.setdefault('initial', default_mapping['initial'])
-                config.setdefault('done', default_mapping['done'])
-                return config['initial'], config['done']
-            except json.JSONDecodeError: return default_mapping['initial'], default_mapping['done']
-    return default_mapping['initial'], default_mapping['done']
-
-# --- Funções de Callback ---
-def on_project_change():
-    keys_to_clear = ['view_to_show', 'selected_board', 'sprint_id', 'sprint_name']
-    for key in keys_to_clear:
-        if key in st.session_state: st.session_state[key] = None
-
-def on_board_change():
-    keys_to_clear = ['view_to_show', 'sprint_id', 'sprint_name']
-    for key in keys_to_clear:
-        if key in st.session_state: st.session_state[key] = None
-
-# --- Funções de Renderização (Completas) ---
-def create_delivery_time_scatter_plot(df_times, context_key: str):
-    if df_times.empty:
-        st.info("Nenhuma issue concluída com dados de tempo para exibir.")
-        return
-    
-    unique_key = f"scatter_selector_{context_key}"
-    metric_to_plot = st.selectbox("Selecione a Métrica de Tempo", ['Cycle Time (dias)', 'Lead Time (dias)'], key=unique_key)
-    
-    def map_issue_type_to_category(issue_type):
-        it_lower = str(issue_type).lower()
-        if 'história' in it_lower or 'story' in it_lower: return 'História'
-        if 'bug' in it_lower: return 'Bug'
-        return 'Outro'
-    
-    df_times['Categoria'] = df_times['Tipo de Issue'].apply(map_issue_type_to_category)
-    
-    fig = px.scatter(
-        df_times, x='Data de Conclusão', y=metric_to_plot, color='Categoria', size='Story Points',
-        hover_name='Issue', hover_data=['Tipo de Issue', 'Lead Time (dias)', 'Cycle Time (dias)'],
-        title=f"Dispersão de Tempo de Entrega ({metric_to_plot})",
-        opacity=0.6, color_discrete_map={'História': '#1f77b4', 'Bug': '#d62728', 'Outro': '#7f7f7f'}
-    )
-    
-    df_trend = df_times.dropna(subset=[metric_to_plot, 'Data de Conclusão'])
-    if len(df_trend) > 1:
-        X = df_trend['Data de Conclusão'].map(pd.Timestamp.toordinal).values.reshape(-1, 1); y = df_trend[metric_to_plot].values
-        model = LinearRegression(); model.fit(X, y); trend_line_y = model.predict(X)
-        fig.add_trace(go.Scatter(x=df_trend['Data de Conclusão'], y=trend_line_y, mode='lines', name='Tendência', line=dict(color='rgba(0,0,0,0.5)', width=2, dash='dash')))
-    
-    fig.update_layout(xaxis_title="Data de Conclusão", yaxis_title="Tempo (dias)", legend_title="Categoria")
-    st.plotly_chart(fig, use_container_width=True)
-
-def display_project_overview_metrics():
-    with st.spinner("Buscando issues do projeto..."):
-        start_date = st.session_state.get('start_date'); end_date = st.session_state.get('end_date')
-        all_issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
-        if start_date and end_date:
-            issues = [i for i in all_issues if (cd := find_completion_date(i)) and start_date.date() <= cd.date() <= end_date.date()]
-        else: issues = all_issues
-        
-    st.header(f"Visão Geral do Projeto: {st.session_state.get('project_name', '')}")
-    if not issues: st.warning("Nenhuma issue encontrada."); return
-    
-    completed_issues = [i for i in issues if find_completion_date(i) is not None]
-    time_data = [{'Issue': i.key, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 'Tipo de Issue': i.fields.issuetype.name, 'Story Points': getattr(i.fields, 'customfield_10016', 0) or 0, 'Data de Conclusão': find_completion_date(i)} for i in completed_issues]
-    df_times = pd.DataFrame(time_data).dropna(subset=['Lead Time (dias)', 'Cycle Time (dias)'])
-
-    st.subheader("Métricas de Entrega do Projeto"); col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📋 Total de Issues", f"{len(issues)} issues"); col2.metric("✅ Throughput", f"{len(completed_issues)} issues")
-    avg_lead_time = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0
-    avg_cycle_time = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0
-    col3.metric("⏱️ Lead Time Médio", f"{avg_lead_time:.1f} dias"); col4.metric("⚙️ Cycle Time Médio", f"{avg_cycle_time:.1f} dias"); st.divider()
-    
-    st.subheader("Dispersão dos Tempos de Entrega")
-    create_delivery_time_scatter_plot(df_times, "project_overview")
-
-def display_kanban_metrics():
-    st.write(f"Métricas do Quadro Kanban: {st.session_state.selected_board.get('name', '')}")
-    with st.spinner("Buscando issues..."):
-        issues = get_issues_by_date_range(st.session_state.jira_client, st.session_state.project_key, st.session_state.get('start_date'), st.session_state.get('end_date'))
-    if not issues: st.warning("Nenhuma issue encontrada."); return
-    
-    completed_issues = [i for i in issues if find_completion_date(i) is not None]
-    time_data = [{'Issue': i.key, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 'Tipo de Issue': i.fields.issuetype.name, 'Story Points': getattr(i.fields, 'customfield_10016', 0) or 0, 'Data de Conclusão': find_completion_date(i)} for i in completed_issues]
-    df_times = pd.DataFrame(time_data).dropna(subset=['Lead Time (dias)', 'Cycle Time (dias)'])
-    
-    st.subheader("Visão Geral do Fluxo"); col1, col2, col3 = st.columns(3)
-    col1.metric("🚀 Throughput", f"{len(completed_issues)} issues")
-    avg_lead_time = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0; avg_cycle_time = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0
-    col2.metric("⏱️ Lead Time Médio", f"{avg_lead_time:.1f} dias"); col3.metric("⚙️ Cycle Time Médio", f"{avg_cycle_time:.1f} dias"); st.divider()
-    
-    tab1, tab2, tab3 = st.tabs(["🌊 CFD", "⌛ WIP", "📊 Dispersão de Tempos"]); 
-    with tab1:
-        cfd_df, _ = prepare_cfd_data(issues)
-        if not cfd_df.empty: st.plotly_chart(px.area(cfd_df, x=cfd_df.index, y=cfd_df.columns), use_container_width=True)
-    with tab2:
-        _, wip_df = prepare_cfd_data(issues)
-        if not wip_df.empty: st.plotly_chart(px.line(wip_df, x='Data', y='WIP'), use_container_width=True)
-    with tab3:
-        st.subheader("Dispersão dos Tempos de Entrega"); create_delivery_time_scatter_plot(df_times, "kanban")
-
-def display_scrum_metrics():
-    sprint_id = st.session_state.get('sprint_id');
-    if sprint_id is None: return
-    
-    st.caption(f"Métricas da Sprint: {st.session_state.sprint_name}")
-    with st.spinner("Buscando issues..."): issues = get_sprint_issues(st.session_state.jira_client, sprint_id)
-    if not issues: st.warning("Nenhuma issue encontrada para esta sprint."); return
-    
-    velocity = calculate_velocity(issues); completed_issues_count = calculate_throughput(issues); predictability = calculate_predictability(issues)
-    st.subheader("Visão Geral da Iteração"); col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🚀 Velocidade", f"{velocity} pts"); col2.metric("✅ Throughput", f"{completed_issues_count} issues"); col3.metric("🎯 Previsibilidade", f"{predictability:.1f}%"); col4.metric("📋 Total de Issues", len(issues)); st.divider()
-    
-    st.subheader("💡 Diagnóstico da Sprint");
-    with st.container(border=True): st.markdown("\n".join(f"- {insight}" for insight in generate_sprint_health_summary(issues, predictability)))
-    st.divider()
-
-    tab1, tab2 = st.tabs(["📈 Burndown", "🌊 Fluxo e Tempos"])
-    with tab1:
-        st.subheader("Sprint Burndown Chart"); burndown_df = prepare_burndown_data(st.session_state.jira_client, sprint_id)
-        if not burndown_df.empty:
-            fig = go.Figure(); fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Linha Ideal'], name='Ideal', mode='lines', line=dict(dash='dash', color='gray'))); fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Pontos Restantes (Real)'], name='Real', mode='lines+markers', line=dict(color='blue'))); fig.update_layout(title='Progresso da Sprint'); st.plotly_chart(fig, use_container_width=True)
-    with tab2:
-        st.subheader("Diagrama de Fluxo Cumulativo da Sprint"); cfd_df, _ = prepare_cfd_data(issues)
-        if not cfd_df.empty: st.plotly_chart(px.area(cfd_df, x=cfd_df.index, y=cfd_df.columns), use_container_width=True)
-        st.subheader("Dispersão dos Tempos de Entrega na Sprint")
-        completed_issues_sprint = [i for i in issues if find_completion_date(i) is not None]
-        time_data = [{'Issue': i.key, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 'Tipo de Issue': i.fields.issuetype.name, 'Story Points': getattr(i.fields, 'customfield_10016', 0) or 0, 'Data de Conclusão': find_completion_date(i)} for i in completed_issues_sprint]
-        df_times_sprint = pd.DataFrame(time_data).dropna(subset=['Lead Time (dias)', 'Cycle Time (dias)'])
-        create_delivery_time_scatter_plot(df_times_sprint, "scrum")
+st.set_page_config(page_title="Métricas de Fluxo", page_icon="📊", layout="wide")
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Acesso Negado: Por favor, faça login para aceder a esta página.")
-    st.page_link("1_🔑_Login.py", label="Ir para a página de Login", icon="🔑")
-    st.stop()
-
-# Verifica se as credenciais do Jira estão configuradas para este utilizador
-if 'jira_client' not in st.session_state or st.session_state.jira_client is None:
+    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
+if 'jira_client' not in st.session_state:
     user_data = find_user(st.session_state['email'])
     if user_data and user_data.get('encrypted_token'):
-        with st.spinner("A conectar ao Jira com as suas credenciais..."):
+        with st.spinner("A conectar ao Jira..."):
             token = decrypt_token(user_data['encrypted_token'])
             client = connect_to_jira(user_data['jira_url'], user_data['jira_email'], token)
             if client:
-                st.session_state.jira_client = client
-                st.session_state.projects = get_projects(client)
-                st.rerun() # Recarrega a página para aplicar o estado
-            else:
-                st.error("Não foi possível conectar ao Jira com as suas credenciais guardadas.")
-                st.page_link("pages/3_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤")
-                st.stop()
-    else:
-        st.warning("Credenciais do Jira não encontradas para o seu perfil.")
-        st.page_link("pages/3_👤_Minha_Conta.py", label="Configurar Credenciais Agora", icon="👤")
-        st.stop()
+                st.session_state.jira_client = client; st.session_state.projects = get_projects(client); st.rerun()
+            else: st.error("Falha na conexão com o Jira."); st.page_link("pages/6_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤"); st.stop()
+    else: st.warning("Credenciais do Jira não configuradas."); st.page_link("pages/6_👤_Minha_Conta.py", label="Configurar Credenciais", icon="👤"); st.stop()
 
-main_content = st.container()
+def on_project_change():
+    if 'issues_data_fluxo' in st.session_state: st.session_state.pop('issues_data_fluxo', None)
+    if 'raw_issues_for_fluxo' in st.session_state: st.session_state.pop('raw_issues_for_fluxo', None)
 
-# --- BARRA LATERAL CORRIGIDA ---
+# --- BARRA LATERAL ---
 with st.sidebar:
-    project_root = Path(__file__).parent.parent
-    logo_path = project_root / "images" / "gauge-logo.svg"
-    try:
-        st.logo(
-            logo_path, 
-            size="large")
-    except FileNotFoundError:
-        st.write("Gauge Metrics") 
-    
+    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
+    try: st.image(str(logo_path), width=150)
+    except: pass
+    st.divider()
+    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+    st.header("Configurações de Análise")
     projects = st.session_state.get('projects', {})
+    project_names = list(projects.keys())
+    default_index = project_names.index(st.session_state.get('project_name')) if st.session_state.get('project_name') in project_names else None
+    selected_project_name = st.selectbox("1. Selecione o Projeto", options=project_names, key="project_selector_fluxo", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
+    if selected_project_name:
+        st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
+        st.subheader("2. Período de Análise")
+        end_date_default = datetime.now(); start_date_default = end_date_default - timedelta(days=30)
+        date_range = st.date_input("Selecione o período:", value=(start_date_default, end_date_default))
+        if len(date_range) == 2:
+            st.session_state.start_date_fluxo, st.session_state.end_date_fluxo = date_range[0], date_range[1]
+            if st.button("Analisar Fluxo", use_container_width=True, type="primary"):
+                with st.spinner("Buscando e processando issues..."):
+                    all_issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
+                    st.session_state['raw_issues_for_fluxo'] = all_issues
+                    st.rerun()
+
+# --- LÓGICA PRINCIPAL DA PÁGINA ---
+st.header("📊 Métricas de Fluxo e Performance da Equipa", divider='rainbow')
+
+all_raw_issues = st.session_state.get('raw_issues_for_fluxo')
+if not all_raw_issues:
+    st.info("⬅️ Na barra lateral, selecione um projeto, um período e clique em 'Analisar Fluxo' para começar.")
+    st.stop()
+
+# --- Pré-cálculo dos dados para as abas ---
+start_date = st.session_state.start_date_fluxo; end_date = st.session_state.end_date_fluxo
+completed_issues_in_period = [i for i in all_raw_issues if (cd := find_completion_date(i)) and start_date <= cd.date() <= end_date]
+time_data = [{'Issue': i.key, 'Data de Conclusão': find_completion_date(i), 'Tipo de Issue': i.fields.issuetype.name, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i)} for i in completed_issues_in_period]
+df_times = pd.DataFrame(time_data)
+
+wip_issues = [i for i in all_raw_issues if i.fields.status.name.lower() not in (DEFAULT_INITIAL_STATES + DEFAULT_DONE_STATES) and pd.to_datetime(i.fields.created).date() <= end_date]
+throughput = len(completed_issues_in_period)
+
+tab_comum, tab_kanban, tab_scrum = st.tabs(["Métricas de Fluxo Comuns", "Análise Kanban", "Análise Scrum"])
+
+with tab_comum:
+    st.subheader("Visão Geral do Fluxo no Período Selecionado")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("🚀 Throughput (Vazão)", f"{throughput} itens")
+    kpi2.metric("⚙️ Work in Progress (WIP)", f"{len(wip_issues)} itens")
+    kpi3.metric("⏱️ Lead Time Médio", f"{df_times['Lead Time (dias)'].mean():.1f} dias" if not df_times.empty else "N/A")
+    kpi4.metric("⚙️ Cycle Time Médio", f"{df_times['Cycle Time (dias)'].mean():.1f} dias" if not df_times.empty else "N/A")
+    st.divider()
+    st.subheader("Diagrama de Fluxo Cumulativo (CFD)")
+    st.caption("Mostra a evolução dos itens em cada etapa ao longo do tempo. Ideal para visualizar gargalos e a estabilidade do fluxo.")
+    cfd_df, _ = prepare_cfd_data(all_raw_issues, start_date, end_date)
+    if not cfd_df.empty: st.area_chart(cfd_df)
+    else: st.info("Não há dados suficientes para gerar o CFD.")
+
+with tab_kanban:
+    st.subheader("Métricas de Eficiência e Previsibilidade Kanban")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Aging Work in Progress**"); st.caption("Itens em andamento há mais tempo, potenciais bloqueios.")
+        aging_df = get_aging_wip(all_raw_issues)
+        st.dataframe(aging_df.head(10), use_container_width=True, hide_index=True)
+    with col2:
+        st.markdown("**Eficiência do Fluxo (Estimativa)**")
+        avg_flow_efficiency = np.mean([eff for i in completed_issues_in_period if (eff := calculate_flow_efficiency(i)) is not None])
+        st.metric("Eficiência Média", f"{avg_flow_efficiency:.1f}%" if pd.notna(avg_flow_efficiency) else "Incalculável", help="Percentagem de tempo em que as tarefas estão ativamente a ser trabalhadas vs. em espera.")
+        st.markdown("**Service Level Expectation (SLE)**")
+        sle_days = st.slider("Definir SLE (em dias)", 1, 90, 15)
+        if not df_times.empty:
+            completed_within_sle = df_times[df_times['Cycle Time (dias)'] <= sle_days].shape[0]
+            sle_percentage = (completed_within_sle / throughput) * 100 if throughput > 0 else 0
+            st.metric(f"Conclusão em até {sle_days} dias", f"{sle_percentage:.1f}%", help=f"Percentagem de itens concluídos dentro do prazo definido.")
+
+with tab_scrum:
+    st.subheader("Análise de Performance de Sprints")
     
-    st.markdown("#### 1. Selecione o Projeto")
-    project_name = st.selectbox(
-        "Selecione um Projeto", 
-        options=list(projects.keys()), 
-        key="project_selector", 
-        on_change=on_project_change, 
-        index=None, 
-        placeholder="Escolha um projeto...",
-        label_visibility="collapsed"
-    )
+    start_date = st.session_state.start_date_fluxo; end_date = st.session_state.end_date_fluxo
+    all_sprints_in_view = get_sprints_in_range(st.session_state.jira_client, st.session_state.project_key, start_date, end_date)
     
-    if project_name:
-        st.session_state.project_key = projects.get(project_name)
-        st.session_state.project_name = project_name
-        
+    active_sprints = [s for s in all_sprints_in_view if s.state == 'active']
+    closed_sprints_in_period = [s for s in all_sprints_in_view if s.state == 'closed']
+
+    # --- Secção para Sprints Ativas ---
+    if active_sprints:
+        st.markdown("#### Sprint(s) em Andamento")
+        for sprint in active_sprints:
+            with st.expander(f"🏃 **{sprint.name}** (Ativa)", expanded=True):
+                with st.spinner(f"A carregar dados da sprint '{sprint.name}'..."):
+                    sprint_issues = get_sprint_issues(st.session_state.jira_client, sprint.id)
+                if sprint_issues:
+                    velocity_so_far = calculate_velocity(sprint_issues)
+                    predictability_so_far = calculate_predictability(sprint_issues)
+                    
+                    kpi1, kpi2 = st.columns(2)
+                    kpi1.metric("🚀 Pontos Concluídos (até agora)", f"{velocity_so_far} pts")
+                    kpi2.metric("🎯 Progresso do Comprometido", f"{predictability_so_far:.1f}%")
+
+                    st.markdown("**Progresso do Burndown**")
+                    burndown_df = prepare_burndown_data(st.session_state.jira_client, sprint.id)
+                    if not burndown_df.empty:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Linha Ideal'], name='Ideal', mode='lines', line=dict(dash='dash', color='gray')))
+                        fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Pontos Restantes (Real)'], name='Real', mode='lines+markers', line=dict(color='blue')))
+                        fig.update_layout(title=None, template="plotly_white", yaxis_title="Pontos Restantes", xaxis_title="Data", height=300)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("Não foi possível gerar o gráfico de Burndown para esta sprint.")
         st.divider()
-        st.markdown("#### 2. Selecione a Análise")
-        
-        boards = get_boards(st.session_state.jira_client, st.session_state.project_key)
-        if boards:
-            board_options = {b['name']: b for b in boards}
-            selected_board_name = st.selectbox("Quadro", options=board_options.keys(), key="board_selector", on_change=on_board_change, index=None, placeholder="Escolha um quadro...")
-            if selected_board_name:
-                selected_board = board_options.get(selected_board_name)
-                st.caption(f"Tipo: **{selected_board['type'].capitalize()}**")
-                
-                if selected_board['type'] == 'scrum':
-                    st.markdown("###### 3. Escolha a Sprint")
-                    sprints = get_sprints(st.session_state.jira_client, selected_board['id'])
-                    if sprints:
-                        sprint_name = st.selectbox("Sprint", options=sprints.keys(), key="sprint_selector", index=None, placeholder="Escolha uma sprint...", label_visibility="collapsed")
-                        if sprint_name: st.session_state.sprint_id = sprints.get(sprint_name); st.session_state.sprint_name = sprint_name
-                    else: st.warning("Nenhuma sprint encontrada.")
-                
-                elif selected_board['type'] == 'kanban':
-                    st.markdown("###### 3. Escolha o Período")
-                    use_date_filter = st.checkbox("Filtrar por data", value=True)
-                    if use_date_filter:
-                        date_range = st.date_input("Período", (datetime.now() - timedelta(days=30), datetime.now()), label_visibility="collapsed")
-                        st.session_state.start_date, st.session_state.end_date = date_range if len(date_range) == 2 else (None, None)
-                    else: st.session_state.start_date, st.session_state.end_date = (None, None)
-                
-                if st.button("Analisar Quadro", use_container_width=True, type="primary"):
-                    st.session_state.view_to_show = 'board_view'; st.session_state.selected_board = selected_board
-        else:
-            # Lógica para projetos sem quadro
-            st.warning("Nenhum quadro encontrado.")
-            use_date_filter = st.checkbox("Filtrar por data", value=False)
-            if use_date_filter:
-                date_range = st.date_input("Período", (datetime.now() - timedelta(days=30), datetime.now()))
-                st.session_state.start_date, st.session_state.end_date = date_range if len(date_range) == 2 else (None, None)
-            else: st.session_state.start_date, st.session_state.end_date = (None, None)
-            if st.button("Analisar Visão Geral do Projeto", use_container_width=True, type="primary"):
-                st.session_state.view_to_show = 'project_overview'
 
-    if st.button("Logout", use_container_width=True):
-        for key in list(st.session_state.keys()): del st.session_state[key]
-        st.switch_page("1_🔑_Login.py")
-
-# --- CONTEÚDO PRINCIPAL ---
-with main_content:
-    if st.session_state.get('jira_client'):
-        st.caption(f"Conectado como: {st.session_state.get('email', '')}")
-
-    st.header("📊 Métricas de Iteração e Fluxo")
+    # --- Secção para Sprints Concluídas ---
+    st.markdown("#### Análise de Sprints Concluídas")
+    st.caption(f"A analisar sprints concluídas entre {start_date.strftime('%d/%m/%Y')} e {end_date.strftime('%d/%m/%Y')}.")
     
-    view = st.session_state.get('view_to_show')
-    if view == 'board_view':
-        selected_board = st.session_state.get('selected_board')
-        if selected_board:
-            if selected_board['type'] == 'scrum':
-                if st.session_state.get('sprint_id'): display_scrum_metrics()
-                else: st.info("⬅️ Selecione uma Sprint e clique em 'Analisar Quadro' para ver as métricas.")
-            elif selected_board['type'] == 'kanban':
-                display_kanban_metrics()
-    elif view == 'project_overview':
-        display_project_overview_metrics()
+    if not closed_sprints_in_period:
+        st.warning("Nenhuma sprint concluída encontrada no período de datas selecionado.")
     else:
-        if st.session_state.get('project_key'):
-             st.info("⬅️ Por favor, selecione uma análise na barra lateral e clique no botão correspondente.")
-        else:
-             st.info("⬅️ Por favor, comece selecionando um projeto na barra lateral.")
+        threshold = st.session_state.get('global_configs', {}).get('sprint_goal_threshold', 90)
+        success_rate = calculate_sprint_goal_success_rate(closed_sprints_in_period, threshold)
+        st.metric(
+            f"🎯 Taxa de Sucesso de Objetivos (Meta > {threshold}%)",
+            f"{success_rate:.1f}%",
+            help="Percentagem de sprints no período que atingiram a meta de previsibilidade definida nas configurações."
+        )
+        
+        st.markdown("**Análise Detalhada por Sprint**")
+        sprint_names = [s.name for s in closed_sprints_in_period]
+        selected_sprint_name = st.selectbox("Selecione uma Sprint para ver os detalhes:", options=sprint_names)
+        
+        if selected_sprint_name:
+            sprint_id = [s.id for s in closed_sprints_in_period if s.name == selected_sprint_name][0]
+            sprint_issues = get_sprint_issues(st.session_state.jira_client, sprint_id)
+            
+            if sprint_issues:
+                velocity = calculate_velocity(sprint_issues)
+                predictability = calculate_predictability(sprint_issues)
+                sprint_defects = calculate_sprint_defects(sprint_issues)
+                
+                kpi1, kpi2, kpi3 = st.columns(3)
+                kpi1.metric("🚀 Velocidade", f"{velocity} pts")
+                kpi2.metric("🎯 Previsibilidade", f"{predictability:.1f}%")
+                kpi3.metric("🐞 Defeitos Concluídos", f"{sprint_defects} bugs")

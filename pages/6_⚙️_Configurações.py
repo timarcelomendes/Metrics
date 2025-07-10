@@ -34,7 +34,7 @@ with st.sidebar:
         st.switch_page("1_🔑_Login.py")
 
 # --- Abas para Organização ---
-tab1, tab2 = st.tabs(["Gestão de Campos do Jira", "Mapeamento de Status do Workflow"])
+tab1, tab2, tab3 = st.tabs(["Gestão de Campos", "Mapeamento de Status", "Parâmetros Scrum"])
 
 with tab1:
     st.subheader("Campos Disponíveis para Análise")
@@ -117,3 +117,23 @@ with tab2:
             save_global_configs(configs)
             st.success("Mapeamento de status guardado!")
             st.rerun()
+
+with tab3:
+    st.subheader("Parâmetros de Análise Scrum")
+    with st.container(border=True):
+        st.markdown("**Taxa de Sucesso do Objetivo da Sprint**")
+        st.caption("Defina o percentual mínimo de itens concluídos para que uma sprint seja considerada um 'sucesso'.")
+        
+        threshold = st.slider(
+            "Percentual Mínimo (%)", 
+            min_value=50, 
+            max_value=100, 
+            value=configs.get('sprint_goal_threshold', 90),
+            step=5
+        )
+        
+        if st.button("Salvar Parâmetro de Sucesso", use_container_width=True):
+            configs['sprint_goal_threshold'] = threshold
+            save_global_configs(configs)
+            st.session_state['global_configs']['sprint_goal_threshold'] = threshold
+            st.success("Parâmetro guardado com sucesso!")

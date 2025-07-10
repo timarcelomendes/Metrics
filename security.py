@@ -60,37 +60,47 @@ def get_global_configs():
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
 
+    # Cenário 1: Primeira execução, nada existe na BD.
     if configs is None:
         configs = {
             '_id': 'global_settings',
             'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
-            'status_mapping': { 'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES },
-            'custom_fields': []
+            'status_mapping': { 
+                'initial': DEFAULT_INITIAL_STATES,
+                'done': DEFAULT_DONE_STATES 
+            },
+            'custom_fields': [],
+            'sprint_goal_threshold': 90 # Valor padrão para o novo parâmetro
         }
         collection.insert_one(configs)
         return configs
 
+    # --- Lógica de Autocorreção para dados antigos ---
     needs_update = False
     
-    # Autocorreção para campos padrão (já implementado, mas mantido para robustez)
+    # Verifica e corrige a estrutura de 'available_standard_fields'
     if 'available_standard_fields' in configs:
         for name, details in configs['available_standard_fields'].items():
             if isinstance(details, str):
                 configs['available_standard_fields'][name] = {'id': details, 'type': 'Texto'}
                 needs_update = True
     
-    # ===== NOVA LÓGICA DE AUTOCORREÇÃO PARA CAMPOS PERSONALIZADOS =====
+    # Verifica e corrige a estrutura de 'custom_fields'
     if 'custom_fields' in configs:
         for field in configs['custom_fields']:
-            # Se a chave 'type' não existir no dicionário do campo
             if 'type' not in field:
-                # Adiciona com um valor padrão 'Texto'
                 field['type'] = 'Texto'
                 needs_update = True
     
+    # --- NOVO: Verifica e adiciona a chave de threshold se estiver em falta ---
+    if 'sprint_goal_threshold' not in configs:
+        configs['sprint_goal_threshold'] = 90 # Adiciona o valor padrão
+        needs_update = True
+    
+    # Se alguma correção foi feita, guarda a nova estrutura na base de dados
     if needs_update:
         save_global_configs(configs)
-        st.toast("Estrutura de configuração antiga atualizada automaticamente!", icon="✅")
+        st.toast("Estrutura de configuração atualizada automaticamente!", icon="✅")
 
     return configs
 

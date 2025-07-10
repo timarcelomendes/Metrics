@@ -4,6 +4,11 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from jira_connector import get_sprint_issues
+from utils import *
+from config import STATUS_MAPPING_FILE, DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
+from utils import load_config 
+from datetime import datetime, timedelta
+
 
 # --- Listas Configuráveis ---
 INITIAL_STATES = ['to do', 'a fazer', 'backlog', 'aberto', 'novo']
@@ -126,38 +131,63 @@ def prepare_burndown_data(jira_client, sprint_id):
     ideal_line = np.linspace(total_points_planned, 0, len(date_range)) if date_range.size > 0 else []
     return pd.DataFrame({'Data': list(burndown_data.keys()), 'Pontos Restantes (Real)': list(burndown_data.values()), 'Linha Ideal': ideal_line}).set_index('Data')
 
-def prepare_cfd_data(issues):
-    cfd_data = []; status_categories = ['To Do', 'In Progress', 'In Review', 'Done']
-    if not issues: return pd.DataFrame(), pd.DataFrame()
+def prepare_cfd_data(issues, start_date, end_date):
+    """Prepara os dados para o Diagrama de Fluxo Cumulativo (CFD) para um dado período."""
+    transitions = []
+    
+    # Garante que as datas de entrada sejam do tipo date, não datetime
+    start_date = start_date if isinstance(start_date, pd.Timestamp) else datetime.combine(start_date, datetime.min.time())
+    end_date = end_date if isinstance(end_date, pd.Timestamp) else datetime.combine(end_date, datetime.max.time())
+    
+    start_date = pd.to_datetime(start_date).tz_localize(None)
+    end_date = pd.to_datetime(end_date).tz_localize(None)
+
     for issue in issues:
-        created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize(); transitions = {created_date: 'To Do'}
-        for history in sorted(issue.changelog.histories, key=lambda h: h.created):
-            for item in history.items:
-                if item.field == 'status': transitions[pd.to_datetime(history.created).tz_localize(None).normalize()] = item.toString
-        sorted_transitions = sorted(transitions.items()); last_date, last_status = sorted_transitions[-1]
-        completion_date = find_completion_date(issue) or pd.Timestamp.now(tz=None).normalize()
-        for day in pd.date_range(last_date, completion_date): cfd_data.append({'date': day.normalize(), 'key': issue.key, 'status': last_status})
-        for i in range(len(sorted_transitions) - 1):
-            start_d, status = sorted_transitions[i]; end_d, _ = sorted_transitions[i+1]
-            for day in pd.date_range(start_d, end_d - pd.Timedelta(days=1)): cfd_data.append({'date': day.normalize(), 'key': issue.key, 'status': status})
-    if not cfd_data: return pd.DataFrame(), pd.DataFrame()
-    df = pd.DataFrame(cfd_data).drop_duplicates(['date', 'key'], keep='last')
-    def map_status(status):
-        s_lower = status.lower()
-        if 'in progress' in s_lower or 'desenvolvimento' in s_lower: return 'In Progress'
-        if 'review' in s_lower or 'revisão' in s_lower or 'qa' in s_lower: return 'In Review'
-        if status.lower() in DONE_STATES: return 'Done'
-        return 'To Do'
-    df['category'] = df['status'].apply(map_status)
-    cfd = df.groupby(['date', 'category'])['key'].count().unstack().fillna(0)
-    if not cfd.empty:
-        full_date_range = pd.date_range(start=cfd.index.min(), end=cfd.index.max()); cfd = cfd.reindex(full_date_range, fill_value=0).cumsum()
-    for cat in status_categories:
-        if cat not in cfd.columns: cfd[cat] = 0
-    wip_statuses = ['In Progress', 'In Review']; wip_cols_exist = [col for col in wip_statuses if col in cfd.columns]
-    df_wip = cfd[wip_cols_exist].sum(axis=1).reset_index() if wip_cols_exist else pd.DataFrame(columns=['index', '0'])
-    df_wip.columns = ['Data', 'WIP']
-    return cfd[status_categories], df_wip
+        # Adiciona o estado inicial na data de criação
+        created_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+        if created_date <= end_date:
+             transitions.append({'date': created_date, 'from': None, 'to': 'Criado'})
+        
+        # Percorre o histórico de mudanças de status
+        for history in issue.changelog.histories:
+            history_date = pd.to_datetime(history.created).tz_localize(None)
+            if start_date <= history_date <= end_date:
+                for item in history.items:
+                    if item.field == 'status':
+                        transitions.append({'date': history_date, 'from': item.fromString, 'to': item.toString})
+
+    if not transitions:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = pd.DataFrame(transitions)
+    df['date'] = df['date'].dt.normalize()
+
+    # Conta as entradas e saídas de cada status por dia
+    cfd_in = df.groupby(['date', 'to']).size().unstack(fill_value=0)
+    cfd_out = df.groupby(['date', 'from']).size().unstack(fill_value=0)
+    
+    # Combina e calcula a mudança líquida
+    cfd_net = cfd_in.subtract(cfd_out, fill_value=0)
+    
+    # Garante que todas as colunas de status existam
+    all_statuses = sorted(list(set(df['from'].dropna().unique()) | set(df['to'].dropna().unique())))
+    for status in all_statuses:
+        if status not in cfd_net:
+            cfd_net[status] = 0
+            
+    # Cria um índice de datas completo e preenche os dias sem mudanças
+    full_date_range = pd.date_range(start=df['date'].min(), end=df['date'].max(), freq='D')
+    cfd_resampled = cfd_net.reindex(full_date_range).fillna(0)
+    
+    # Calcula a soma cumulativa para criar as bandas do CFD
+    cfd_cumulative = cfd_resampled.cumsum()
+    
+    # Lógica para WIP (Trabalho em Progresso)
+    initial, done = load_config(STATUS_MAPPING_FILE, {}).get('initial', DEFAULT_INITIAL_STATES), load_config(STATUS_MAPPING_FILE, {}).get('done', DEFAULT_DONE_STATES)
+    wip_statuses = [s for s in cfd_cumulative.columns if s.lower() not in initial and s.lower() not in done]
+    wip_df = pd.DataFrame({'Data': cfd_cumulative.index, 'WIP': cfd_cumulative[wip_statuses].sum(axis=1)})
+
+    return cfd_cumulative, wip_df
 
 def prepare_project_burnup_data(issues, unit='points'):
     story_points_field = 'customfield_10016'; burnup_data = []
@@ -173,27 +203,161 @@ def prepare_project_burnup_data(issues, unit='points'):
     completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
     return pd.DataFrame({'Data': date_range, 'Escopo Total': scope_over_time, 'Trabalho Concluído': completed_over_time}).set_index('Data')
 
-def calculate_trend_and_forecast(df_burnup, trend_weeks=4):
-    if df_burnup.empty or 'Trabalho Concluído' not in df_burnup.columns: return None, None, 0
-    today = pd.Timestamp.now(tz=None).normalize(); start_trend_date = today - pd.Timedelta(weeks=trend_weeks)
-    trend_data = df_burnup[df_burnup.index >= start_trend_date]['Trabalho Concluído'].dropna()
-    if len(trend_data) < 2: return None, None, 0
-    X = np.array([(d.toordinal() - trend_data.index.min().toordinal()) for d in trend_data.index]).reshape(-1, 1); y = trend_data.values
-    model = LinearRegression(); model.fit(X, y)
-    daily_velocity = model.coef_[0]
-    if daily_velocity <= 0.001: return None, None, 0
-    current_scope = df_burnup['Escopo Total'].iloc[-1]
-    work_base_for_trend = trend_data.iloc[0]; date_base_for_trend = trend_data.index[0]
-    remaining_work = current_scope - work_base_for_trend
-    if remaining_work < 0: remaining_work = 0
-    days_to_complete = remaining_work / daily_velocity
-    forecast_date = date_base_for_trend + pd.to_timedelta(days_to_complete, unit='d')
-    if forecast_date > date_base_for_trend:
-        trend_dates = pd.date_range(start=date_base_for_trend, end=forecast_date)
-        trend_X = np.array([(d.toordinal() - date_base_for_trend.toordinal()) for d in trend_dates]).reshape(-1, 1)
-        X_base_recalc = np.array([(d.toordinal() - date_base_for_trend.toordinal()) for d in trend_data.index]).reshape(-1, 1)
-        model_recalc = LinearRegression(); model_recalc.fit(X_base_recalc, y)
-        trend_line = model_recalc.predict(trend_X)
-        df_trend = pd.DataFrame(trend_line, index=trend_dates, columns=['Tendência'])
-    else: df_trend = None
-    return df_trend, forecast_date.normalize(), daily_velocity * 7
+def calculate_trend_and_forecast(burnup_df, trend_weeks):
+    """
+    Calcula a linha de tendência, a previsão de entrega e retorna DUAS velocidades:
+    a de tendência (recente) e a média (geral).
+    """
+    # 1. Cálculo da Velocidade Média (histórico completo)
+    if not burnup_df.empty and 'Trabalho Concluído' in burnup_df.columns:
+        daily_throughput = burnup_df['Trabalho Concluído'].diff().fillna(0)
+        avg_daily_velocity = daily_throughput[daily_throughput > 0].mean()
+        avg_weekly_velocity = (avg_daily_velocity * 7) if pd.notna(avg_daily_velocity) else 0
+    else:
+        avg_weekly_velocity = 0
+
+    # 2. Cálculo da Velocidade de Tendência (últimas N semanas)
+    end_date = burnup_df.index.max()
+    start_date_trend = end_date - pd.Timedelta(weeks=trend_weeks)
+    trend_data = burnup_df[start_date_trend:]
+    
+    if len(trend_data) < 2:
+        return None, None, 0, avg_weekly_velocity
+
+    total_work_increase = trend_data['Trabalho Concluído'].iloc[-1] - trend_data['Trabalho Concluído'].iloc[0]
+    days_in_trend = (trend_data.index.max() - trend_data.index.min()).days
+    
+    trend_weekly_velocity = (total_work_increase / days_in_trend * 7) if days_in_trend > 0 else 0
+
+    # 3. Cálculo do Forecast
+    total_scope = burnup_df['Escopo Total'].iloc[-1]
+    current_completed = burnup_df['Trabalho Concluído'].iloc[-1]
+    remaining_work = total_scope - current_completed
+    forecast_date = None
+    df_trend = None
+    
+    if trend_weekly_velocity > 0 and remaining_work > 0:
+        days_to_complete = remaining_work / (trend_weekly_velocity / 7)
+        forecast_date = end_date + pd.Timedelta(days=days_to_complete)
+        
+        x_trend = np.array([(d - trend_data.index.min()).days for d in trend_data.index]).reshape(-1, 1)
+        y_trend = trend_data['Trabalho Concluído'].values
+        model = LinearRegression().fit(x_trend, y_trend)
+        
+        future_dates = pd.to_datetime(np.arange(trend_data.index.min(), forecast_date, dtype='datetime64[D]'))
+        x_future = np.array([(d - trend_data.index.min()).days for d in future_dates]).reshape(-1, 1)
+        
+        predicted_completion = model.predict(x_future)
+        df_trend = pd.DataFrame(predicted_completion, index=future_dates, columns=['Tendência'])
+
+    return df_trend, forecast_date, trend_weekly_velocity, avg_weekly_velocity
+
+def calculate_time_in_status(issue, target_status):
+    """Calcula o tempo total que uma issue passou em um ou mais status."""
+    total_time = pd.Timedelta(0)
+    try:
+        for history in issue.changelog.histories:
+            for item in history.items:
+                if item.field == 'status':
+                    if item.fromString.lower() in target_status:
+                        # Assume que o tempo no status é a diferença para a próxima mudança
+                        total_time += pd.to_datetime(history.created) - pd.to_datetime(issue.fields.created) # Simplificação
+    except Exception:
+        return 0 # Retorna 0 se houver erro ou o histórico for complexo
+    return total_time.total_seconds() / 86400 # em dias
+
+def calculate_flow_efficiency(issue):
+    """Calcula a Eficiência de Fluxo (simplificado)."""
+    cycle_time = calculate_cycle_time(issue)
+    if cycle_time is None or cycle_time == 0:
+        return None
+    
+    # Supondo que status de espera são 'blocked', 'waiting for approval', etc.
+    # Esta é uma simplificação. Uma implementação real precisaria de um mapeamento de status de "espera".
+    waiting_statuses = ['blocked', 'impedimento'] 
+    waiting_time = calculate_time_in_status(issue, waiting_statuses)
+    
+    active_time = cycle_time - waiting_time
+    return (active_time / cycle_time) * 100 if cycle_time > 0 else 0
+
+def get_aging_wip(issues):
+    """Retorna um DataFrame com os itens em andamento e há quantos dias estão nesse estado."""
+    # Carrega as configurações de status
+    status_config = load_config(STATUS_MAPPING_FILE, {})
+    initial_states = status_config.get('initial', DEFAULT_INITIAL_STATES)
+    done_states = status_config.get('done', DEFAULT_DONE_STATES)
+    
+    wip_issues = []
+    
+    for issue in issues:
+        current_status = issue.fields.status.name.lower()
+        if current_status not in initial_states and current_status not in done_states:
+            # Lógica para calcular a idade do WIP
+            last_status_change_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+            for history in sorted(issue.changelog.histories, key=lambda h: h.created):
+                for item in history.items:
+                    if item.field == 'status':
+                        last_status_change_date = pd.to_datetime(history.created).tz_localize(None)
+
+            age = (datetime.now() - last_status_change_date).days
+            wip_issues.append({'Issue': issue.key, 'Status Atual': issue.fields.status.name, 'Dias no Status': age})
+            
+    return pd.DataFrame(wip_issues).sort_values(by='Dias no Status', ascending=False)
+
+def calculate_velocity(sprint_issues):
+    """Calcula a velocidade da sprint (soma de story points de itens concluídos)."""
+    if not sprint_issues: return 0
+    # Assume que a configuração global para o ID do Story Point está na sessão
+    story_points_field = st.session_state.get('global_configs', {}).get('story_points_field_id', 'customfield_10016')
+    done_statuses = load_config(STATUS_MAPPING_FILE, {}).get('done', DEFAULT_DONE_STATES)
+    
+    completed_points = 0
+    for issue in sprint_issues:
+        if issue.fields.status.name.lower() in done_statuses:
+            points = getattr(issue.fields, story_points_field, 0)
+            if points:
+                completed_points += points
+    return completed_points
+
+def calculate_predictability(sprint_issues):
+    """Calcula a previsibilidade (pontos concluídos / pontos comprometidos)."""
+    if not sprint_issues: return 0.0
+    story_points_field = st.session_state.get('global_configs', {}).get('story_points_field_id', 'customfield_10016')
+    done_statuses = load_config(STATUS_MAPPING_FILE, {}).get('done', DEFAULT_DONE_STATES)
+
+    total_committed_points = 0
+    total_completed_points = 0
+    
+    for issue in sprint_issues:
+        points = getattr(issue.fields, story_points_field, 0) or 0
+        total_committed_points += points
+        if issue.fields.status.name.lower() in done_statuses:
+            total_completed_points += points
+            
+    return (total_completed_points / total_committed_points) * 100 if total_committed_points > 0 else 0.0
+
+def calculate_sprint_defects(sprint_issues):
+    """Calcula a quantidade de defeitos (bugs) concluídos na sprint."""
+    if not sprint_issues: return 0
+    done_statuses = load_config(STATUS_MAPPING_FILE, {}).get('done', DEFAULT_DONE_STATES)
+    defect_count = 0
+    for issue in sprint_issues:
+        issue_type_lower = issue.fields.issuetype.name.lower()
+        if 'bug' in issue_type_lower or 'defeito' in issue_type_lower:
+            if issue.fields.status.name.lower() in done_statuses:
+                defect_count += 1
+    return defect_count
+
+def calculate_sprint_goal_success_rate(sprints, threshold):
+    """Calcula a taxa de sucesso de sprints com base num limiar de previsibilidade."""
+    if not sprints:
+        return 0.0
+    
+    successful_sprints = 0
+    for sprint in sprints:
+        # Reutiliza a função de previsibilidade que já temos
+        predictability = calculate_predictability(get_sprint_issues(st.session_state.jira_client, sprint.id))
+        if predictability >= threshold:
+            successful_sprints += 1
+            
+    return (successful_sprints / len(sprints)) * 100 if sprints else 0.0
