@@ -149,3 +149,25 @@ def save_user_standard_fields(email, standard_fields):
     get_users_collection().update_one(
         {'email': email}, 
         {'$set': {'standard_fields': standard_fields}})
+    
+@st.cache_resource
+def get_project_configs_collection():
+    """Retorna a coleção de configurações por projeto."""
+    client = get_db_client()
+    db = client.get_database("dashboard_metrics")
+    return db.get_collection("project_configs")
+
+def get_project_config(project_key):
+    """Busca a configuração para um projeto específico."""
+    if not project_key: return None
+    collection = get_project_configs_collection()
+    return collection.find_one({'_id': project_key})
+
+def save_project_config(project_key, config_data):
+    """Guarda a configuração para um projeto específico."""
+    collection = get_project_configs_collection()
+    collection.update_one(
+        {'_id': project_key},
+        {'$set': config_data},
+        upsert=True
+    )

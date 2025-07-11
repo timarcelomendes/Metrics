@@ -104,28 +104,36 @@ def get_issues_by_fix_version(jira_client, project_key, version_id):
     except Exception as e:
         print(f"Erro ao buscar issues para a versão {version_id}: {e}")
         return []
-    
 
 def get_sprints_in_range(client: JIRA, project_key: str, start_date, end_date):
-    """Busca todas as sprints de um projeto que foram concluídas dentro de um período de datas."""
+    """Busca sprints ativas e concluídas num período, buscando apenas em quadros Scrum."""
     try:
         boards = client.boards(projectKeyOrID=project_key)
         all_sprints = []
-        for board in boards:
-            # Busca tanto sprints fechadas quanto ativas
-            sprints = get_sprints(client, board.id, 'closed,active')
-            for sprint in sprints:
-                # Filtra as fechadas pelo período de datas
-                if sprint.state == 'closed' and hasattr(sprint, 'completeDate'):
-                    complete_date = pd.to_datetime(sprint.completeDate).date()
-                    if start_date <= complete_date <= end_date:
-                        all_sprints.append(sprint)
-                # Inclui todas as ativas, independentemente da data
-                elif sprint.state == 'active':
-                    all_sprints.append(sprint)
+        added_sprint_ids = set()
 
-        # Ordena por data de conclusão (as ativas ficam no topo) e depois por nome
+        for board in boards:
+            # --- CORREÇÃO AQUI: Verifica se o quadro é do tipo Scrum ---
+            if board.type == 'scrum':
+                try:
+                    sprints = client.sprints(board_id=board.id, state='closed,active')
+                    for sprint in sprints:
+                        if sprint.id not in added_sprint_ids:
+                            # Filtra as sprints fechadas pelo período de datas
+                            if sprint.state == 'closed' and hasattr(sprint, 'completeDate'):
+                                complete_date = pd.to_datetime(sprint.completeDate).date()
+                                if start_date <= complete_date <= end_date:
+                                    all_sprints.append(sprint)
+                                    added_sprint_ids.add(sprint.id)
+                            # Adiciona todas as sprints ativas
+                            elif sprint.state == 'active':
+                                all_sprints.append(sprint)
+                                added_sprint_ids.add(sprint.id)
+                except Exception:
+                    # Se houver um erro específico ao buscar sprints de um quadro, ignora e continua
+                    continue
+                        
         return sorted(all_sprints, key=lambda s: (getattr(s, 'completeDate', '9999-12-31'), s.name), reverse=True)
     except Exception as e:
-        st.error(f"Erro ao buscar sprints: {e}")
+        st.error(f"Erro ao buscar quadros (boards) do projeto: {e}")
         return []
