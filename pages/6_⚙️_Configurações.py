@@ -3,6 +3,8 @@
 import streamlit as st
 from security import get_global_configs, save_global_configs, get_project_config, save_project_config, get_project_configs_collection
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
+from pathlib import Path
+
 
 st.set_page_config(page_title="Configurações Globais", page_icon="⚙️", layout="wide")
 
@@ -19,6 +21,22 @@ st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder a esta página."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
+
+with st.sidebar:
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+
+    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+
+    if st.button("Logout", use_container_width=True):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
 
 configs = get_global_configs()
 projects = st.session_state.get('projects', {})

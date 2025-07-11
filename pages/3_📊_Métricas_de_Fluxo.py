@@ -36,10 +36,15 @@ def on_project_change():
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    logo_path = os.path.join(os.path.dirname(__file__), "..", "images", "gauge-logo.svg")
-    try: st.image(str(logo_path), width=150)
-    except: pass
-    st.divider()
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     
     st.header("Configurações de Análise")
@@ -62,6 +67,9 @@ with st.sidebar:
                     all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
                     st.session_state['raw_issues_for_fluxo'] = all_issues_raw
                     st.rerun()
+    if st.button("Logout", use_container_width=True):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 st.header("📊 Métricas de Fluxo e Performance da Equipa", divider='rainbow')

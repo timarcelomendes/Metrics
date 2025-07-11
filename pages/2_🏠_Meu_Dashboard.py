@@ -46,6 +46,7 @@ with st.sidebar:
             size="large")
     except FileNotFoundError:
         st.write("Gauge Metrics") 
+        
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.header("Fonte de Dados")
     projects = st.session_state.get('projects', {})
