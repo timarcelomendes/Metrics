@@ -63,15 +63,15 @@ else:
             new_email = st.text_input("Seu melhor Email")
             new_password = st.text_input("Crie uma Senha", type="password")
             confirm_password = st.text_input("Confirme a Senha", type="password")
-            if st.form_submit_button("Registar", use_container_width=True):
+            if st.form_submit_button("Registrar", use_container_width=True):
                 if new_email and new_password and confirm_password:
                     if new_password == confirm_password:
                         if find_user(new_email):
-                            st.error("Este email já está registado. Por favor, faça login.")
+                            st.error("Este email já está registrado. Por favor, faça login.")
                         else:
                             hashed_password = get_password_hash(new_password)
                             create_user(new_email, hashed_password)
-                            st.success("Registo bem-sucedido! Agora pode fazer login.")
+                            st.success("Registro bem-sucedido! Agora pode fazer login.")
                     else:
                         st.error("As senhas não coincidem.")
                 else:

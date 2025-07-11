@@ -460,3 +460,59 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config):
         'Pontos Restantes (Real)': burndown_values,
         'Linha Ideal': ideal_line
     }).set_index('Data')
+
+def calculate_executive_summary_metrics(project_issues):
+    """Calcula as métricas quantitativas para o resumo executivo de um projeto."""
+    if not project_issues:
+        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0}
+
+    total_issues = len(project_issues)
+    completed_issues = [i for i in project_issues if find_completion_date(i) is not None]
+    
+    # 1. % Concluído
+    completion_pct = (len(completed_issues) / total_issues) * 100 if total_issues > 0 else 0
+
+    # 2. Entregas no Mês Atual
+    current_month = datetime.now().month
+    current_year = datetime.now().year
+    deliveries_month = len([
+        i for i in completed_issues 
+        if (cd := find_completion_date(i)) and cd.month == current_month and cd.year == current_year
+    ])
+
+    # 3. Prazo Médio (diferença entre data de vencimento e data de conclusão)
+    deadline_diffs = []
+    for i in completed_issues:
+        if hasattr(i.fields, 'duedate') and i.fields.duedate:
+            due_date = pd.to_datetime(i.fields.duedate).normalize()
+            completion_date = find_completion_date(i)
+            if completion_date:
+                deadline_diffs.append((completion_date - due_date).days)
+    
+    avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
+    
+    return {
+        'completion_pct': completion_pct,
+        'deliveries_month': deliveries_month,
+        'avg_deadline_diff': avg_deadline_diff
+    }
+
+def calculate_throughput_trend(project_issues, num_weeks=4):
+    """Calcula o número de entregas por semana para as últimas semanas."""
+    if not project_issues:
+        return pd.DataFrame({'Semana': [], 'Entregas': []})
+
+    completed_issues = [{'completion_date': find_completion_date(i)} for i in project_issues]
+    df = pd.DataFrame(completed_issues).dropna()
+    
+    if df.empty:
+        return pd.DataFrame({'Semana': [], 'Entregas': []})
+
+    df['completion_date'] = pd.to_datetime(df['completion_date'])
+    df = df[df['completion_date'] >= pd.Timestamp.now() - pd.DateOffset(weeks=num_weeks)]
+    
+    # Agrupa por semana, usando o final da semana como rótulo
+    trend = df.groupby(pd.Grouper(key='completion_date', freq='W-MON')).size().reset_index(name='Entregas')
+    trend['Semana'] = trend['completion_date'].dt.strftime('Semana %U')
+    
+    return trend[['Semana', 'Entregas']]
