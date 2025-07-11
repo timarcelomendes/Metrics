@@ -34,9 +34,9 @@ if 'email' in st.session_state:
         st.rerun()
 else:
     st.title("Dashboard de Métricas Ágeis")
-    st.text("Por favor, faça login ou registe-se para continuar.")
+    st.text("Por favor, faça login ou registre-se para continuar.")
 
-    tab1, tab2 = st.tabs(["Login", "Registar-se"])
+    tab1, tab2 = st.tabs(["Login", "Registrar-se"])
 
     with tab1:
         with st.form("login_form"):
