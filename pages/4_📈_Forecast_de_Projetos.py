@@ -89,7 +89,7 @@ with st.sidebar:
                 unit_options = [estimation_field_name, "Contagem de Issues"] if estimation_field_name else ["Contagem de Issues"]
 
                 st.session_state.unit_selector = st.radio("Unidade de Análise", options=unit_options, horizontal=True)
-                st.session_state.team_size = st.number_input("Tamanho da Equipa (pessoas)", min_value=1, value=st.session_state.get('team_size', 1))
+                st.session_state.team_size = st.number_input("Tamanho da Equipe (pessoas)", min_value=1, value=st.session_state.get('team_size', 1))
                 st.session_state.trend_slider = st.slider("Semanas para Tendência", 2, 12, 4)
                 
                 if st.button("Analisar Escopo", use_container_width=True, type="primary"):
@@ -136,7 +136,7 @@ if burnup_df is None:
 unit = st.session_state.unit_selector
 estimation_config = project_config.get('estimation_field', {})
 
-unit_display = "itens" # Padrão para "Contagem de Issues"
+unit_display = " itens" # Padrão para "Contagem de Issues"
 if unit != 'Contagem de Issues':
     if estimation_config.get('source') == 'standard_time':
         unit_display = 'hs' # Para Horas
@@ -178,7 +178,7 @@ with tab1:
 
 with tab2:
     st.subheader("Qual a vazão necessária para atingir uma data?")
-    st.caption("Use esta ferramenta para simular cenários. Se definirmos uma data de entrega, qual o ritmo que a equipa precisa de ter?")
+    st.caption("Use esta ferramenta para simular cenários. Se definirmos uma data de entrega, qual o ritmo que a equipe precisa de ter?")
     
     remaining_work = current_scope - completed_work
     target_date = st.date_input("Data de Entrega Desejada", value=forecast_date if forecast_date else datetime.now() + timedelta(weeks=4), min_value=datetime.now().date())
@@ -194,11 +194,11 @@ with tab2:
             col3.metric("⚡ Vazão Necessária", f"{required_velocity:.1f} {unit_display}/sem", delta=f"{required_velocity - avg_velocity:.1f} vs. média", delta_color="inverse")
                             
             st.divider()
-            st.subheader("Análise da Equipa")
+            st.subheader("Análise da Equipe")
             
             # --- NOVO SELETOR PARA A BASE DA PROJEÇÃO ---
             projection_basis = st.radio(
-                "Base para projeção da equipa:",
+                "Base para projeção da equipe:",
                 ("Velocidade Média (Histórico Total)", f"Tendência ({trend_weeks} semanas)"),
                 horizontal=True,
                 help="Escolha qual velocidade usar para estimar a produtividade por pessoa."
@@ -216,10 +216,10 @@ with tab2:
                 st.metric(
                     "👩‍💻 Pessoas Necessárias para Atingir a Meta",
                     f"{np.ceil(required_team_size):.0f} pessoas",
-                    delta=f"{np.ceil(required_team_size) - team_size:.0f} vs. equipa atual"
+                    delta=f"{np.ceil(required_team_size) - team_size:.0f} vs. equipe atual"
                 )
             else:
-                st.warning("Não é possível estimar a equipa necessária.", icon="⚠️")
+                st.warning("Não é possível estimar a equipe necessária.", icon="⚠️")
                 st.info(f"A base de cálculo selecionada ('{basis_text}') é zero ou negativa. Não é possível estimar a produtividade por pessoa.")
         else:
             st.error("A data de entrega desejada deve ser no futuro.")

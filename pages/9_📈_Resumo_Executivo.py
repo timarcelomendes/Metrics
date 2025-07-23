@@ -93,7 +93,6 @@ for project_name in project_keys:
     col_idx += 1
 
     with current_col:
-        # Cria um placeholder para o cartão
         card_placeholder = st.empty()
         card_placeholder.info(f"A carregar dados para o projeto **{project_name}**...")
 
@@ -104,7 +103,7 @@ for project_name in project_keys:
         manual_data = (get_project_config(project_key) or {}).get('executive_summary', {})
         throughput_trend_df = calculate_throughput_trend(project_issues)
 
-        # --- Redesenha o cartão com os dados completos e o design corrigido ---
+        # --- Redesenha o cartão com os dados completos ---
         with card_placeholder.container(border=True):
             # Linha 1: Título e Status RAG
             title_col, rag_col = st.columns([3, 1])
@@ -119,12 +118,21 @@ for project_name in project_keys:
             
             st.divider()
 
-            # Linha 3: KPIs
             kpi1, kpi2, kpi3 = st.columns(3)
+            
             deadline_diff = auto_metrics['avg_deadline_diff']
             risks = manual_data.get('active_risks', 0)
+            
             kpi1.metric(label="📦 Entregas no Mês", value=f"{auto_metrics['deliveries_month']}")
-            kpi2.metric(label="⏱️ Desvio de Prazo", value=f"{deadline_diff:+.1f} dias", delta_color=("inverse" if deadline_diff > 0 else "normal"))
+            
+            delta_text_prazo = "Atraso" if deadline_diff > 0 else None
+            kpi2.metric(
+                label="⏱️ Desvio de Prazo", 
+                value=f"{deadline_diff:+.1f} dias", 
+                delta=delta_text_prazo, 
+                delta_color=("inverse" if deadline_diff > 0 else "normal")
+            )
+            
             kpi3.metric(label="🚨 Riscos Ativos", value=risks, delta_color="off" if risks == 0 else "inverse")
             
             # Linha 4: Mini-Gráfico

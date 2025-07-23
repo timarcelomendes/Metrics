@@ -137,3 +137,34 @@ def get_sprints_in_range(client: JIRA, project_key: str, start_date, end_date):
     except Exception as e:
         st.error(f"Erro ao buscar quadros (boards) do projeto: {e}")
         return []
+    
+def get_jql_issue_count(client: JIRA, jql_string: str):
+    """
+    Executa uma consulta JQL e retorna apenas o número total de issues correspondentes.
+    É muito eficiente pois usa maxResults=0.
+    """
+    if not jql_string:
+        return 0
+    try:
+        # maxResults=0 é um truque para pedir ao Jira apenas o total, sem os dados das issues
+        search_result = client.search_issues(jql_string, maxResults=0)
+        return search_result.total
+    except Exception as e:
+        st.error(f"Erro ao executar a consulta JQL: {e}")
+        return 0
+
+@st.cache_data(show_spinner="A validar campo no Jira...")
+def validate_jira_field(_client: JIRA, field_id: str):
+    """
+    Verifica se um field_id (padrão ou personalizado) é válido na instância do Jira.
+    Usa cache para não repetir a busca de todos os campos a cada validação.
+    """
+    try:
+        all_fields = _client.fields()
+        for field in all_fields:
+            if field['id'] == field_id:
+                return True
+        return False
+    except Exception as e:
+        st.error(f"Não foi possível validar o campo no Jira: {e}")
+        return False

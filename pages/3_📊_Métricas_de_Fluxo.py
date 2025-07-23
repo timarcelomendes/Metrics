@@ -72,7 +72,7 @@ with st.sidebar:
         st.switch_page("1_🔑_Login.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
-st.header("📊 Métricas de Fluxo e Performance da Equipa", divider='rainbow')
+st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 all_raw_issues = st.session_state.get('raw_issues_for_fluxo')
 if not all_raw_issues:
     st.info("⬅️ Na barra lateral, selecione um projeto, um período e clique em 'Analisar Fluxo' para começar.")

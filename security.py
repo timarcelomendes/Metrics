@@ -34,7 +34,7 @@ def decrypt_token(encrypted_token: str):
     return get_cipher().decrypt(encrypted_token.encode()).decode()
 
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
-@st.cache_resource
+@st.cache_resource(show_spinner='Carregando os dados')
 def get_db_client():
     """Retorna uma instância do cliente MongoDB, em cache para performance."""
     return MongoClient(st.secrets["MONGO_CONNECTION_STRING"])
@@ -91,15 +91,18 @@ def delete_jira_connection(connection_id):
 
 # --- Funções de Gestão de Dashboards ---
 def get_user_dashboard(user_email, project_key):
-    """Busca o layout do dashboard de um utilizador para um projeto específico."""
-    return get_dashboards_collection().find_one({"user_email": user_email, "project_key": project_key})
+    """Busca o layout de um utilizador para um projeto específico."""
+    user_data = find_user(user_email)
+    if user_data:
+        all_dashboards = user_data.get('dashboard_layout', {})
+        return all_dashboards.get(project_key, [])
+    return []
 
-def save_user_dashboard(user_email, project_key, layout):
-    """Guarda ou atualiza o layout do dashboard de um utilizador para um projeto."""
-    get_dashboards_collection().update_one(
-        {"user_email": user_email, "project_key": project_key},
-        {"$set": {"layout": layout}},
-        upsert=True
+def save_user_dashboard(email, all_dashboard_layouts):
+    """Guarda o objeto completo de dashboards (todos os projetos) para um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'dashboard_layout': all_dashboard_layouts}}
     )
 
 # --- Funções de Gestão de Configurações ---
@@ -115,7 +118,7 @@ def save_project_config(project_key, config_data):
         {'$set': config_data},
         upsert=True
     )
-
+    
 def save_global_configs(new_configs):
     """Guarda o documento de configurações globais inteiro."""
     get_app_configs_collection().update_one(
@@ -124,45 +127,43 @@ def save_global_configs(new_configs):
         upsert=True
     )
 
+@st.cache_resource (show_spinner="Carregando dados")
 def get_global_configs():
-    """Busca as configs globais, as cria, ou as corrige se estiverem em formato antigo."""
+    """
+    Busca as configs globais ou cria com valores padrão se não existirem.
+    Versão simplificada sem lógica de migração.
+    """
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
+
     if configs is None:
+        st.toast("Nenhuma configuração global encontrada, a criar com valores padrão.")
         configs = {
             '_id': 'global_settings',
             'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
-            'status_mapping': { 'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES },
+            'status_mapping': { 
+                'initial': DEFAULT_INITIAL_STATES,
+                'done': DEFAULT_DONE_STATES 
+            },
             'custom_fields': [],
             'sprint_goal_threshold': 90
         }
         collection.insert_one(configs)
-        return configs
-    
-    needs_update = False
-    if 'available_standard_fields' in configs:
-        for name, details in list(configs['available_standard_fields'].items()):
-            if isinstance(details, str):
-                configs['available_standard_fields'][name] = {'id': details, 'type': 'Texto'}
-                needs_update = True
-    if 'custom_fields' in configs:
-        for field in configs['custom_fields']:
-            if 'type' not in field:
-                field['type'] = 'Texto'
-                needs_update = True
-    if 'sprint_goal_threshold' not in configs:
-        configs['sprint_goal_threshold'] = 90
-        needs_update = True
-        
-    if needs_update:
-        save_global_configs(configs)
-        st.toast("Estrutura de configuração antiga atualizada automaticamente!", icon="✅")
-
     return configs
+
+def save_global_configs(new_configs):
+    get_app_configs_collection().update_one({'_id': 'global_settings'}, {'$set': new_configs}, upsert=True)
     
 def save_last_project(email, project_key):
     """Guarda a chave do último projeto selecionado pelo utilizador na base de dados."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'last_project_key': project_key}}
+    )
+
+def save_user_standard_fields(email, standard_fields_list):
+    """Guarda a lista de campos padrão selecionados por um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'standard_fields': standard_fields_list}}
     )
