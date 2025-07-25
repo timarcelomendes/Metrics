@@ -240,21 +240,30 @@ def prepare_project_burnup_data(issues, unit, estimation_config):
     completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
     
     return pd.DataFrame({'Data': date_range, 'Escopo Total': scope_over_time, 'Trabalho Concluído': completed_over_time}).set_index('Data')
-
 def calculate_trend_and_forecast(burnup_df, trend_weeks):
     """
-    Calcula a linha de tendência, a previsão de entrega e retorna DUAS velocidades:
-    a de tendência (recente) e a média (geral).
+    Calcula a linha de tendência, a previsão de entrega e as velocidades (tendência e média).
     """
-    # 1. Cálculo da Velocidade Média (histórico completo)
-    if not burnup_df.empty and 'Trabalho Concluído' in burnup_df.columns:
-        daily_throughput = burnup_df['Trabalho Concluído'].diff().fillna(0)
-        avg_daily_velocity = daily_throughput[daily_throughput > 0].mean()
-        avg_weekly_velocity = (avg_daily_velocity * 7) if pd.notna(avg_daily_velocity) else 0
-    else:
-        avg_weekly_velocity = 0
+    if burnup_df.empty or 'Trabalho Concluído' not in burnup_df.columns:
+        return None, None, 0, 0
 
-    # 2. Cálculo da Velocidade de Tendência (últimas N semanas)
+    # --- NOVO CÁLCULO CORRETO PARA VELOCIDADE MÉDIA ---
+    total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
+    
+    # Encontra a primeira data com trabalho para calcular a duração real
+    first_work_day = burnup_df[burnup_df['Trabalho Concluído'] > 0].index.min()
+    last_day = burnup_df.index.max()
+    
+    avg_weekly_velocity = 0
+    if pd.notna(first_work_day):
+        duration_days = (last_day - first_work_day).days
+        if duration_days > 0:
+            avg_daily_velocity = total_completed / duration_days
+            avg_weekly_velocity = avg_daily_velocity * 7
+        elif total_completed > 0: # Se tudo foi feito em menos de um dia
+            avg_weekly_velocity = total_completed * 7
+
+    # --- Cálculo da Velocidade de Tendência (últimas N semanas) - sem alterações ---
     end_date = burnup_df.index.max()
     start_date_trend = end_date - pd.Timedelta(weeks=trend_weeks)
     trend_data = burnup_df[start_date_trend:]
@@ -267,10 +276,9 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     
     trend_weekly_velocity = (total_work_increase / days_in_trend * 7) if days_in_trend > 0 else 0
 
-    # 3. Cálculo do Forecast
+    # --- Cálculo do Forecast (sem alterações) ---
     total_scope = burnup_df['Escopo Total'].iloc[-1]
-    current_completed = burnup_df['Trabalho Concluído'].iloc[-1]
-    remaining_work = total_scope - current_completed
+    remaining_work = total_scope - total_completed
     forecast_date = None
     df_trend = None
     

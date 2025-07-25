@@ -6,6 +6,8 @@ from cryptography.fernet import Fernet
 from passlib.context import CryptContext
 from bson.objectid import ObjectId
 from config import *
+import string
+import secrets
 
 # --- Configuração de Hashing de Senha ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -133,13 +135,19 @@ def get_global_configs():
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
     if configs is None:
+        # A lista de domínios agora começa aqui, na base de dados
+        default_allowed_domains = ["stefanini.com", "latam.stefanini.com", "gauge.haus"]
         configs = {
             '_id': 'global_settings',
-            'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
-            'status_mapping': { 'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES },
-            'custom_fields': [], 'sprint_goal_threshold': 90
+            'allowed_domains': default_allowed_domains,
+            # ... (outras configurações padrão)
         }
         collection.insert_one(configs)
+    
+    # Garante que a chave exista para configurações antigas
+    if 'allowed_domains' not in configs:
+        configs['allowed_domains'] = ["stefanini.com", "latam.stefanini.com", "gauge.haus"]
+
     return configs
 
 def save_global_configs(new_configs):
@@ -185,3 +193,25 @@ def save_last_active_connection(user_email, connection_id):
 def get_connection_by_id(connection_id):
     """Busca os detalhes de uma conexão específica pelo seu ID."""
     return get_connections_collection().find_one({"_id": ObjectId(connection_id)})
+
+def delete_user(email):
+    """Remove um utilizador e todas as suas configurações associadas."""
+    if find_user(email):
+        get_users_collection().delete_one({'email': email})
+        get_connections_collection().delete_many({'user_email': email})
+        get_dashboards_collection().delete_many({'user_email': email})
+        return True
+    return False
+
+def generate_temporary_password(length=12):
+    """Gera uma senha aleatória e segura."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    password = ''.join(secrets.choice(alphabet) for i in range(length))
+    return password
+
+def update_user_password(email, new_hashed_password):
+    """Atualiza a senha com hash de um utilizador específico."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'hashed_password': new_hashed_password}}
+    )

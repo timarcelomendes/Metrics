@@ -20,9 +20,11 @@ def on_project_change():
     if 'dynamic_df' in st.session_state: del st.session_state['dynamic_df']
     if 'chart_to_edit' in st.session_state: del st.session_state['chart_to_edit']
 
-if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
+st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
+if 'email' not in st.session_state:
+    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
@@ -33,7 +35,11 @@ with st.sidebar:
     except FileNotFoundError:
         st.write("Gauge Metrics") 
 
-    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+        
     st.header("Fonte de Dados")
     projects = st.session_state.get('projects', {})
     project_names = list(projects.keys())
@@ -87,13 +93,12 @@ with st.sidebar:
 
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
-        st.switch_page("1_🔑_Login.py")
+        st.switch_page("1_🔑_Autenticação.py")
 
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
 
 if editing_mode: st.header(f"✏️ Editando: {chart_data.get('title', 'Visualização')}", divider='orange')
-else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
 df = st.session_state.get('dynamic_df')
 if df is None or df.empty:

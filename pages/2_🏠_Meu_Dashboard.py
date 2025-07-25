@@ -50,8 +50,11 @@ def move_item(items_list, from_index, to_index):
     return items_list
 
 # --- Bloco de Autenticação e Conexão (sem alterações) ---
+st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
+
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
 if 'jira_client' not in st.session_state:
     user_data = find_user(st.session_state['email'])
     if user_data and user_data.get('encrypted_token'):
@@ -74,7 +77,11 @@ with st.sidebar:
     except FileNotFoundError:
         st.write("Gauge Metrics") 
 
-    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+        
     st.header("Fonte de Dados")
     projects = st.session_state.get('projects', {})
     project_names = list(projects.keys())
@@ -143,11 +150,9 @@ with st.sidebar:
                 st.rerun()
         if st.button("Logout", use_container_width=True, type='secondary'):
             for key in list(st.session_state.keys()): del st.session_state[key]
-            st.switch_page("1_🔑_Login.py")
+            st.switch_page("1_🔑_Autenticação.py")
 
 # --- CONTEÚDO PRINCIPAL ---
-st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
-
 df = st.session_state.get('dynamic_df')
 if df is None or df.empty:
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar / Atualizar Dashboard' para começar.")
@@ -200,14 +205,14 @@ with st.container(border=True):
     with col3:
         limit_reached = len(dashboard_items) >= 12
         if limit_reached: st.button("Limite Atingido", disabled=True, use_container_width=True)
-        else: st.page_link("pages/5_🏗️_Personalizar Gráficos.py", label="➕ Adicionar Gráfico", use_container_width=True)
+        else: st.page_link("pages/5_🏗️_Construir Gráficos.py", label="➕ Adicionar Gráfico", use_container_width=True)
 
 st.divider()
 
 # --- EXIBIÇÃO DOS CARTÕES ---
 if not dashboard_items:
     st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
-    st.page_link("pages/5_🏗️_Personalizar Gráficos.py", label="Criar a sua primeira visualização", icon="➕")
+    st.page_link("pages/5_🏗️_Construir Gráficos.py", label="Criar a sua primeira visualização", icon="➕")
 else:
     cols = st.columns(num_columns, gap="large")
     for i, chart_to_render in enumerate(list(dashboard_items)):
@@ -236,7 +241,7 @@ else:
                 with header_cols[3]: # Editar
                     if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Visualização", use_container_width=True):
                         st.session_state['chart_to_edit'] = chart_to_render
-                        st.switch_page("pages/5_🏗️_Personalizar Gráficos.py")
+                        st.switch_page("pages/5_🏗️_Construir Gráficos.py")
                 
                 with header_cols[4]: # Remover
                     if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Visualização", use_container_width=True):

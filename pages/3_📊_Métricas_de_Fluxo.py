@@ -17,8 +17,11 @@ from utils import *
 st.set_page_config(page_title="Métricas de Fluxo", page_icon="📊", layout="wide")
 
 # --- Bloco de Autenticação e Conexão ---
+st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
+
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Login.py", label="Ir para Login", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    
 if 'jira_client' not in st.session_state:
     user_data = find_user(st.session_state['email'])
     if user_data and user_data.get('encrypted_token'):
@@ -45,8 +48,11 @@ with st.sidebar:
     except FileNotFoundError:
         st.write("Gauge Metrics") 
 
-    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
-    
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+            
     st.header("Configurações de Análise")
     projects = st.session_state.get('projects', {})
     project_names = list(projects.keys())
@@ -69,10 +75,9 @@ with st.sidebar:
                     st.rerun()
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
-        st.switch_page("1_🔑_Login.py")
+        st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
-st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 all_raw_issues = st.session_state.get('raw_issues_for_fluxo')
 if not all_raw_issues:
     st.info("⬅️ Na barra lateral, selecione um projeto, um período e clique em 'Analisar Fluxo' para começar.")
