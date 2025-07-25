@@ -48,10 +48,14 @@ with st.sidebar:
                 with st.spinner("Buscando e preparando dados..."):
                     issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
                     data = []; 
-                    global_configs = st.session_state.get('global_configs', {}) # <-- Fonte única da verdade
                     user_data = find_user(st.session_state['email'])
+                    global_configs = get_global_configs()
                     project_config = get_project_config(st.session_state.project_key) or {}
-                    selected_standard_fields = user_data.get('standard_fields', []); custom_fields_to_fetch = global_configs.get('custom_fields', [])
+                    
+                    selected_standard_fields = user_data.get('standard_fields', [])
+                    custom_fields_to_fetch = global_configs.get('custom_fields', [])
+                    estimation_config = project_config.get('estimation_field', {})
+
                     for i in issues:
                         completion_date = find_completion_date(i)
                         issue_data = {'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date, 'Mês de Conclusão': completion_date.strftime('%Y-%m') if completion_date else None, 'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i), 'Tipo de Issue': i.fields.issuetype.name, 'Responsável': i.fields.assignee.displayName if i.fields.assignee else 'Não atribuído', 'Criado por': i.fields.reporter.displayName if i.fields.reporter else 'N/A', 'Status': i.fields.status.name, 'Prioridade': i.fields.priority.name if i.fields.priority else 'N/A', 'Labels': ', '.join(i.fields.labels) if i.fields.labels else 'Nenhum'}
@@ -71,10 +75,17 @@ with st.sidebar:
                             elif hasattr(value, 'value'): issue_data[field_name_custom] = value.value
                             elif value is not None: issue_data[field_name_custom] = value
                             else: issue_data[field_name_custom] = None
+                        if estimation_config.get('id'):
+                            field_name = estimation_config['name']
+                            issue_data[field_name] = get_issue_estimation(i, estimation_config)
+                            
                         data.append(issue_data)
-                    st.session_state.dynamic_df = pd.DataFrame(data); st.rerun()
+                        
+                    st.session_state.dynamic_df = pd.DataFrame(data)
+                    st.rerun()
 
-    if st.button("Logout", use_container_width=True):
+
+    if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Login.py")
 
@@ -109,23 +120,46 @@ if editing_mode:
 chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="creator_type", horizontal=True, index=default_creator_index)
 
 config_container = st.container(border=True); chart_config = {}
-global_configs = get_global_configs(); user_data = find_user(st.session_state['email']); project_config = get_project_config(st.session_state.project_key) or {}
-active_standard_fields = user_data.get('standard_fields', []); all_custom_fields = global_configs.get('custom_fields', []); project_estimation_field = project_config.get('estimation_field', {})
-all_available_standard_fields = global_configs.get('available_standard_fields', {})
+global_configs = st.session_state.get('global_configs', {})
+user_data = find_user(st.session_state['email'])
+project_config = get_project_config(st.session_state.project_key) or {}
+
+# Campos que o utilizador ativou
+user_enabled_standard_fields = user_data.get('standard_fields', [])
+user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+
+# Campos que existem globalmente
+all_available_standard = global_configs.get('available_standard_fields', {})
+all_available_custom = global_configs.get('custom_fields', [])
+project_estimation_field = project_config.get('estimation_field', {})
+
 master_field_list = []
-for field in all_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
-for field_name in active_standard_fields:
-    details = all_available_standard_fields.get(field_name, {})
-    if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
+# Adiciona apenas os campos personalizados que o utilizador ativou
+for field in all_available_custom:
+    if field['name'] in user_enabled_custom_fields:
+        master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
+
+# Adiciona apenas os campos padrão que o utilizador ativou
+for field_name in user_enabled_standard_fields:
+    details = all_available_standard.get(field_name, {})
+    if details:
+        master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
+
+# Adiciona o campo de estimativa do projeto, se não for repetido
 if project_estimation_field and project_estimation_field.get('name') not in [f['name'] for f in master_field_list]:
-    est_type = 'Número' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
+    est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
-base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']; base_date_cols = ['Data de Criação', 'Data de Conclusão', 'Mês de Conclusão']
+
+base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']
+base_date_cols = ['Data de Criação', 'Data de Conclusão', 'Mês de Conclusão']
 base_categorical_cols = ['Tipo de Issue', 'Responsável', 'Status', 'Prioridade', 'Criado por', 'Labels']
-numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_field_list if f['type'] in ['Número', 'Horas']])))
+
+numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_field_list if f['type'] in ['Numérico', 'Horas']])))
 date_cols = sorted(list(set(base_date_cols + [f['name'] for f in master_field_list if f['type'] == 'Data'])))
-categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in master_field_list if f['type'] == 'Texto'])))
-measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols; all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols)))
+categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto']])))
+
+measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols
+all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols)))
 
 st.divider()
 
@@ -221,6 +255,9 @@ with config_container:
         x = c1.selectbox("Eixo X", x_options, index=x_idx); y = c2.selectbox("Eixo Y", y_options, index=y_idx)
         chart_type = c3.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
 
+        auto_title = f"{y} vs {x}"
+        custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title))
+        
         chart_config = {
             'id': str(uuid.uuid4()), 'type': chart_type, 'x': x, 'y': y, 
             'title': f"{y} vs {x}", 'creator_type': chart_creator_type,
@@ -246,6 +283,11 @@ with config_container:
         type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
         chart_type_str = c4.radio("Formato", format_options, index=type_idx, horizontal=True)
         chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
+
+        auto_title = f"Análise de '{measure}' por '{dim}'" if chart_type != 'tabela' else f"Tabela de Dados"
+        custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title))
+
+        
         if chart_type == 'tabela':
             selected_cols = st.multiselect("Selecione as colunas para a tabela", options=all_cols_for_table, default=chart_data.get('columns', []))
             chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': f"Tabela: {', '.join(selected_cols)}", 'creator_type': chart_creator_type}
@@ -386,6 +428,10 @@ with config_container:
         columns = c2.selectbox("Agrupar Colunas por:", options=categorical_cols, key="pivot_cols", index=cols_idx)
         values = c3.selectbox("Calcular Valores de:", options=numeric_cols, key="pivot_values", index=vals_idx)
         aggfunc = c4.selectbox("Usando o Cálculo:", options=agg_opts, key="pivot_agg", index=agg_idx)
+
+        auto_title = f"{aggfunc} de '{values}' por '{rows}' e '{columns}'"
+        custom_title = st.text_input("Título da Tabela:", value=chart_data.get('title', auto_title))
+
         
         chart_config = {
             'id': str(uuid.uuid4()), 'type': 'pivot_table',

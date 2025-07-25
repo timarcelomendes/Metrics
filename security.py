@@ -129,24 +129,15 @@ def save_global_configs(new_configs):
 
 @st.cache_resource (show_spinner="Carregando dados")
 def get_global_configs():
-    """
-    Busca as configs globais ou cria com valores padrão se não existirem.
-    Versão simplificada sem lógica de migração.
-    """
+    """Busca as configs globais ou cria com valores padrão se não existirem."""
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
-
     if configs is None:
-        st.toast("Nenhuma configuração global encontrada, a criar com valores padrão.")
         configs = {
             '_id': 'global_settings',
             'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
-            'status_mapping': { 
-                'initial': DEFAULT_INITIAL_STATES,
-                'done': DEFAULT_DONE_STATES 
-            },
-            'custom_fields': [],
-            'sprint_goal_threshold': 90
+            'status_mapping': { 'initial': DEFAULT_INITIAL_STATES, 'done': DEFAULT_DONE_STATES },
+            'custom_fields': [], 'sprint_goal_threshold': 90
         }
         collection.insert_one(configs)
     return configs
@@ -167,3 +158,30 @@ def save_user_standard_fields(email, standard_fields_list):
         {'email': email},
         {'$set': {'standard_fields': standard_fields_list}}
     )
+
+def save_user_custom_fields(email, custom_fields_list):
+    """Guarda a lista de campos personalizados selecionados por um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'enabled_custom_fields': custom_fields_list}}
+    )
+
+def save_dashboard_column_preference(project_key, num_columns):
+    """Guarda a preferência de número de colunas do dashboard para um projeto."""
+    if not project_key:
+        return
+    # Padrão "Ler-Modificar-Escrever" para garantir a integridade dos dados
+    project_config = get_project_config(project_key) or {}
+    project_config['dashboard_columns'] = num_columns
+    save_project_config(project_key, project_config)
+
+def save_last_active_connection(user_email, connection_id):
+    """Guarda o ID da última conexão Jira ativada pelo utilizador."""
+    get_users_collection().update_one(
+        {'email': user_email},
+        {'$set': {'last_active_connection_id': ObjectId(connection_id)}}
+    )
+
+def get_connection_by_id(connection_id):
+    """Busca os detalhes de uma conexão específica pelo seu ID."""
+    return get_connections_collection().find_one({"_id": ObjectId(connection_id)})

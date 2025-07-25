@@ -51,6 +51,22 @@ if 'jira_client' not in st.session_state:
     # (Lógica de conexão com o Jira)
     pass
 
+with st.sidebar:
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+
+    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+
+    if st.button("Logout", use_container_width=True, type='secondary'):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Login.py")
+
 projects = st.session_state.get('projects', {})
 if not projects:
     st.warning("Nenhum projeto encontrado ou carregado."); st.stop()

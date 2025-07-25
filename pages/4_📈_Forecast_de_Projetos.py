@@ -95,7 +95,7 @@ with st.sidebar:
                 if st.button("Analisar Escopo", use_container_width=True, type="primary"):
                     st.session_state.view_to_show = 'forecast_view'
 
-    if st.button("Logout", use_container_width=True):
+    if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Login.py")
     

@@ -12,12 +12,21 @@ from pathlib import Path
 
 st.set_page_config(page_title="Meu Dashboard", page_icon="🏠", layout="wide")
 
-# --- CSS para alinhar verticalmente os elementos ---
+# --- CSS PARA ESTILO DOS CARTÕES E ALINHAMENTO ---
 st.markdown("""
 <style>
-/* Garante que os itens dentro das colunas (st.columns) se alinhem ao centro verticalmente */
+/* Esta regra força os itens dentro de st.columns a alinharem-se no TOPO */
 [data-testid="stHorizontalBlock"] {
-    align-items: center;
+    align-items: flex-start;
+}
+/* Estilo para o container nativo que serve como cartão */
+div[data-testid="stVerticalBlock"] div.st-emotion-cache-1jicfl2 {
+    background-color: #ffffff;
+    border: 1px solid #e1e4e8;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px 0 rgba(0,0,0,0.05);
+    padding: 1rem;
+    margin-bottom: 1rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -26,6 +35,19 @@ def on_project_change():
     """Limpa o estado relevante ao trocar de projeto."""
     if 'dynamic_df' in st.session_state: st.session_state.pop('dynamic_df', None)
     if 'loaded_project_key' in st.session_state: st.session_state.pop('loaded_project_key', None)
+
+def on_layout_change():
+    """Callback que lê o estado do toggle e chama a função para guardar a preferência."""
+    use_two_cols = st.session_state.dashboard_layout_toggle
+    num_cols = 2 if use_two_cols else 1
+    save_dashboard_column_preference(st.session_state.project_key, num_cols)
+
+def move_item(items_list, from_index, to_index):
+    """Move um item dentro de uma lista de uma posição para outra."""
+    if 0 <= from_index < len(items_list) and 0 <= to_index < len(items_list):
+        item = items_list.pop(from_index)
+        items_list.insert(to_index, item)
+    return items_list
 
 # --- Bloco de Autenticação e Conexão (sem alterações) ---
 if 'email' not in st.session_state:
@@ -45,9 +67,13 @@ if 'jira_client' not in st.session_state:
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
-    try: st.image(str(logo_path), width=150)
-    except: pass
-    st.divider()
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.header("Fonte de Dados")
     projects = st.session_state.get('projects', {})
@@ -82,8 +108,14 @@ with st.sidebar:
             
             with st.spinner(f"A carregar dados do projeto '{selected_project_name}'..."):
                 issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
-                data = []; user_data = find_user(st.session_state['email']); global_configs = get_global_configs()
-                selected_standard_fields = user_data.get('standard_fields', []); custom_fields_to_fetch = global_configs.get('custom_fields', [])
+                data = []
+                user_data = find_user(st.session_state['email'])
+                global_configs = get_global_configs()
+                project_config = get_project_config(project_key) or {}
+                
+                selected_standard_fields = user_data.get('standard_fields', [])
+                custom_fields_to_fetch = global_configs.get('custom_fields', [])
+                estimation_config = project_config.get('estimation_field', {})
                 available_standard_fields_map = global_configs.get('available_standard_fields', {})
                 for i in issues:
                     completion_date = find_completion_date(i)
@@ -109,6 +141,9 @@ with st.sidebar:
                 st.session_state.dynamic_df = pd.DataFrame(data)
                 st.session_state.loaded_project_key = project_key
                 st.rerun()
+        if st.button("Logout", use_container_width=True, type='secondary'):
+            for key in list(st.session_state.keys()): del st.session_state[key]
+            st.switch_page("1_🔑_Login.py")
 
 # --- CONTEÚDO PRINCIPAL ---
 st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
@@ -146,9 +181,21 @@ st.caption(f"A exibir visualizações para o projeto: **{st.session_state.projec
 
 with st.container(border=True):
     col1, col2, col3 = st.columns([2, 1, 1])
-    with col1: st.metric("Visualizações no Dashboard", f"{len(dashboard_items)} / 12")
+    
+    with col1:
+        st.metric("Visualizações no Dashboard", f"{len(dashboard_items)} / 12")
+    
     with col2:
-        use_two_columns = st.toggle("Layout com 2 Colunas", value=True, help="Ative para duas colunas, desative para uma.")
+        project_config = get_project_config(current_project_key) or {}
+        default_cols = project_config.get('dashboard_columns', 2)
+
+        use_two_columns = st.toggle(
+            "Layout com 2 Colunas", 
+            value=(default_cols == 2), 
+            key="dashboard_layout_toggle",
+            on_change=on_layout_change,
+            help="Ative para duas colunas, desative para uma."
+        )
         num_columns = 2 if use_two_columns else 1
     with col3:
         limit_reached = len(dashboard_items) >= 12
@@ -166,21 +213,34 @@ else:
     for i, chart_to_render in enumerate(list(dashboard_items)):
         with cols[i % num_columns]:
             with st.container(border=True):
-                # Linha 1: Título e Botões de Ação
-                header_cols = st.columns([0.8, 0.1, 0.1])
-                with header_cols[0]:
-                    card_title = chart_to_render.get('title', 'Visualização')
-                    card_icon = chart_to_render.get('icon', '📊')
+                
+                # --- NOVO CABEÇALHO COM BOTÕES DE REORDENAÇÃO ---
+                header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
+                
+                with header_cols[0]: # Título
+                    card_title = chart_to_render.get('title', 'Visualização'); card_icon = chart_to_render.get('icon', '📊')
                     st.markdown(f"**{card_icon} {card_title}**")
-                with header_cols[1]:
-                    if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Visualização"):
+                
+                with header_cols[1]: # Seta para Cima
+                    if st.button("⬆️", key=f"up_{chart_to_render['id']}", help="Mover para cima/esquerda", disabled=(i == 0), use_container_width=True):
+                        new_order = move_item(list(dashboard_items), i, i - 1)
+                        all_dashboards[current_project_key] = new_order
+                        save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                
+                with header_cols[2]: # Seta para Baixo
+                    if st.button("⬇️", key=f"down_{chart_to_render['id']}", help="Mover para baixo/direita", disabled=(i == len(dashboard_items) - 1), use_container_width=True):
+                        new_order = move_item(list(dashboard_items), i, i + 1)
+                        all_dashboards[current_project_key] = new_order
+                        save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                
+                with header_cols[3]: # Editar
+                    if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Visualização", use_container_width=True):
                         st.session_state['chart_to_edit'] = chart_to_render
                         st.switch_page("pages/5_🏗️_Personalizar Gráficos.py")
-                with header_cols[2]:
-                    if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Visualização"):
-                        all_dashboards[current_project_key] = [item for item in dashboard_items if item['id'] != chart_to_render['id']]
-                        save_user_dashboard(st.session_state['email'], all_dashboards)
-                        st.rerun()
                 
-                # Conteúdo do Cartão (gráfico ou indicador)
+                with header_cols[4]: # Remover
+                    if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Visualização", use_container_width=True):
+                        all_dashboards[current_project_key] = [item for item in dashboard_items if item['id'] != chart_to_render['id']]
+                        save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                
                 render_chart(chart_to_render, filtered_df)

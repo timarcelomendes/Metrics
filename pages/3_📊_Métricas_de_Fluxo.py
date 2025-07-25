@@ -67,7 +67,7 @@ with st.sidebar:
                     all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
                     st.session_state['raw_issues_for_fluxo'] = all_issues_raw
                     st.rerun()
-    if st.button("Logout", use_container_width=True):
+    if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Login.py")
 

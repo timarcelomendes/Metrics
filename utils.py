@@ -115,30 +115,36 @@ def render_chart(chart_config, df):
             elif chart_type == 'treemap': fig = px.treemap(grouped_df, path=[px.Constant("Todos"), dimension], values=values_col, color=y_axis, title=None, color_continuous_scale='Blues', template=template)
             elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=None, template=template)
         
-        elif chart_type == 'pivot_table':
+        if chart_type == 'pivot_table':
             rows_col = chart_config.get('rows')
             cols_col = chart_config.get('columns')
             values_col = chart_config.get('values')
             agg_func_name = chart_config.get('aggfunc')
             
-            # Mapeia o nome amigável para a função do pandas
             agg_map = {'Soma': 'sum', 'Média': 'mean', 'Contagem': 'count'}
             agg_func = agg_map.get(agg_func_name, 'sum')
 
-            # Garante que a coluna de valores é numérica para os cálculos
             df[values_col] = pd.to_numeric(df[values_col], errors='coerce')
 
             pivot_df = pd.pivot_table(
-                df,
-                values=values_col,
-                index=rows_col,
-                columns=cols_col,
-                aggfunc=agg_func,
-                fill_value=0 # Preenche células vazias com 0
+                df, values=values_col, index=rows_col,
+                columns=cols_col, aggfunc=agg_func, fill_value=0
             )
             
-            # Exibe a tabela como um mapa de calor
-            st.dataframe(pivot_df.style.background_gradient(cmap='Blues'), use_container_width=True)
+            # --- NOVA FORMATAÇÃO AUTOMÁTICA ---
+            def auto_formatter(val):
+                if pd.notna(val) and isinstance(val, (int, float)):
+                    if float(val).is_integer():
+                        return f"{int(val):,}" # Formato inteiro
+                    else:
+                        return f"{val:,.2f}" # Formato decimal
+                return val
+
+            # Aplica a formatação e o mapa de calor
+            st.dataframe(
+                pivot_df.style.format(auto_formatter).background_gradient(cmap='Blues'),
+                use_container_width=True
+            )
             return
 
         if fig is not None:
