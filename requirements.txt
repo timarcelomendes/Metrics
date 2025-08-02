@@ -10,3 +10,4 @@ cryptography
 dnspython
 passlib[bcrypt]
 google-generativeai
+fpdf2
