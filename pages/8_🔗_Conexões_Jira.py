@@ -24,8 +24,12 @@ with st.expander("➕ Adicionar Nova Conexão ao Jira"):
         conn_name = col1.text_input("Nome da Conexão (ex: Jira da Empresa X)")
         jira_url = col2.text_input("URL do Servidor Jira (ex: https://seu-nome.atlassian.net)")
         jira_email = col1.text_input("Email da Conta Jira")
-        api_token = col2.text_input("Token da API Jira", type="password")
         
+        with col2:
+            api_token = st.text_input("Token da API Jira", type="password")
+            # --- LINK DE AJUDA ADICIONADO AQUI ---
+            st.caption("Não sabe como criar um token? [Clique aqui para gerar um novo](https://id.atlassian.com/manage-profile/security/api-tokens)")
+
         if st.form_submit_button("Adicionar e Testar Conexão", type="primary", use_container_width=True):
             if all([conn_name, jira_url, jira_email, api_token]):
                 encrypted_token = encrypt_token(api_token)
@@ -109,7 +113,8 @@ with st.sidebar:
         st.info("⚠️ Usuário não conectado!")
         
     if st.button("Logout", use_container_width=True, type='secondary'):
-        for key in list(st.session_state.keys()): del st.session_state[key]
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
     st.divider()

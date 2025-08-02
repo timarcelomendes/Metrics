@@ -61,7 +61,9 @@ with st.sidebar:
     selected_project_name = st.selectbox("1. Selecione o Projeto", options=project_names, key="project_selector_fluxo", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
     if selected_project_name:
-        st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
+        st.session_state.project_key = projects[selected_project_name]
+        st.session_state.project_name = selected_project_name
+        
         st.subheader("2. Período de Análise")
         end_date_default = datetime.now(); start_date_default = end_date_default - timedelta(days=30)
         date_range = st.date_input("Selecione o período:", value=(start_date_default, end_date_default))
@@ -70,18 +72,43 @@ with st.sidebar:
             st.session_state.start_date_fluxo, st.session_state.end_date_fluxo = date_range[0], date_range[1]
             if st.button("Analisar Fluxo", use_container_width=True, type="primary"):
                 with st.spinner("Buscando e processando issues..."):
+                    
+                    # 1. Busca TODAS as issues do Jira
                     all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
+                    # Guarda a lista bruta para o CFD, que precisa de ver todos os status
                     st.session_state['raw_issues_for_fluxo'] = all_issues_raw
+                    
+                    # 2. CHAMA A FUNÇÃO CENTRAL DE FILTRAGEM
+                    valid_issues = filter_ignored_issues(all_issues_raw)
+                    
+                    # 3. Processa APENAS as issues válidas para criar o DataFrame principal
+                    data = []
+                    for i in valid_issues: # <-- Itera sobre a lista JÁ FILTRADA
+                        issue_data = {
+                            'Issue': i.key, 
+                            'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None), 
+                            'Data de Conclusão': find_completion_date(i), 
+                            'Tipo de Issue': i.fields.issuetype.name, 
+                            'Status': i.fields.status.name.lower()
+                        }
+                        data.append(issue_data)
+                        
+                    st.session_state.issues_data_fluxo = pd.DataFrame(data)
                     st.rerun()
+
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
+df_issues = st.session_state.get('issues_data_fluxo')
 all_raw_issues = st.session_state.get('raw_issues_for_fluxo')
-if not all_raw_issues:
+
+if df_issues is None:
     st.info("⬅️ Na barra lateral, selecione um projeto, um período e clique em 'Analisar Fluxo' para começar.")
     st.stop()
+if df_issues.empty:
+    st.warning("Nenhuma issue (sem contar as ignoradas) encontrada para o período selecionado."); st.stop()
 
 start_date = st.session_state.start_date_fluxo; end_date = st.session_state.end_date_fluxo
 completed_issues_in_period = [i for i in all_raw_issues if (cd := find_completion_date(i)) and start_date <= cd.date() <= end_date]

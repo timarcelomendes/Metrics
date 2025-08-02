@@ -1,9 +1,9 @@
 # pages/6_⚙️_Configurações.py
 
 import streamlit as st
-from security import *
+from security import get_global_configs, save_global_configs, get_project_config, save_project_config, get_project_configs_collection
+from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from jira_connector import validate_jira_field
-from config import *
 from pathlib import Path
 
 st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
@@ -12,8 +12,7 @@ st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items: center; 
 st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-    
+    st.warning("⚠️ Por favor, faça login para aceder a esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar Conexão", icon="🔗"); st.stop()
 
@@ -23,8 +22,8 @@ projects = st.session_state.get('projects', {})
 def update_global_configs_and_rerun(configs_dict):
     """Função central para salvar, limpar cache, recarregar a sessão e a página."""
     save_global_configs(configs_dict)
-    get_global_configs.clear() # Limpa a cache
-    st.session_state['global_configs'] = get_global_configs() # Recarrega para a sessão
+    get_global_configs.clear()
+    st.session_state['global_configs'] = get_global_configs()
     st.success("Configurações salvas com sucesso!")
     st.rerun()
 
@@ -47,7 +46,12 @@ with st.sidebar:
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
-tab_campos, tab_metricas, tab_projetos = st.tabs(["Gestão de Campos Globais", "Configurações de Métricas", "Configurações por Projeto"])
+tab_campos, tab_metricas, tab_os, tab_projetos = st.tabs([
+    "Gestão de Campos Globais", 
+    "Configurações de Métricas", 
+    "Padrões de Ordem de Serviço", 
+    "Configurações por Projeto"
+])
 
 with tab_campos:
     st.subheader("Campos Disponíveis para Toda a Aplicação")
@@ -112,25 +116,48 @@ with tab_campos:
                     custom_fields.pop(i); configs['custom_fields'] = custom_fields; update_global_configs_and_rerun(configs)
 
 with tab_metricas:
-    col1, col2 = st.columns(2, gap="large")
-    with col1:
-        with st.container(border=True):
-            st.markdown("🔁 **Mapeamento de Status do Workflow**")
-            st.caption("Defina os status que marcam o início e o fim do fluxo de trabalho.")
-            status_mapping = configs.get('status_mapping', {})
-            initial_states_str = st.text_area("Status Iniciais (separados por vírgula)", value=", ".join(status_mapping.get('initial', DEFAULT_INITIAL_STATES)))
-            done_states_str = st.text_area("Status Finais (separados por vírgula)", value=", ".join(status_mapping.get('done', DEFAULT_DONE_STATES)))
-            if st.button("Salvar Mapeamento de Status", use_container_width=True):
-                configs['status_mapping'] = {'initial': [s.strip().lower() for s in initial_states_str.split(',') if s.strip()], 'done': [s.strip().lower() for s in done_states_str.split(',') if s.strip()]}
-                update_global_configs_and_rerun(configs)
-    with col2:
-        with st.container(border=True):
-            st.markdown("🎯 **Parâmetros de Análise Scrum**")
-            st.caption("Defina o percentual mínimo de previsibilidade para uma sprint ser considerada um 'sucesso'.")
-            threshold = st.slider("Percentual Mínimo para Sucesso (%)", 50, 100, configs.get('sprint_goal_threshold', 90), 5)
-            if st.button("Salvar Parâmetro de Sucesso", use_container_width=True):
-                configs['sprint_goal_threshold'] = threshold
-                update_global_configs_and_rerun(configs)
+    with st.container(border=True):
+        st.markdown("🔁 **Mapeamento de Status do Workflow**")
+        st.caption("Defina os status que marcam o início, o fim e os que devem ser ignorados no fluxo.")
+        status_mapping = configs.get('status_mapping', {}); 
+        
+        initial_states_str = st.text_area("Status Iniciais (separados por vírgula)", value=", ".join(status_mapping.get('initial', DEFAULT_INITIAL_STATES)))
+        done_states_str = st.text_area("Status Finais (separados por vírgula)", value=", ".join(status_mapping.get('done', DEFAULT_DONE_STATES)))
+        
+        # --- NOVA CAIXA DE TEXTO ---
+        ignored_states_str = st.text_area(
+            "Status a Ignorar (separados por vírgula)", 
+            value=", ".join(status_mapping.get('ignored', ['cancelado', 'cancelled'])),
+            help="Issues que entrarem nestes status serão removidas das métricas de fluxo e escopo."
+        )
+
+        if st.button("Salvar Mapeamento de Status", use_container_width=True):
+            configs['status_mapping'] = {
+                'initial': [s.strip().lower() for s in initial_states_str.split(',') if s.strip()],
+                'done': [s.strip().lower() for s in done_states_str.split(',') if s.strip()],
+                'ignored': [s.strip().lower() for s in ignored_states_str.split(',') if s.strip()] # Salva a nova lista
+            }
+            update_global_configs_and_rerun(configs)
+
+# --- NOVA ABA DEDICADA PARA A ORDEM DE SERVIÇO ---
+with tab_os:
+    st.subheader("📝 Padrões da Ordem de Serviço")
+    with st.container(border=True):
+        st.caption("Defina os valores padrão que serão pré-preenchidos na geração de minutas de OS.")
+        
+        os_defaults = configs.get('os_defaults', {})
+        
+        gestor = st.text_input("Nome do Gestor do Contrato", value=os_defaults.get('gestor_contrato', ''))
+        fornecedor = st.text_input("Dados do Fornecedor", value=os_defaults.get('fornecedor', ''))
+        lider = st.text_input("Nome do Líder do Projeto (Fornecedor)", value=os_defaults.get('lider_fornecedor', ''))
+
+        if st.button("Salvar Padrões da OS", use_container_width=True, type="primary"):
+            configs['os_defaults'] = {
+                'gestor_contrato': gestor,
+                'fornecedor': fornecedor,
+                'lider_fornecedor': lider
+            }
+            update_global_configs_and_rerun(configs)
 
 with tab_projetos:
     st.subheader("Configurações Específicas por Projeto")

@@ -8,28 +8,17 @@ from jira_connector import *
 
 st.set_page_config(page_title="Gauge Metrics - Login", page_icon="🔑", layout="wide")
 
-# --- CSS HARMONIZADO COM O TEMA ESCURO ---
+# --- CSS SIMPLIFICADO E COMPATÍVEL COM TEMAS ---
 st.markdown("""
 <style>
 /* Remove o padding extra do topo da página */
 .main .block-container {
     padding-top: 2rem;
 }
-/* Estilo para o container do formulário, agora usando cores escuras */
-div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
-    background-color: #1c1c2e; /* Cor de fundo secundária do tema */
-    border: 1px solid #444455;   /* Uma borda subtil mais clara */
-    border-radius: 10px;
-    padding: 2em;
-}
-/* Remove a borda do formulário interno */
+/* Remove a borda do formulário interno para um look mais limpo */
 div[data-testid="stForm"] {
     border: none;
     padding: 0;
-}
-/* Garante que os títulos dentro do formulário sejam brancos */
-div[data-testid="stForm"] h5 {
-    color: #ffffff;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -41,7 +30,6 @@ if logo_path.exists():
 
 # --- LÓGICA DA PÁGINA (sem alterações) ---
 if 'email' in st.session_state:
-    # Se o utilizador já está logado, mostra uma mensagem de boas-vindas
     st.header(f"Bem-vindo de volta!", divider='rainbow')
     st.markdown(f"Você já está logado como **{st.session_state['email']}**.")
     st.info("Pode agora navegar para as páginas de análise na barra lateral esquerda.")
@@ -50,11 +38,11 @@ if 'email' in st.session_state:
             del st.session_state[key]
         st.rerun()
 else:
-    # --- Layout da Página de Login (sem alterações) ---
-    col1, col2 = st.columns([1, 1], gap="large")
+    # --- Layout da Página de Login ---
+    col1, col2 = st.columns([1.2, 1], gap="large")
 
     with col1:
-        st.title("Decisões Guiadas por Dados, Sem Complicações.")
+        st.subheader("Decisões Guiadas por Dados, :orange[Sem Complicações.]")
         st.markdown(
             """
             Transforme os dados do seu Jira em insights acionáveis. Com o **Gauge Metrics**, você pode:
@@ -67,26 +55,46 @@ else:
         )
 
     with col2:
-        tab_login, tab_register = st.tabs(["**Login**", "**Registar-se**"])
+        # --- USA UM CONTAINER NATIVO PARA O CARTÃO ---
+        with st.container(border=True):
+            tab_login, tab_register = st.tabs(["**Login**", "**Registrar-se**"])
 
         with tab_login:
             with st.form("login_form"):
-                st.markdown("##### Aceda à sua conta")
-                email = st.text_input("Email", placeholder="emailcorporativo@dominio.com")
+                st.markdown("##### Acesse a sua conta")
+                email = st.text_input("Email", placeholder="email@exemplo.com")
                 password = st.text_input("Senha", type="password", placeholder="Digite a sua senha")
+                
                 if st.form_submit_button("Entrar", use_container_width=True, type="primary"):
                     if email and password:
                         user = find_user(email)
                         if user and verify_password(password, user['hashed_password']):
-                            with st.spinner("A carregar configurações da aplicação..."):
-                                st.session_state['email'] = user['email']
-                                st.session_state['user_data'] = user
-                                st.session_state['global_configs'] = get_global_configs()
-                                # ... (lógica de auto-ativação da conexão)
-                            st.success("Login bem-sucedido! A redirecionar...")
+                            st.session_state['email'] = user['email']
+                            st.session_state['user_data'] = user
+                            
+                            # --- LÓGICA DE AUTO-ATIVAÇÃO ---
+                            last_conn_id = user.get('last_active_connection_id')
+                            if last_conn_id:
+                                with st.spinner("A reconectar à sua última sessão Jira..."):
+                                    conn_details = get_connection_by_id(last_conn_id)
+                                    if conn_details:
+                                        token = decrypt_token(conn_details['encrypted_token'])
+                                        client = connect_to_jira(conn_details['jira_url'], conn_details['jira_email'], token)
+                                        if client:
+                                            st.session_state.active_connection = conn_details
+                                            st.session_state.jira_client = client
+                                            st.session_state.projects = get_projects(client)
+                            
+                            st.session_state['global_configs'] = get_global_configs()
+                            if user.get('last_project_key'):
+                                st.session_state['last_project_key'] = user.get('last_project_key')
+                            
+                            st.success("Login bem-sucedido! A carregar...")
                             st.switch_page("pages/2_🏠_Meu_Dashboard.py")
-                        else: st.error("Email ou senha inválidos.")
-                    else: st.warning("Por favor, preencha todos os campos.")
+                        else:
+                            st.error("Email ou senha inválidos.")
+                    else:
+                        st.warning("Por favor, preencha todos os campos.")
 
         with tab_register:
             with st.form("register_form", clear_on_submit=True):
@@ -120,3 +128,4 @@ else:
                             st.error("Por favor, insira um endereço de email válido.")
                     else:
                         st.warning("Por favor, preencha todos os campos.")
+            st.caption("ℹ️ Após o registo, você precisará de um Token de API do Jira para conectar a sua conta. [Pode criar um aqui](https://id.atlassian.com/manage-profile/security/api-tokens).")

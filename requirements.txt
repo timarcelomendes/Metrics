@@ -9,3 +9,4 @@ pymongo
 cryptography
 dnspython
 passlib[bcrypt]
+google-generativeai

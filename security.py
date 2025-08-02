@@ -134,19 +134,25 @@ def get_global_configs():
     """Busca as configs globais ou cria com valores padrão se não existirem."""
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
+    
     if configs is None:
-        # A lista de domínios agora começa aqui, na base de dados
-        default_allowed_domains = ["stefanini.com", "latam.stefanini.com", "gauge.haus"]
         configs = {
             '_id': 'global_settings',
-            'allowed_domains': default_allowed_domains,
-            # ... (outras configurações padrão)
+            'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
+            'status_mapping': { 
+                'initial': DEFAULT_INITIAL_STATES, 
+                'done': DEFAULT_DONE_STATES,
+                'ignored': ['cancelado', 'cancelled'] # NOVO PADRÃO
+            },
+            'custom_fields': [], 'sprint_goal_threshold': 90
         }
         collection.insert_one(configs)
+        return configs
     
     # Garante que a chave exista para configurações antigas
-    if 'allowed_domains' not in configs:
-        configs['allowed_domains'] = ["stefanini.com", "latam.stefanini.com", "gauge.haus"]
+    if 'status_mapping' in configs and 'ignored' not in configs['status_mapping']:
+        configs['status_mapping']['ignored'] = ['cancelado', 'cancelled']
+        save_global_configs(configs)
 
     return configs
 
@@ -185,6 +191,7 @@ def save_dashboard_column_preference(project_key, num_columns):
 
 def save_last_active_connection(user_email, connection_id):
     """Guarda o ID da última conexão Jira ativada pelo utilizador."""
+    # Garante que o ID seja um ObjectId válido antes de guardar
     get_users_collection().update_one(
         {'email': user_email},
         {'$set': {'last_active_connection_id': ObjectId(connection_id)}}
@@ -192,6 +199,7 @@ def save_last_active_connection(user_email, connection_id):
 
 def get_connection_by_id(connection_id):
     """Busca os detalhes de uma conexão específica pelo seu ID."""
+    # Garante que estamos a procurar por um ObjectId
     return get_connections_collection().find_one({"_id": ObjectId(connection_id)})
 
 def delete_user(email):
@@ -214,4 +222,25 @@ def update_user_password(email, new_hashed_password):
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'hashed_password': new_hashed_password}}
+    )
+
+def save_user_tabs(email, tabs_list):
+    """Guarda a lista de abas personalizadas de um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'user_defined_tabs': tabs_list}}
+    )
+
+def save_user_gemini_key(email, encrypted_gemini_key):
+    """Guarda a chave de API do Gemini encriptada para um utilizador específico."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'encrypted_gemini_key': encrypted_gemini_key}}
+    )
+
+def save_user_ai_model_preference(email, model_name):
+    """Guarda o modelo de IA preferido de um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'ai_model_preference': model_name}}
     )

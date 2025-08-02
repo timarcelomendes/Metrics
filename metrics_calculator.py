@@ -62,6 +62,34 @@ def calculate_cycle_time(issue):
 def calculate_throughput(issues):
     return len([i for i in issues if find_completion_date(i) is not None])
 
+def get_filtered_issues(issues):
+    """Função auxiliar para remover issues com status ignorados."""
+    global_configs = st.session_state.get('global_configs', {})
+    status_mapping = global_configs.get('status_mapping', {})
+    ignored_states = status_mapping.get('ignored', [])
+    
+    if not ignored_states:
+        return issues
+        
+    return [issue for issue in issues if issue.fields.status.name.lower() not in ignored_states]
+
+def filter_ignored_issues(raw_issues_list):
+    """
+    Função central que recebe uma lista de issues e remove aquelas com status ignorados,
+    com base nas configurações globais.
+    """
+    global_configs = st.session_state.get('global_configs', {})
+    status_mapping = global_configs.get('status_mapping', {})
+    ignored_states = status_mapping.get('ignored', [])
+    
+    if not ignored_states:
+        return raw_issues_list
+        
+    return [
+        issue for issue in raw_issues_list 
+        if issue.fields.status.name.lower() not in ignored_states
+    ]
+
 def get_issue_estimation(issue, estimation_config):
     """Retorna o valor da estimativa de uma issue, convertendo de segundos para horas se necessário."""
     if not estimation_config or not estimation_config.get('id'):
@@ -159,6 +187,10 @@ def prepare_burndown_data(client, sprint_obj, estimation_config):
     }).set_index('Data')
 
 def prepare_cfd_data(issues, start_date, end_date):
+    """Prepara o CFD, agora ignorando issues canceladas."""
+    
+    # Filtra as issues no início
+    valid_issues = get_filtered_issues(issues)
     """Prepara os dados para o Diagrama de Fluxo Cumulativo (CFD) para um dado período."""
     transitions = []
     
@@ -217,6 +249,11 @@ def prepare_cfd_data(issues, start_date, end_date):
     return cfd_cumulative, wip_df
 
 def prepare_project_burnup_data(issues, unit, estimation_config):
+    """Prepara o burnup, agora ignorando issues canceladas."""
+    
+    # Filtra as issues no início
+    valid_issues = get_filtered_issues(issues)
+
     # Se a unidade for 'points', mas não houver campo configurado, retorna vazio.
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
         st.warning("Para análise por pontos, por favor, configure um 'Campo de Estimativa' para este projeto nas Configurações.")
@@ -328,25 +365,35 @@ def calculate_flow_efficiency(issue):
 
 def get_aging_wip(issues):
     """Retorna um DataFrame com os itens em andamento e há quantos dias estão nesse estado."""
-    # Carrega as configurações de status
-    status_config = load_config(STATUS_MAPPING_FILE, {})
-    initial_states = status_config.get('initial', DEFAULT_INITIAL_STATES)
-    done_states = status_config.get('done', DEFAULT_DONE_STATES)
+    # 1. Busca TODAS as configurações de status
+    global_configs = st.session_state.get('global_configs', {})
+    status_mapping = global_configs.get('status_mapping', {})
+    initial_states = status_mapping.get('initial', DEFAULT_INITIAL_STATES)
+    done_states = status_mapping.get('done', DEFAULT_DONE_STATES)
+    ignored_states = status_mapping.get('ignored', []) # <-- Busca a lista de ignorados
     
     wip_issues = []
     
     for issue in issues:
         current_status = issue.fields.status.name.lower()
-        if current_status not in initial_states and current_status not in done_states:
-            # Lógica para calcular a idade do WIP
+        
+        # --- LÓGICA CORRIGIDA ---
+        # Um item só é WIP se não for inicial, não for final E NÃO for ignorado.
+        if current_status not in initial_states and current_status not in done_states and current_status not in ignored_states:
+            
+            # Encontra quando a issue entrou no status atual para calcular a idade
             last_status_change_date = pd.to_datetime(issue.fields.created).tz_localize(None)
             for history in sorted(issue.changelog.histories, key=lambda h: h.created):
                 for item in history.items:
                     if item.field == 'status':
                         last_status_change_date = pd.to_datetime(history.created).tz_localize(None)
 
-            age = (datetime.now() - last_status_change_date).days
-            wip_issues.append({'Issue': issue.key, 'Status Atual': issue.fields.status.name, 'Dias no Status': age})
+            age = (datetime.now(last_status_change_date.tz) - last_status_change_date).days
+            wip_issues.append({
+                'Issue': issue.key, 
+                'Status Atual': issue.fields.status.name, 
+                'Dias no Status': age
+            })
             
     return pd.DataFrame(wip_issues).sort_values(by='Dias no Status', ascending=False)
 
@@ -470,6 +517,13 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config):
     }).set_index('Data')
 
 def calculate_executive_summary_metrics(project_issues):
+    """Calcula as métricas executivas, agora ignorando issues canceladas."""
+    
+    # Filtra as issues antes de qualquer cálculo
+    valid_issues = get_filtered_issues(project_issues)
+
+    if not valid_issues:
+        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0}
     """Calcula as métricas quantitativas para o resumo executivo de um projeto."""
     if not project_issues:
         return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0}
@@ -524,3 +578,22 @@ def calculate_throughput_trend(project_issues, num_weeks=4):
     trend['Semana'] = trend['completion_date'].dt.strftime('Semana %U')
     
     return trend[['Semana', 'Entregas']]
+
+def calculate_risk_level(probability, impact):
+    """
+    Calcula o nível de risco e a cor correspondente com base na probabilidade e impacto.
+    """
+    level_map = {'Baixa': 1, 'Média': 2, 'Alta': 3}
+    prob_score = level_map.get(probability, 1)
+    impact_score = level_map.get(impact, 1)
+    
+    risk_score = prob_score * impact_score
+    
+    if risk_score <= 2:
+        return "Baixo", "#28a745" # Verde
+    elif risk_score <= 4:
+        return "Moderado", "#ffc107" # Amarelo
+    elif risk_score <= 6:
+        return "Alto", "#fd7e14" # Laranja
+    else: # risk_score > 6
+        return "Crítico", "#dc3545" # Vermelho
