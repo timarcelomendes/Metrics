@@ -9,5 +9,6 @@ pymongo
 cryptography
 dnspython
 passlib[bcrypt]
-google-generativeai
 fpdf2
+google-generativeai
+matplotlib
