@@ -18,6 +18,26 @@ email = st.session_state['email']
 user_data = find_user(email)
 global_configs = st.session_state.get('global_configs', {})
 
+with st.sidebar:
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+    
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+
+    if st.button("Logout", use_container_width=True, type='secondary'):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.switch_page("1_🔑_Autenticação.py")
+
 # --- ESTRUTURA DE ABAS PRINCIPAL ---
 tab1, tab2, tab3 = st.tabs(["**Perfil e Segurança**", "**Preferências de Campos**", "**Configurações de IA**"])
 

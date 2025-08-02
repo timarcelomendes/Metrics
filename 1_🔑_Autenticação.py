@@ -24,9 +24,15 @@ div[data-testid="stForm"] {
 """, unsafe_allow_html=True)
 
 # Define o logo que aparecerá no topo da sidebar em TODAS as páginas.
-logo_path = Path(__file__).parent / "images" / "gauge-logo.svg"
-if logo_path.exists():
-    st.logo(str(logo_path))
+with st.sidebar:
+    project_root = Path(__file__).parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
 
 # --- LÓGICA DA PÁGINA (sem alterações) ---
 if 'email' in st.session_state:
