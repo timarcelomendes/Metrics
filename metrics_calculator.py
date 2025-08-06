@@ -277,17 +277,17 @@ def prepare_project_burnup_data(issues, unit, estimation_config):
     completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
     
     return pd.DataFrame({'Data': date_range, 'Escopo Total': scope_over_time, 'Trabalho Concluído': completed_over_time}).set_index('Data')
+
 def calculate_trend_and_forecast(burnup_df, trend_weeks):
     """
-    Calcula a linha de tendência, a previsão de entrega e as velocidades (tendência e média).
+    Calcula a linha de tendência, a previsão de entrega e as velocidades.
+    Retorna a figura do gráfico, a data de previsão e as métricas.
     """
     if burnup_df.empty or 'Trabalho Concluído' not in burnup_df.columns:
         return None, None, 0, 0
-
-    # --- NOVO CÁLCULO CORRETO PARA VELOCIDADE MÉDIA ---
-    total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
     
-    # Encontra a primeira data com trabalho para calcular a duração real
+    # --- Cálculo da Velocidade Média (Histórica) ---
+    total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
     first_work_day = burnup_df[burnup_df['Trabalho Concluído'] > 0].index.min()
     last_day = burnup_df.index.max()
     
@@ -297,43 +297,58 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
         if duration_days > 0:
             avg_daily_velocity = total_completed / duration_days
             avg_weekly_velocity = avg_daily_velocity * 7
-        elif total_completed > 0: # Se tudo foi feito em menos de um dia
+        elif total_completed > 0:
             avg_weekly_velocity = total_completed * 7
 
-    # --- Cálculo da Velocidade de Tendência (últimas N semanas) - sem alterações ---
+    # --- Cálculo da Velocidade de Tendência (Recente) ---
     end_date = burnup_df.index.max()
     start_date_trend = end_date - pd.Timedelta(weeks=trend_weeks)
-    trend_data = burnup_df[start_date_trend:]
+    trend_data = burnup_df[burnup_df.index >= start_date_trend]
     
-    if len(trend_data) < 2:
-        return None, None, 0, avg_weekly_velocity
+    trend_weekly_velocity = 0
+    if len(trend_data) > 1:
+        total_work_increase = trend_data['Trabalho Concluído'].iloc[-1] - trend_data['Trabalho Concluído'].iloc[0]
+        days_in_trend = (trend_data.index.max() - trend_data.index.min()).days
+        trend_weekly_velocity = (total_work_increase / days_in_trend * 7) if days_in_trend > 0 else 0
 
-    total_work_increase = trend_data['Trabalho Concluído'].iloc[-1] - trend_data['Trabalho Concluído'].iloc[0]
-    days_in_trend = (trend_data.index.max() - trend_data.index.min()).days
-    
-    trend_weekly_velocity = (total_work_increase / days_in_trend * 7) if days_in_trend > 0 else 0
-
-    # --- Cálculo do Forecast (sem alterações) ---
+    # --- Cálculo da Previsão de Entrega (Forecast) ---
     total_scope = burnup_df['Escopo Total'].iloc[-1]
     remaining_work = total_scope - total_completed
     forecast_date = None
-    df_trend = None
     
     if trend_weekly_velocity > 0 and remaining_work > 0:
-        days_to_complete = remaining_work / (trend_weekly_velocity / 7)
+        days_to_complete = (remaining_work / trend_weekly_velocity) * 7
         forecast_date = end_date + pd.Timedelta(days=days_to_complete)
-        
-        x_trend = np.array([(d - trend_data.index.min()).days for d in trend_data.index]).reshape(-1, 1)
-        y_trend = trend_data['Trabalho Concluído'].values
-        model = LinearRegression().fit(x_trend, y_trend)
-        
-        future_dates = pd.to_datetime(np.arange(trend_data.index.min(), forecast_date, dtype='datetime64[D]'))
-        x_future = np.array([(d - trend_data.index.min()).days for d in future_dates]).reshape(-1, 1)
-        
-        predicted_completion = model.predict(x_future)
-        df_trend = pd.DataFrame(predicted_completion, index=future_dates, columns=['Tendência'])
 
-    return df_trend, forecast_date, trend_weekly_velocity, avg_weekly_velocity
+    # --- Construção da Figura do Gráfico (Burnup) ---
+    fig = go.Figure()
+    burnup_df_cleaned = burnup_df.dropna()
+    fig.add_trace(go.Scatter(x=burnup_df_cleaned.index, y=burnup_df_cleaned['Escopo Total'], mode='lines', name='Escopo Total', line=dict(color='red', width=2)))
+    fig.add_trace(go.Scatter(x=burnup_df_cleaned.index, y=burnup_df_cleaned['Trabalho Concluído'], mode='lines', name='Trabalho Concluído', line=dict(color='blue', width=3)))
+    
+    if trend_weekly_velocity > 0 and len(trend_data) > 1:
+        X = np.array(range(len(trend_data))).reshape(-1, 1)
+        model = LinearRegression().fit(X, trend_data['Trabalho Concluído'])
+        trend_line = model.predict(X)
+        
+        if forecast_date:
+            future_days = (forecast_date - trend_data.index[-1]).days
+            future_X = np.array(range(len(trend_data), len(trend_data) + future_days)).reshape(-1, 1)
+            future_trend = model.predict(future_X)
+            extended_dates = pd.to_datetime([trend_data.index[-1] + timedelta(days=i) for i in range(1, future_days + 1)])
+            full_trend_dates = trend_data.index.append(extended_dates)
+            full_trend_values = np.concatenate([trend_line, future_trend])
+            fig.add_trace(go.Scatter(x=full_trend_dates, y=full_trend_values, mode='lines', name='Tendência', line=dict(color='green', dash='dash')))
+    
+    fig.update_layout(
+        title_text=None,
+        xaxis_title="Data",
+        yaxis_title=f"Escopo ({st.session_state.get('unit_display', 'itens')})",
+        legend_title="Legenda",
+        template="plotly_white"
+    )
+    
+    return fig, forecast_date, trend_weekly_velocity, avg_weekly_velocity
 
 def calculate_time_in_status(issue, target_status):
     """Calcula o tempo total que uma issue passou em um ou mais status."""

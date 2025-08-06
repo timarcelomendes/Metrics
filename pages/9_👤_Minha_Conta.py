@@ -4,6 +4,7 @@ import streamlit as st
 import os
 from pathlib import Path
 from security import *
+from utils import send_notification_email
 
 st.set_page_config(page_title="Minha Conta", page_icon="👤", layout="wide")
 
@@ -69,6 +70,17 @@ with tab1:
                         update_user_password(email, new_hashed_password)
                         st.success("Senha alterada com sucesso!")
 
+                        # --- ENVIO DO E-MAIL DE NOTIFICAÇÃO ---
+                        subject = "Alerta de Segurança: A sua senha foi alterada"
+                        body_html = f"""
+                        <html><body>
+                            <h2>Olá,</h2>
+                            <p>Este é um e-mail para confirmar que a senha da sua conta ({email}) na plataforma Gauge Metrics foi alterada com sucesso.</p>
+                            <p>Se não foi você que fez esta alteração, por favor, contacte o suporte imediatamente.</p>
+                            <p>Atenciosamente,<br>A Equipa Gauge Metrics</p>
+                        </body></html>
+                        """
+                        send_notification_email(email, subject, body_html)
 with tab2:
     st.subheader("Preferências de Campos para Análise")
     st.caption("Ative os campos que você deseja que apareçam como opções nas páginas de análise. As alterações são guardadas para o seu perfil.")

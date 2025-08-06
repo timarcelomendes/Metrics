@@ -14,6 +14,11 @@ from datetime import datetime, timedelta
 import openai
 from sklearn.linear_model import LinearRegression
 import numpy as np
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+from pathlib import Path
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -83,12 +88,10 @@ def render_chart(chart_config, df):
         chart_type = chart_config.get('type')
         if chart_type in ['dispersão', 'linha']:
             required_cols.extend([chart_config.get('x'), chart_config.get('y')])
-            if chart_config.get('color_by') and chart_config.get('color_by') != 'Nenhum':
-                required_cols.append(chart_config.get('color_by'))
+            if chart_config.get('color_by') and chart_config.get('color_by') != 'Nenhum': required_cols.append(chart_config.get('color_by'))
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
             required_cols.append(chart_config.get('dimension'))
-            if chart_config.get('measure') != 'Contagem de Issues':
-                required_cols.append(chart_config.get('measure'))
+            if chart_config.get('measure') != 'Contagem de Issues': required_cols.append(chart_config.get('measure'))
         elif chart_type == 'tabela':
             required_cols.extend(chart_config.get('columns', []))
         elif chart_type == 'pivot_table':
@@ -180,35 +183,18 @@ def render_chart(chart_config, df):
 
         elif chart_type in ['dispersão', 'linha']:
             x_col, y_col, color_col = chart_config['x'], chart_config['y'], chart_config.get('color_by')
-            required_cols = [x_col, y_col]
-            if color_col and color_col != "Nenhum": required_cols.append(color_col)
-            plot_df = df_to_render.dropna(subset=required_cols).copy()
+            plot_df = df_to_render.dropna(subset=[x_col, y_col]).copy()
             color_param = color_col if color_col and color_col != "Nenhum" and color_col in plot_df.columns else None
             text_param = y_col if chart_config.get('show_data_labels') else None
+
             if chart_type == 'dispersão':
                 fig = px.scatter(plot_df, x=x_col, y=y_col, color=color_param, title=None, hover_name="Issue", template=template, text=text_param)
-            else:
+            else: # linha
                 plot_df.sort_values(by=x_col, inplace=True)
                 fig = px.line(plot_df, x=x_col, y=y_col, color=color_param, title=None, hover_name="Issue", template=template, markers=True, text=text_param)
-            if chart_config.get('show_data_labels'):
+            
+            if chart_config.get('show_data_labels') and fig:
                 fig.update_traces(textposition='top center', texttemplate='%{text:,.2f}')
-        
-        elif chart_type == 'tabela':
-            columns_to_show = chart_config.get('columns', [])
-            if columns_to_show: st.dataframe(df_to_render[[col for col in columns_to_show if col in df_to_render.columns]], use_container_width=True)
-            else: st.info("Nenhuma coluna selecionada para esta tabela."); return
-
-        elif chart_type == 'pivot_table':
-            rows_col, cols_col, values_col, agg_func_name = chart_config.get('rows'), chart_config.get('columns'), chart_config.get('values'), chart_config.get('aggfunc')
-            agg_map = {'Soma': 'sum', 'Média': 'mean', 'Contagem': 'count'}; agg_func = agg_map.get(agg_func_name, 'sum')
-            df_to_render[values_col] = pd.to_numeric(df_to_render[values_col], errors='coerce')
-            pivot_df = pd.pivot_table(df_to_render, values=values_col, index=rows_col, columns=cols_col, aggfunc=agg_func, fill_value=0)
-            def auto_formatter(val):
-                if pd.notna(val) and isinstance(val, (int, float)):
-                    if float(val).is_integer(): return f"{int(val):,}"
-                    else: return f"{val:,.2f}"
-                return val
-            st.dataframe(pivot_df.style.format(auto_formatter).background_gradient(cmap='Blues'), use_container_width=True); return
 
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
             measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
@@ -228,13 +214,20 @@ def render_chart(chart_config, df):
             elif chart_type == 'treemap': fig = px.treemap(grouped_df, path=[px.Constant("Todos"), dimension], values=values_col, color=y_axis, title=None, color_continuous_scale='Blues', template=template)
             elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=None, template=template)
             
-            if show_labels and fig and chart_type not in ['pizza']:
-                is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
-                text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
-                fig.update_traces(texttemplate=text_template, textposition='outside')
-            elif show_labels and fig and chart_type == 'pizza':
-                fig.update_traces(textinfo='percent+label', textposition='inside')
-        
+            # --- LÓGICA DE RÓTULOS ESPECÍFICA E CORRIGIDA ---
+            if show_labels and fig:
+                if chart_type in ['barra', 'funil']:
+                    is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
+                    text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
+                    fig.update_traces(texttemplate=text_template, textposition='outside')
+                elif chart_type == 'linha_agregada':
+                    is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
+                    text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
+                    fig.update_traces(texttemplate=text_template, textposition='top center') # Usa 'top center'
+                elif chart_type == 'pizza':
+                    fig.update_traces(textinfo='percent+label', textposition='inside')
+                elif chart_type == 'treemap':
+                    fig.update_traces(textinfo='label+value+percent root')
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
             
@@ -243,61 +236,59 @@ def render_chart(chart_config, df):
 
 class PDF(FPDF):
     def header(self):
-        self.set_font('Arial', 'B', 12)
+        try:
+            self.set_font('Roboto', 'B', 12)
+        except RuntimeError:
+            self.set_font('Arial', 'B', 12)
         self.cell(0, 10, 'ORDEM DE SERVIÇO', 0, 1, 'C')
         self.ln(10)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
+        try:
+            self.set_font('Roboto', 'I', 8)
+        except RuntimeError:
+            self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
 
 def create_os_pdf(os_data):
-    """Gera um PDF para uma Ordem de Serviço com base num dicionário de dados."""
+    """Gera um PDF para uma Ordem de Serviço, com o formato de output corrigido."""
     pdf = PDF()
+    
+    # Adiciona as fontes
+    try:
+        font_path = Path(__file__).parent / "fonts"
+        pdf.add_font('Roboto', '', str(font_path / 'Roboto-Regular.ttf'))
+        pdf.add_font('Roboto', 'B', str(font_path / 'Roboto-Bold.ttf'))
+        pdf.add_font('Roboto', 'I', str(font_path / 'Roboto-Italic.ttf'))
+        DEFAULT_FONT = "Roboto"
+    except Exception:
+        DEFAULT_FONT = "Arial"
+
     pdf.add_page()
-    pdf.set_font('Arial', 'B', 11)
+    pdf.set_font(DEFAULT_FONT, 'B', 11)
 
     # --- Tabela de Cabeçalho ---
-    pdf.cell(95, 10, 'Área Demandante', 1, 0, 'L')
-    pdf.cell(95, 10, 'Demandante', 1, 1, 'L')
-    pdf.set_font('Arial', '', 10)
-    pdf.cell(95, 10, os_data.get('area_demandante', ''), 1, 0, 'L')
-    pdf.cell(95, 10, os_data.get('demandante', ''), 1, 1, 'L')
-    
-    pdf.set_font('Arial', 'B', 11)
-    pdf.cell(95, 10, 'Área Executora', 1, 0, 'L')
-    pdf.cell(95, 10, 'Gestor do Contrato', 1, 1, 'L')
-    pdf.set_font('Arial', '', 10)
-    pdf.cell(95, 10, 'Gerência de Transformação Digital', 1, 0, 'L')
-    pdf.cell(95, 10, os_data.get('gestor_contrato', ''), 1, 1, 'L')
-    # ... adicione outras linhas da tabela de cabeçalho aqui, seguindo o mesmo padrão ...
+    pdf.cell(95, 10, 'Fornecedor', 1, 0, 'L')
+    pdf.cell(95, 10, 'Número do Contrato', 1, 1, 'L')
+    pdf.set_font(DEFAULT_FONT, '', 10)
+    pdf.cell(95, 10, os_data.get('fornecedor', ''), 1, 0, 'L')
+    pdf.cell(95, 10, os_data.get('numero_contrato', ''), 1, 1, 'L')
+    # ... (resto da tabela de cabeçalho)
     
     pdf.ln(10)
 
     # --- Corpo do Documento ---
-    pdf.set_font('Arial', 'B', 12)
+    pdf.set_font(DEFAULT_FONT, 'B', 12)
     pdf.cell(0, 10, '1. Justificativa', 0, 1, 'L')
-    pdf.set_font('Arial', '', 10)
+    pdf.set_font(DEFAULT_FONT, '', 10)
     pdf.multi_cell(0, 5, os_data.get('justificativa', ''))
     
-    pdf.ln(5)
-    
-    pdf.set_font('Arial', 'B', 12)
-    pdf.cell(0, 10, '2. Objetivo da Ordem de Serviço', 0, 1, 'L')
-    pdf.set_font('Arial', '', 10)
-    pdf.multi_cell(0, 5, os_data.get('objetivo', ''))
-    
-    pdf.ln(5)
+    # ... (código para Entregáveis, Premissas e Cláusulas)
 
-    pdf.set_font('Arial', 'B', 12)
-    pdf.cell(0, 10, '3. Entregáveis', 0, 1, 'L')
-    pdf.set_font('Arial', '', 10)
-    for i, ent in enumerate(os_data.get('entregaveis', [])):
-        pdf.multi_cell(0, 5, f"{i+1}. {ent['Item']}")
-
-    # Converte o PDF para bytes para o Streamlit poder usar
-    return pdf.output(dest='S').encode('latin-1')
+    # --- CORREÇÃO AQUI ---
+    # Converte o output para o tipo 'bytes', que é o formato esperado pelo Streamlit
+    return bytes(pdf.output())
 
 # --- FUNÇÃO AUXILIAR PARA CÁLCULO DE KPI ---
 def calculate_kpi_value(chart_config, df):
@@ -765,3 +756,112 @@ def get_ai_planning_analysis(project_name, remaining_work, remaining_weeks, requ
     except Exception as e:
         st.error(f"Erro ao gerar a análise de planeamento: {e}")
         return "Não foi possível gerar a análise de planeamento."
+
+def get_field_value(issue, field_config):
+    """
+    Função inteligente que extrai o valor de qualquer campo do Jira,
+    independentemente do seu tipo (texto, lista, objeto, etc.).
+    """
+    field_id = field_config.get('id')
+    if not field_id:
+        return None
+        
+    value = getattr(issue.fields, field_id, None)
+    
+    if value is None:
+        return None
+    
+    # Lógica para os diferentes tipos de objeto do Jira
+    if hasattr(value, 'displayName'): return value.displayName # Para campos de Utilizador
+    if hasattr(value, 'value'): return value.value           # Para campos de Lista de Seleção
+    if hasattr(value, 'name'): return value.name             # Para campos de Objeto Simples (Status, Priority)
+    if isinstance(value, list):
+        return ', '.join([getattr(v, 'name', str(v)) for v in value]) # Para listas
+    
+    # Se for um tipo simples (texto, número, data)
+    return str(value).split('T')[0]
+
+def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
+    """
+    Envia um e-mail usando as credenciais SMTP do Gmail guardadas nos segredos.
+    Opcionalmente, anexa um ficheiro.
+    """
+    try:
+        # Pega as credenciais dos segredos
+        sender_email = st.secrets["gmail_smtp"]["EMAIL_ADDRESS"]
+        sender_password = st.secrets["gmail_smtp"]["EMAIL_PASSWORD"]
+
+        # Cria a mensagem
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Anexa o ficheiro, se existir
+        if attachment_bytes and attachment_filename:
+            part = MIMEApplication(attachment_bytes, Name=attachment_filename)
+            part['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
+            msg.attach(part)
+        
+        # Conecta-se ao servidor e envia o e-mail
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True, "E-mail enviado com sucesso!"
+    except Exception as e:
+        return False, f"Falha ao enviar o e-mail: {e}"
+    
+def send_notification_email(to_address, subject, body_html):
+    """Envia um e-mail de notificação formatado em HTML."""
+    try:
+        sender_email = st.secrets["gmail_smtp"]["EMAIL_ADDRESS"]
+        sender_password = st.secrets["gmail_smtp"]["EMAIL_PASSWORD"]
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body_html, 'html')) # Define o corpo do e-mail como HTML
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True, "Notificação enviada com sucesso!"
+    except Exception as e:
+        # Em produção, você pode querer logar o erro em vez de o exibir
+        print(f"Falha ao enviar a notificação: {e}")
+        return False, f"Falha ao enviar a notificação: {e}"
+
+def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
+    """Envia um e-mail com um anexo."""
+    try:
+        sender_email = st.secrets["gmail_smtp"]["EMAIL_ADDRESS"]
+        sender_password = st.secrets["gmail_smtp"]["EMAIL_PASSWORD"]
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        if attachment_bytes and attachment_filename:
+            part = MIMEApplication(attachment_bytes, Name=attachment_filename)
+            part['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
+            msg.attach(part)
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True, "E-mail enviado com sucesso!"
+    except Exception as e:
+        return False, f"Falha ao enviar o e-mail: {e}"

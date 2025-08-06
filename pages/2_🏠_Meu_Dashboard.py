@@ -94,9 +94,8 @@ with st.sidebar:
             st.session_state.project_key = project_key
             st.session_state.project_name = selected_project_name
             
-            with st.spinner(f"A carregar e processar dados do projeto '{selected_project_name}'..."):
+            with st.spinner(f"A carregar e processar dados de '{selected_project_name}'..."):
                 all_issues_raw = get_all_project_issues(st.session_state.jira_client, project_key)
-                st.session_state['raw_issues_for_fluxo'] = all_issues_raw
                 valid_issues = filter_ignored_issues(all_issues_raw)
                 
                 data = []
@@ -112,46 +111,53 @@ with st.sidebar:
 
                 for i in valid_issues:
                     completion_date = find_completion_date(i)
-                    
-                    # --- LÓGICA DE CARREGAMENTO CORRIGIDA ---
-                    # 1. Começa com as métricas calculadas e os campos essenciais fixos
                     issue_data = {
                         'Issue': i.key,
                         'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),
                         'Data de Conclusão': completion_date,
                         'Lead Time (dias)': calculate_lead_time(i),
                         'Cycle Time (dias)': calculate_cycle_time(i),
-                        'Tipo de Issue': i.fields.issuetype.name,
-                        'Status': i.fields.status.name,
-                        'Categoria de Status': i.fields.status.statusCategory.name, # <-- Adicionado aqui
-                        'Responsável': i.fields.assignee.displayName if i.fields.assignee else 'Não atribuído',
-                        'Prioridade': i.fields.priority.name if i.fields.priority else 'N/A'
                     }
                     
-                    # 2. Adiciona dinamicamente os campos padrão que o utilizador ativou
+                    # --- LÓGICA DE PROCESSAMENTO UNIVERSAL CORRIGIDA ---
+                    fields_to_process = []
                     for field_name in user_enabled_standard:
-                        details = all_available_standard.get(field_name)
-                        if details and details.get('id'):
-                            value = getattr(i.fields, details['id'], None)
-                            if hasattr(value, 'name'): issue_data[field_name] = value.name
-                            elif value: issue_data[field_name] = str(value).split('T')[0]
-                            else: issue_data[field_name] = None
-                    
-                    # 3. Adiciona dinamicamente os campos personalizados que o utilizador ativou
+                        if field_name in all_available_standard:
+                            fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
                     for field_config in all_available_custom:
-                        if field_config['name'] in user_enabled_custom:
-                            value = getattr(i.fields, field_config['id'], None)
-                            if hasattr(value, 'value'): issue_data[field_config['name']] = value.value
-                            else: issue_data[field_config['name']] = value
+                        if field_config.get('name') in user_enabled_custom:
+                            fields_to_process.append(field_config)
+                    
+                    for field in fields_to_process:
+                        field_id, field_name = field['id'], field['name']
+                        value = getattr(i.fields, field_id, None)
+                        
+                        # Lógica inteligente para extrair o valor correto de qualquer tipo de campo
+                        if value is None:
+                            issue_data[field_name] = None
+                        elif hasattr(value, 'displayName'): # Para campos de Utilizador (Assignee, Reporter)
+                            issue_data[field_name] = value.displayName
+                        elif isinstance(value, list) and value: # Para campos de lista (Seleção Múltipla, Componentes, etc.)
+                            processed_list = []
+                            for item in value:
+                                if hasattr(item, 'value'): processed_list.append(item.value)
+                                elif hasattr(item, 'name'): processed_list.append(item.name)
+                                else: processed_list.append(str(item))
+                            issue_data[field_name] = ', '.join(processed_list)
+                        elif hasattr(value, 'value'): # Para campos de Seleção Única
+                            issue_data[field_name] = value.value
+                        elif hasattr(value, 'name'): # Para campos de Objeto Simples (Status, Priority)
+                            issue_data[field_name] = value.name
+                        else: # Para campos de texto simples, número ou data
+                            issue_data[field_name] = str(value).split('T')[0]
 
-                    # 4. Adiciona dinamicamente o campo de estimativa do projeto
+                    # Adiciona o campo de estimativa
                     if estimation_config.get('id'):
                         issue_data[estimation_config['name']] = get_issue_estimation(i, estimation_config)
                         
                     data.append(issue_data)
                 
                 st.session_state.dynamic_df = pd.DataFrame(data)
-                st.session_state.loaded_project_key = project_key
                 st.rerun()
 
         if st.button("Logout", use_container_width=True, type='secondary'):
@@ -176,32 +182,29 @@ default_cols = project_config.get('dashboard_columns', 2)
 with st.expander("Filtros do Dashboard (afetam todas as visualizações)", expanded=True):
     filter_cols = st.columns(4)
     
-    # Inicializa as listas de seleção
-    tipos_selecionados, responsaveis_selecionados, status_selecionados, prioridades_selecionadas = [], [], [], []
-
-    # O seletor só aparece se a coluna existir nos dados
-    if 'Tipo de Issue' in df.columns:
-        tipos = sorted(df['Tipo de Issue'].dropna().unique())
-        tipos_selecionados = filter_cols[0].multiselect("Filtrar por Tipo", options=tipos, placeholder="Todos")
+    # Define os campos de filtro padrão que queremos exibir
+    default_filter_fields = ["Tipo de Issue", "Responsável", "Status", "Prioridade"]
     
-    if 'Responsável' in df.columns:
-        resp = sorted(df['Responsável'].dropna().unique())
-        responsaveis_selecionados = filter_cols[1].multiselect("Filtrar por Responsável", options=resp, placeholder="Todos")
+    # Dicionário para guardar as seleções
+    selections = {}
 
-    if 'Status' in df.columns:
-        stats = sorted(df['Status'].dropna().unique())
-        status_selecionados = filter_cols[2].multiselect("Filtrar por Status", options=stats, placeholder="Todos")
+    for i, field_name in enumerate(default_filter_fields):
+        has_field = field_name in df.columns
+        options = sorted(df[field_name].dropna().unique()) if has_field else []
         
-    if 'Prioridade' in df.columns:
-        prios = sorted(df['Prioridade'].dropna().unique())
-        prioridades_selecionadas = filter_cols[3].multiselect("Filtrar por Prioridade", options=prios, placeholder="Todos")
+        selections[field_name] = filter_cols[i].multiselect(
+            f"Filtrar por {field_name}", 
+            options=options, 
+            placeholder="Todos", 
+            disabled=not has_field,
+            help=f"O campo '{field_name}' não foi carregado. Ative-o em 'Minha Conta' e recarregue os dados." if not has_field else ""
+        )
     
     # Cria o dataframe filtrado
     filtered_df = df.copy()
-    if tipos_selecionados: filtered_df = filtered_df[filtered_df['Tipo de Issue'].isin(tipos_selecionados)]
-    if responsaveis_selecionados: filtered_df = filtered_df[filtered_df['Responsável'].isin(responsaveis_selecionados)]
-    if status_selecionados: filtered_df = filtered_df[filtered_df['Status'].isin(status_selecionados)]
-    if prioridades_selecionadas: filtered_df = filtered_df[filtered_df['Prioridade'].isin(prioridades_selecionadas)]
+    for field_name, selected_values in selections.items():
+        if selected_values:
+            filtered_df = filtered_df[filtered_df[field_name].isin(selected_values)]
 
 st.caption(f"A exibir visualizações para o projeto: **{st.session_state.project_name}**.")
 
@@ -211,7 +214,7 @@ st.markdown('<div id="control-panel">', unsafe_allow_html=True)
 with st.container(border=True):
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Visualizações", f"{len(all_charts)} / 12")
+        st.metric("Visualizações", f"{len(all_charts)} / {DASHBOARD_CHART_LIMIT}")
     with col2:
         use_two_columns = st.toggle("2 Colunas", value=(default_cols == 2), key="dashboard_layout_toggle", on_change=on_layout_change)
         num_columns = 2 if use_two_columns else 1
@@ -325,6 +328,7 @@ with st.expander("🤖 Análise com IA: Obter Insights do Dashboard"):
 
     st.divider()
 
+tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
 if not tabs_with_charts:
     st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
 else:

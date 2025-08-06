@@ -8,6 +8,8 @@ from bson.objectid import ObjectId
 from config import *
 import string
 import secrets
+import random
+import string
 
 # --- Configuração de Hashing de Senha ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -272,3 +274,18 @@ def remove_user_openai_key(email):
         {'email': email},
         {'$unset': {'encrypted_openai_key': ""}}
     )
+
+def reset_user_password_with_temporary(email):
+    """
+    Gera uma senha temporária, atualiza-a na base de dados (hashed)
+    e retorna a senha em texto plano para ser enviada por e-mail.
+    """
+    # Gera uma senha aleatória de 10 caracteres
+    temp_password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    
+    # Guarda a versão hashed da nova senha
+    new_hashed_password = get_password_hash(temp_password)
+    update_user_password(email, new_hashed_password)
+    
+    # Retorna a senha em texto plano para o envio do e-mail
+    return temp_password

@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import uuid, json, os
+from config import DASHBOARD_CHART_LIMIT
 from jira_connector import *
 from metrics_calculator import *
 from config import *
@@ -55,48 +56,79 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
     if selected_project_name:
-        st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
+        project_key = projects[selected_project_name]
+        st.session_state.project_key = projects[selected_project_name]; 
+        st.session_state.project_name = selected_project_name
         is_data_loaded = 'dynamic_df' in st.session_state and not st.session_state.dynamic_df.empty
         with st.expander("Carregar Dados", expanded=not is_data_loaded):
             if st.button("Carregar / Atualizar Dados", use_container_width=True, type="primary"):
-                with st.spinner(f"A carregar e processar dados de '{st.session_state.project_name}'..."):
-                    all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
+
+                with st.spinner(f"A carregar e processar dados de '{selected_project_name}'..."):
+                    all_issues_raw = get_all_project_issues(st.session_state.jira_client, project_key)
                     valid_issues = filter_ignored_issues(all_issues_raw)
                     
-                    data = []; user_data = find_user(st.session_state['email']); global_configs = st.session_state.get('global_configs', {})
-                    project_config = get_project_config(st.session_state.project_key) or {}
+                    data = []
+                    user_data = find_user(st.session_state['email'])
+                    global_configs = st.session_state.get('global_configs', {})
+                    project_config = get_project_config(project_key) or {}
                     
-                    user_enabled_standard = user_data.get('standard_fields', []); user_enabled_custom = user_data.get('enabled_custom_fields', [])
-                    all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
+                    user_enabled_standard = user_data.get('standard_fields', [])
+                    user_enabled_custom = user_data.get('enabled_custom_fields', [])
+                    all_available_standard = global_configs.get('available_standard_fields', {})
+                    all_available_custom = global_configs.get('custom_fields', [])
                     estimation_config = project_config.get('estimation_field', {})
 
                     for i in valid_issues:
                         completion_date = find_completion_date(i)
-                        issue_data = {'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date,'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i)}
+                        issue_data = {
+                            'Issue': i.key,
+                            'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),
+                            'Data de Conclusão': completion_date,
+                            'Lead Time (dias)': calculate_lead_time(i),
+                            'Cycle Time (dias)': calculate_cycle_time(i),
+                        }
                         
+                        # --- LÓGICA DE PROCESSAMENTO UNIVERSAL CORRIGIDA ---
                         fields_to_process = []
                         for field_name in user_enabled_standard:
-                            if field_name in all_available_standard: fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
+                            if field_name in all_available_standard:
+                                fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
                         for field_config in all_available_custom:
-                            if field_config.get('name') in user_enabled_custom: fields_to_process.append(field_config)
+                            if field_config.get('name') in user_enabled_custom:
+                                fields_to_process.append(field_config)
                         
                         for field in fields_to_process:
-                            field_id, field_name = field['id'], field['name']; value = getattr(i.fields, field_id, None)
-                            if hasattr(value, 'displayName'): issue_data[field_name] = value.displayName
-                            elif isinstance(value, list): issue_data[field_name] = ', '.join([getattr(v, 'name', str(v)) for v in value]) if value else None
-                            elif hasattr(value, 'value'): issue_data[field_name] = value.value
-                            elif hasattr(value, 'name'): issue_data[field_name] = value.name
-                            elif value: issue_data[field_name] = str(value).split('T')[0]
-                            else: issue_data[field_name] = None
+                            field_id, field_name = field['id'], field['name']
+                            value = getattr(i.fields, field_id, None)
+                            
+                            # Lógica inteligente para extrair o valor correto de qualquer tipo de campo
+                            if value is None:
+                                issue_data[field_name] = None
+                            elif hasattr(value, 'displayName'): # Para campos de Utilizador (Assignee, Reporter)
+                                issue_data[field_name] = value.displayName
+                            elif isinstance(value, list) and value: # Para campos de lista (Seleção Múltipla, Componentes, etc.)
+                                processed_list = []
+                                for item in value:
+                                    if hasattr(item, 'value'): processed_list.append(item.value)
+                                    elif hasattr(item, 'name'): processed_list.append(item.name)
+                                    else: processed_list.append(str(item))
+                                issue_data[field_name] = ', '.join(processed_list)
+                            elif hasattr(value, 'value'): # Para campos de Seleção Única
+                                issue_data[field_name] = value.value
+                            elif hasattr(value, 'name'): # Para campos de Objeto Simples (Status, Priority)
+                                issue_data[field_name] = value.name
+                            else: # Para campos de texto simples, número ou data
+                                issue_data[field_name] = str(value).split('T')[0]
 
+                        # Adiciona o campo de estimativa
                         if estimation_config.get('id'):
                             issue_data[estimation_config['name']] = get_issue_estimation(i, estimation_config)
-                        
+                            
                         data.append(issue_data)
                     
                     st.session_state.dynamic_df = pd.DataFrame(data)
                     st.rerun()
-                    
+
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
@@ -222,20 +254,15 @@ st.divider()
 st.subheader("Configuração da Visualização")
 creation_mode = st.radio("Como deseja criar a sua visualização?", ["Construtor Visual", "Gerar com IA ✨"], horizontal=True, key="creation_mode_selector")
 chart_config = {}
+df_for_preview = filtered_df.copy()
 
 if creation_mode == "Construtor Visual":
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
     default_creator_index = creator_type_options.index(chart_data.get('creator_type')) if editing_mode and chart_data.get('creator_type') in creator_type_options else 0
-    
-    chart_creator_type = st.radio(
-        "Selecione o tipo de visualização:",
-        creator_type_options,
-        key="visual_creator_type", # Chave única para este seletor
-        horizontal=True,
-        index=default_creator_index
-    )
+    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
     
     # Define um dataframe temporário que pode ser modificado pelos construtores
+    chart_config = {}
     df_for_preview = filtered_df.copy()
 
     with st.container(border=True):
@@ -291,35 +318,35 @@ if creation_mode == "Construtor Visual":
                 with st.container(border=True):
                     final_dimension, df_for_preview = combined_dimension_ui(filtered_df, categorical_cols, date_cols, key_suffix="agg")
 
-            st.divider()
-            c1, c2, c3 = st.columns([2, 1, 2])
-            measure = c1.selectbox("Medida (Calcular)", options=measure_options, index=measure_options.index(chart_data.get('measure')) if editing_mode and chart_data.get('measure') in measure_options else 0)
-            
-            if measure in categorical_cols:
-                agg = 'Contagem Distinta'; c2.info("Contagem Distinta", icon="🔢")
-            elif measure in numeric_cols:
-                agg_options = ["Soma", "Média"]; agg_idx = agg_options.index(chart_data.get('agg', 'Soma')) if editing_mode and chart_data.get('agg') in agg_options else 0
-                agg = c2.radio("Cálculo", agg_options, index=agg_idx, horizontal=True)
-            else: # Contagem de Issues
-                agg = 'Contagem'; c2.info("Contagem", icon="🧮")
+            if final_dimension:
+                st.divider()
+                c1, c2, c3 = st.columns([2, 1, 2])
+                measure = c1.selectbox("Medida (Calcular)", options=measure_options, index=measure_options.index(chart_data.get('measure')) if editing_mode and chart_data.get('measure') in measure_options else 0)
+                
+                if measure in categorical_cols:
+                    agg = 'Contagem Distinta'; c2.info("Contagem Distinta", icon="🔢")
+                elif measure in numeric_cols:
+                    agg_options = ["Soma", "Média"]; agg_idx = agg_options.index(chart_data.get('agg', 'Soma')) if editing_mode and chart_data.get('agg') in agg_options else 0
+                    agg = c2.radio("Cálculo", agg_options, index=agg_idx, horizontal=True)
+                else: # Contagem de Issues
+                    agg = 'Contagem'; c2.info("Contagem", icon="🧮")
 
-            format_options = ["Barras", "Linhas", "Pizza", "Treemap", "Funil", "Tabela"]
-            type_map_inv = {'barra': 'Barras', 'linha_agregada': 'Linhas', 'pizza': 'Pizza', 'treemap': 'Treemap', 'funil': 'Funil', 'tabela':'Tabela'}
-            type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
-            chart_type_str = c3.radio("Formato", format_options, index=type_idx, horizontal=True)
-            chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
-            
-            # --- Título, Rótulos e Configuração Final ---
-            auto_title = f"Análise de '{measure}' por '{final_dimension}'" if chart_type != 'tabela' and final_dimension else f"Análise de '{measure}'"
-            custom_title_input = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
-            show_labels = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=chart_data.get('show_data_labels', False))
+                format_options = ["Barras", "Linhas", "Pizza", "Treemap", "Funil", "Tabela"]
+                type_map_inv = {'barra': 'Barras', 'linha_agregada': 'Linhas', 'pizza': 'Pizza', 'treemap': 'Treemap', 'funil': 'Funil', 'tabela':'Tabela'}
+                type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
+                chart_type_str = c3.radio("Formato", format_options, index=type_idx, horizontal=True)
+                chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
+                
+                auto_title = f"Análise de '{measure}' por '{final_dimension}'" if chart_type != 'tabela' else "Tabela de Dados"
+                custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
+                show_labels = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=chart_data.get('show_data_labels', False))
 
-            if chart_type == 'tabela':
-                selected_cols = st.multiselect("Selecione as colunas para a tabela", options=all_cols_for_table, default=chart_data.get('columns', []))
-                chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': custom_title_input.strip(), 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', [])}
-            else:
-                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': final_dimension, 'measure': measure, 'agg': agg, 'title': custom_title_input.strip(), 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}                        
-        
+                if chart_type == 'tabela':
+                    selected_cols = st.multiselect("Selecione as colunas para a tabela", options=all_cols_for_table, default=chart_data.get('columns', []))
+                    chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', [])}
+                else:
+                    chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': final_dimension, 'measure': measure, 'agg': agg, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
+
         # --- CONSTRUTOR DE INDICADOR (KPI) (COMPLETO) ---
         elif chart_creator_type == "Indicador (KPI)":
             
@@ -502,11 +529,12 @@ else: # MODO DE GERAÇÃO COM IA
 if creation_mode == "Gerar com IA ✨":
     chart_config = st.session_state.get('chart_config_ia', {})
 
+# --- Lógica de Pré-visualização Unificada ---
 st.divider()
+
 st.subheader("Pré-visualização da Configuração Atual")
 if chart_config:
-    with st.container(border=True):
-        render_chart(chart_config, df_for_preview)
+    with st.container(border=True): render_chart(chart_config, df_for_preview)
 else:
     st.info("Configure ou gere uma visualização acima para ver a pré-visualização.")
 
@@ -558,10 +586,10 @@ else:
     current_project_key = st.session_state.get('project_key')
     dashboard_config = all_dashboards.get(current_project_key, {"tabs": {"Geral": []}})
     tabs_layout = dashboard_config.get("tabs", {"Geral": []})
-    all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
+    all_charts_count = sum(len(charts) for charts in tabs_layout.values())
 
-    if len(all_charts) >= 12:
-        st.warning("Limite de 12 visualizações no dashboard deste projeto atingido.")
+    if all_charts_count >= DASHBOARD_CHART_LIMIT:
+        st.warning(f"Limite de {DASHBOARD_CHART_LIMIT} visualizações no dashboard deste projeto atingido.")
     else:
         if st.button("Adicionar ao Meu Dashboard", type="primary", use_container_width=True, icon="➕"):
             if chart_config and chart_config.get('title'):

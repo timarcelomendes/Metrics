@@ -1,5 +1,8 @@
 # config.py
 
+# Limite de gráficos por dashboard
+DASHBOARD_CHART_LIMIT = 20
+
 AVAILABLE_STANDARD_FIELDS = {
     "Resolução":        {'id': 'resolution', 'type': 'Texto'},
     "Data de Vencimento": {'id': 'duedate',    'type': 'Data'},

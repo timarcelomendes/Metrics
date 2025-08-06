@@ -5,6 +5,7 @@ import os
 from security import *
 from pathlib import Path
 from jira_connector import *
+from utils import send_notification_email
 
 st.set_page_config(page_title="Gauge Metrics - Login", page_icon="🔑", layout="wide")
 
@@ -84,9 +85,9 @@ else:
     with col2:
         # --- USA UM CONTAINER NATIVO PARA O CARTÃO ---
         with st.container(border=True):
-            tab_login, tab_register = st.tabs(["**Login**", "**Registrar-se**"])
+            col1, col2, col3 = st.tabs(["**Entrar**", "**Registar-se**", "**Recuperar Senha**"])
 
-        with tab_login:
+        with col1:
             with st.form("login_form"):
                 st.markdown("##### Acesse a sua conta")
                 email = st.text_input("Email", placeholder="email@exemplo.com")
@@ -123,36 +124,66 @@ else:
                     else:
                         st.warning("Por favor, preencha todos os campos.")
 
-        with tab_register:
+        with col2:
             with st.form("register_form", clear_on_submit=True):
                 st.markdown("##### Crie a sua conta")
                 new_email = st.text_input("O seu Email corporativo", key="reg_email")
                 new_password = st.text_input("Crie uma Senha", type="password", key="reg_pass")
                 confirm_password = st.text_input("Confirme a Senha", type="password", key="reg_confirm")
                 
-                if st.form_submit_button("Registrar", use_container_width=True):
-                    # Carrega a lista de domínios permitidos DA BASE DE DADOS
-                    global_configs = get_global_configs()
-                    ALLOWED_DOMAINS = global_configs.get("allowed_domains", [])
-                    
-                    if new_email and new_password and confirm_password:
-                        try:
-                            domain = new_email.split('@')[1]
-                            # A verificação agora usa a lista da base de dados
-                            if ALLOWED_DOMAINS and domain not in ALLOWED_DOMAINS:
-                                st.error("Registro não permitido. O seu email deve pertencer a um dos domínios autorizados.")
-                            else:
-                                if new_password == confirm_password:
-                                    if find_user(new_email):
-                                        st.error("Este email já está registrado. Por favor, faça login.")
-                                    else:
-                                        hashed_password = get_password_hash(new_password)
-                                        create_user(new_email, hashed_password)
-                                        st.success("Registro bem-sucedido! Agora pode fazer login na aba ao lado.")
-                                else:
-                                    st.error("As senhas não coincidem.")
-                        except IndexError:
-                            st.error("Por favor, insira um endereço de email válido.")
-                    else:
+                if st.form_submit_button("Registar", use_container_width=True):
+                    if not all([new_email, new_password, confirm_password]):
                         st.warning("Por favor, preencha todos os campos.")
-            st.caption("ℹ️ Após o registo, você precisará de um Token de API do Jira para conectar a sua conta. [Pode criar um aqui](https://id.atlassian.com/manage-profile/security/api-tokens).")
+                    elif find_user(new_email):
+                        st.error("Este e-mail já está registado.")
+                    elif len(new_password) < 8:
+                        st.error("A senha deve ter pelo menos 8 caracteres.")
+                    elif new_password != confirm_password:
+                        st.error("As senhas não coincidem.")
+                    else:
+                        create_user(new_email, new_password)
+                        st.success("Conta criada com sucesso! Por favor, faça login.")
+                        
+                        # --- ENVIO DO E-MAIL DE BOAS-VINDAS ---
+                        welcome_subject = "Bem-vindo ao Gauge Metrics!"
+                        welcome_html = """
+                        <html><body>
+                            <h2>Olá!</h2>
+                            <p>A sua conta na plataforma Gauge Metrics foi criada com sucesso.</p>
+                            <p>Estamos felizes por tê-lo a bordo. Faça login para começar a transformar os seus dados em insights.</p>
+                            <p>Atenciosamente,<br>A Equipa Gauge Metrics</p>
+                        </body></html>
+                        """
+                        send_notification_email(new_email, welcome_subject, welcome_html)
+
+            with col3:
+                st.markdown("##### Recuperação de Senha")
+                st.info("Por favor, insira o seu e-mail. Se estiver registado, enviaremos uma senha temporária para si.")
+                with st.form("recover_form"):
+                    recover_email = st.text_input("Email", placeholder="email@exemplo.com")
+                    if st.form_submit_button("Enviar E-mail de Recuperação", use_container_width=True, type="primary"):
+                        if recover_email:
+                            user = find_user(recover_email)
+                            if user:
+                                with st.spinner("A processar o seu pedido..."):
+                                    # Gera e guarda a nova senha, e obtém a versão em texto
+                                    temp_password = reset_user_password_with_temporary(recover_email)
+                                    
+                                    # Envia o e-mail com a senha temporária
+                                    subject = "Recuperação de Senha - Gauge Metrics"
+                                    body_html = f"""
+                                    <html><body>
+                                        <h2>Recuperação de Senha</h2>
+                                        <p>Olá,</p>
+                                        <p>Você solicitou a recuperação da sua senha. Use a senha temporária abaixo para fazer login:</p>
+                                        <p style="font-size: 1.2em; font-weight: bold; color: #1c4e80;">{temp_password}</p>
+                                        <p><b>Importante:</b> Após o login, vá à sua página 'Minha Conta' e altere esta senha para uma da sua preferência.</p>
+                                        <p>Se não foi você que fez esta solicitação, por favor, ignore este e-mail.</p>
+                                    </body></html>
+                                    """
+                                    send_notification_email(recover_email, subject, body_html)
+                            
+                            # Mostra sempre uma mensagem de sucesso para não confirmar se um e-mail existe ou não
+                            st.success("Pedido de recuperação enviado! Se o seu e-mail estiver na nossa base de dados, você receberá as instruções em breve.")
+                        else:
+                            st.warning("Por favor, insira um e-mail.")
