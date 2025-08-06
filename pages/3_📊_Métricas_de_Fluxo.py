@@ -139,6 +139,17 @@ with tab_comum:
 with tab_kanban:
     st.subheader("Métricas de Eficiência e Previsibilidade Kanban")
     col1, col2 = st.columns(2)
+
+        # Calcula as novas métricas de SLA
+    sla_metrics = calculate_sla_metrics(all_raw_issues)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("% de chamados atendidos dentro do SLA", sla_metrics['met_sla_pct'])
+    col2.metric("% de chamados com SLA violado", sla_metrics['violated_sla_pct'])
+    col3.metric("Tempo médio para primeiro atendimento", sla_metrics['avg_time_to_response'])
+    
+    st.divider()
+
     with col1:
         st.markdown("**Aging Work in Progress**"); st.caption("Itens em andamento há mais tempo, potenciais bloqueios.")
         aging_df = get_aging_wip(all_raw_issues); st.dataframe(aging_df.head(10), use_container_width=True, hide_index=True)

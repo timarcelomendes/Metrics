@@ -96,7 +96,6 @@ with st.sidebar:
                 unit_options = [estimation_field_name, "Contagem de Issues"] if estimation_field_name else ["Contagem de Issues"]
 
                 st.session_state.unit_selector = st.radio("Unidade de Análise", options=unit_options, horizontal=True)
-                st.session_state.team_size = st.number_input("Tamanho da Equipe (pessoas)", min_value=1, value=st.session_state.get('team_size', 1))
                 st.session_state.trend_slider = st.slider("Semanas para Tendência", 2, 12, 4)
                 
                 if st.button("Analisar Escopo", use_container_width=True, type="primary"):
@@ -180,10 +179,35 @@ with tab1:
     fig.update_layout(title_text="", xaxis_title="Data", yaxis_title=unit, legend_title="Legenda", template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
+        # ===== NOVA SECÇÃO: RESUMO COM IA =====
+    st.divider()
+    with st.expander("🤖 Resumo Executivo com IA"):
+        st.info("Clique no botão abaixo para que a IA analise os indicadores e o gráfico de burnup, e gere um resumo executivo sobre a saúde e previsibilidade do projeto.")
+        
+        if st.button("Gerar Resumo com IA", use_container_width=True):
+            with st.spinner("A IA está a analisar o seu forecast..."):
+                forecast_date_str = forecast_date.strftime('%d/%m/%Y') if forecast_date else "Incalculável"
+                
+                ai_summary = get_ai_forecast_analysis(
+                    project_name=st.session_state.get('project_name', 'este projeto'),
+                    scope_total=f"{burnup_df['Escopo Total'].iloc[-1]:.0f} {unit_display}",
+                    completed_pct=f"{(burnup_df['Trabalho Concluído'].iloc[-1] / burnup_df['Escopo Total'].iloc[-1]) * 100:.0f}",
+                    avg_velocity=avg_velocity,
+                    trend_velocity=trend_velocity,
+                    forecast_date_str=forecast_date_str
+                )
+                st.session_state.ai_forecast_summary = ai_summary
+        
+        if 'ai_forecast_summary' in st.session_state:
+            st.markdown(st.session_state.ai_forecast_summary)
+
 with tab2:
     st.subheader("Qual a vazão necessária para atingir uma data?")
     st.caption("Use esta ferramenta para simular cenários. Se definirmos uma data de entrega, qual o ritmo que a equipe precisa de ter?")
     
+    # Adiciona o input para o tamanho da equipe, que estava em falta na sua versão
+    team_size = st.number_input("Tamanho da Equipe Atual", min_value=1, value=5)
+
     remaining_work = current_scope - completed_work
     target_date = st.date_input("Data de Entrega Desejada", value=forecast_date if forecast_date else datetime.now() + timedelta(weeks=4), min_value=datetime.now().date())
     
@@ -195,20 +219,17 @@ with tab2:
             col1, col2, col3 = st.columns(3)
             col1.metric(f"🏁 Trabalho Restante", f"{remaining_work:.1f} {unit_display}")
             col2.metric("🗓️ Semanas Restantes", f"{remaining_weeks:.1f} semanas")
-            col3.metric("⚡ Vazão Necessária", f"{required_velocity:.1f} {unit_display}/sem", delta=f"{required_velocity - avg_velocity:.1f} vs. média", delta_color="inverse")
-                            
+            col3.metric("⚡ Vazão Necessária", f"{required_velocity:.1f} {unit_display}/sem", delta=f"{required_velocity - avg_velocity:.1f} vs. média")
+            
             st.divider()
             st.subheader("Análise da Equipe")
             
-            # --- NOVO SELETOR PARA A BASE DA PROJEÇÃO ---
             projection_basis = st.radio(
                 "Base para projeção da equipe:",
                 ("Velocidade Média (Histórico Total)", f"Tendência ({trend_weeks} semanas)"),
-                horizontal=True,
-                help="Escolha qual velocidade usar para estimar a produtividade por pessoa."
+                horizontal=True
             )
             
-            # Determina qual velocidade usar com base na seleção
             velocity_for_projection = avg_velocity if "Média" in projection_basis else trend_velocity
             basis_text = "média histórica" if "Média" in projection_basis else "tendência recente"
 
@@ -222,8 +243,30 @@ with tab2:
                     f"{np.ceil(required_team_size):.0f} pessoas",
                     delta=f"{np.ceil(required_team_size) - team_size:.0f} vs. equipe atual"
                 )
+
+                # ===== NOVA SECÇÃO: ANÁLISE DE VIABILIDADE COM IA =====
+                st.divider()
+                with st.expander("🤖 Análise de Viabilidade com IA"):
+                    st.info("Clique no botão para que a IA analise este cenário de planeamento e forneça uma análise sobre a sua viabilidade e riscos.")
+                    
+                    if st.button("Analisar Cenário com IA", use_container_width=True):
+                        with st.spinner("A IA está a analisar o seu plano..."):
+                            
+                            ai_planning_summary = get_ai_planning_analysis(
+                                project_name=st.session_state.get('project_name', 'este projeto'),
+                                remaining_work=f"{remaining_work:.0f} {unit_display}",
+                                remaining_weeks=remaining_weeks,
+                                required_throughput=required_velocity,
+                                trend_velocity=trend_velocity,
+                                people_needed=f"{np.ceil(required_team_size):.0f}",
+                                current_team_size=f"{team_size}"
+                            )
+                            st.session_state.ai_planning_summary = ai_planning_summary
+                    
+                    if 'ai_planning_summary' in st.session_state:
+                        st.markdown(st.session_state.ai_planning_summary)
+
             else:
                 st.warning("Não é possível estimar a equipe necessária.", icon="⚠️")
-                st.info(f"A base de cálculo selecionada ('{basis_text}') é zero ou negativa. Não é possível estimar a produtividade por pessoa.")
         else:
             st.error("A data de entrega desejada deve ser no futuro.")

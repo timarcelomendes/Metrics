@@ -238,9 +238,37 @@ def save_user_gemini_key(email, encrypted_gemini_key):
         {'$set': {'encrypted_gemini_key': encrypted_gemini_key}}
     )
 
+def save_user_openai_key(email, encrypted_openai_key):
+    """Guarda a chave de API da OpenAI encriptada para um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'encrypted_openai_key': encrypted_openai_key}}
+    )
+
+def save_user_ai_provider_preference(email, provider_name):
+    """Guarda o provedor de IA preferido de um utilizador (Gemini ou OpenAI)."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'ai_provider_preference': provider_name}}
+    )
+
 def save_user_ai_model_preference(email, model_name):
     """Guarda o modelo de IA preferido de um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'ai_model_preference': model_name}}
+    )
+
+def remove_user_gemini_key(email):
+    """Remove o campo da chave de API do Gemini do documento de um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$unset': {'encrypted_gemini_key': ""}}
+    )
+
+def remove_user_openai_key(email):
+    """Remove o campo da chave de API da OpenAI do documento de um utilizador."""
+    get_users_collection().update_one(
+        {'email': email},
+        {'$unset': {'encrypted_openai_key': ""}}
     )

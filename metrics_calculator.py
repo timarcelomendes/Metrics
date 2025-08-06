@@ -517,34 +517,33 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config):
     }).set_index('Data')
 
 def calculate_executive_summary_metrics(project_issues):
-    """Calcula as métricas executivas, agora ignorando issues canceladas."""
-    
-    # Filtra as issues antes de qualquer cálculo
-    valid_issues = get_filtered_issues(project_issues)
-
-    if not valid_issues:
-        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0}
-    """Calcula as métricas quantitativas para o resumo executivo de um projeto."""
+    """
+    Calcula as métricas quantitativas para o resumo executivo, agora retornando
+    também a contagem de issues totais e concluídas.
+    """
     if not project_issues:
-        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0}
+        return {
+            'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0,
+            'total_issues': 0, 'completed_issues': 0
+        }
 
     total_issues = len(project_issues)
-    completed_issues = [i for i in project_issues if find_completion_date(i) is not None]
+    completed_issues_list = [i for i in project_issues if find_completion_date(i) is not None]
     
     # 1. % Concluído
-    completion_pct = (len(completed_issues) / total_issues) * 100 if total_issues > 0 else 0
+    completion_pct = (len(completed_issues_list) / total_issues) * 100 if total_issues > 0 else 0
 
     # 2. Entregas no Mês Atual
     current_month = datetime.now().month
     current_year = datetime.now().year
     deliveries_month = len([
-        i for i in completed_issues 
+        i for i in completed_issues_list 
         if (cd := find_completion_date(i)) and cd.month == current_month and cd.year == current_year
     ])
 
-    # 3. Prazo Médio (diferença entre data de vencimento e data de conclusão)
+    # 3. Prazo Médio
     deadline_diffs = []
-    for i in completed_issues:
+    for i in completed_issues_list:
         if hasattr(i.fields, 'duedate') and i.fields.duedate:
             due_date = pd.to_datetime(i.fields.duedate).normalize()
             completion_date = find_completion_date(i)
@@ -553,10 +552,13 @@ def calculate_executive_summary_metrics(project_issues):
     
     avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
     
+    # --- CORREÇÃO AQUI: Retorna as contagens ---
     return {
         'completion_pct': completion_pct,
         'deliveries_month': deliveries_month,
-        'avg_deadline_diff': avg_deadline_diff
+        'avg_deadline_diff': avg_deadline_diff,
+        'total_issues': total_issues,
+        'completed_issues': len(completed_issues_list)
     }
 
 def calculate_throughput_trend(project_issues, num_weeks=4):
@@ -597,3 +599,59 @@ def calculate_risk_level(probability, impact):
         return "Alto", "#fd7e14" # Laranja
     else: # risk_score > 6
         return "Crítico", "#dc3545" # Vermelho
+
+def calculate_time_to_first_response(issue, first_response_field_id):
+    """Calcula o tempo em horas entre a criação e o primeiro atendimento."""
+    if not hasattr(issue.fields, first_response_field_id) or not getattr(issue.fields, first_response_field_id):
+        return None
+        
+    creation_date = pd.to_datetime(issue.fields.created)
+    response_date = pd.to_datetime(getattr(issue.fields, first_response_field_id))
+    
+    # Usa apenas dias úteis (segunda a sexta)
+    business_hours = np.busday_count(creation_date.date(), response_date.date()) * 8
+    return business_hours
+
+def calculate_sla_metrics(issues):
+    """
+    Calcula as métricas de SLA com base nos campos configurados.
+    """
+    global_configs = st.session_state.get('global_configs', {})
+    sla_configs = global_configs.get('sla_fields', {})
+    sla_field_name = sla_configs.get('sla_hours_field')
+    response_field_name = sla_configs.get('first_response_field')
+
+    # Busca os IDs dos campos
+    all_fields_map = {f['name']: f['id'] for f in global_configs.get('custom_fields', [])}
+    sla_field_id = all_fields_map.get(sla_field_name)
+    response_field_id = all_fields_map.get(response_field_name)
+    
+    if not sla_field_id or not response_field_id:
+        return {'met_sla_pct': 'N/A', 'violated_sla_pct': 'N/A', 'avg_time_to_response': 'N/A'}
+
+    total_with_response = 0
+    met_sla_count = 0
+    all_response_times = []
+
+    for issue in issues:
+        time_to_response = calculate_time_to_first_response(issue, response_field_id)
+        sla_hours = getattr(issue.fields, sla_field_id, None)
+
+        if time_to_response is not None and sla_hours is not None:
+            total_with_response += 1
+            all_response_times.append(time_to_response)
+            if time_to_response <= float(sla_hours):
+                met_sla_count += 1
+    
+    if total_with_response == 0:
+        return {'met_sla_pct': 0, 'violated_sla_pct': 0, 'avg_time_to_response': 0}
+
+    met_sla_pct = (met_sla_count / total_with_response) * 100
+    violated_sla_pct = 100 - met_sla_pct
+    avg_time_to_response = np.mean(all_response_times)
+
+    return {
+        'met_sla_pct': f"{met_sla_pct:.1f}%",
+        'violated_sla_pct': f"{violated_sla_pct:.1f}%",
+        'avg_time_to_response': f"{avg_time_to_response:.1f}h"
+    }

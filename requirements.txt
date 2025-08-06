@@ -11,4 +11,5 @@ dnspython
 passlib[bcrypt]
 fpdf2
 google-generativeai
+openai
 matplotlib

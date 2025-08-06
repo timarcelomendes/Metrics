@@ -267,54 +267,90 @@ if organize_mode:
 else:
     tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
 
-    with st.expander("🤖 Análise com IA: Obter Insights do Dashboard"):
-        st.info("Clique no botão abaixo para que a IA analise os gráficos visíveis e gere um resumo com pontos fortes, pontos de atenção e recomendações.")
+# ===== PAINEL DE INSIGHTS COM IA (INTELIGENTE E CONTEXTUAL) =====
+st.divider()
+with st.expander("🤖 Análise com IA: Obter Insights do Dashboard"):
+    
+    # Verifica se o utilizador tem pelo menos uma chave de IA configurada
+    has_gemini_key = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
+    has_openai_key = 'encrypted_openai_key' in user_data and user_data['encrypted_openai_key']
+
+    if not has_gemini_key and not has_openai_key:
+        st.warning("Nenhuma chave de API de IA configurada.", icon="⚠️")
+        st.info("Para usar esta funcionalidade, por favor, adicione a sua chave de API do Gemini ou da OpenAI na sua página de 'Minha Conta'.")
+        st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
+    else:
+        # Determina qual provedor de IA está ativo e se a chave correspondente existe
+        ai_provider = user_data.get('ai_provider_preference', 'Google Gemini')
+        provider_key_exists = (ai_provider == 'Google Gemini' and has_gemini_key) or \
+                              (ai_provider == 'OpenAI (ChatGPT)' and has_openai_key)
+
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.info(f"A sua análise será gerada usando o seu provedor preferido: **{ai_provider}**.")
         
-        if st.button("Gerar Insights com Gemini", use_container_width=True, type="primary"):
-            with st.spinner("A IA está a analisar os seus gráficos... Por favor, aguarde."):
-                # 1. Gera um resumo para cada gráfico no dashboard
-                chart_summaries = [
-                    summarize_chart_data(chart, filtered_df) 
-                    for tab_charts in tabs_layout.values() for chart in tab_charts
-                ]
-                
-                # 2. Chama a "IA" para obter os insights
-                ai_analysis = get_ai_insights(st.session_state.get('project_name'), chart_summaries)
-                
-                # 3. Exibe os resultados
-                if ai_analysis:
-                    st.divider()
-                    st.markdown("### Resumo da Análise:")
-                    st.markdown(ai_analysis)
+        with col2:
+            if st.button(f"Gerar Insights com {ai_provider.split(' ')[0]}", use_container_width=True, type="primary", disabled=not provider_key_exists):
+                st.session_state.run_ai_analysis = True
+                st.session_state.provider_for_analysis = ai_provider # Guarda o provedor a ser usado
+
+        if not provider_key_exists:
+            st.error(f"Você selecionou **{ai_provider}** como seu provedor, mas nenhuma chave de API foi encontrada para ele. Por favor, adicione-a em 'Minha Conta'.", icon="🔑")
+
+    # Lógica para executar e exibir a análise apenas quando o botão é clicado
+    if st.session_state.get('run_ai_analysis', False):
+        provider_to_use = st.session_state.provider_for_analysis
+        with st.spinner(f"A IA ({provider_to_use}) está a analisar os seus gráficos..."):
+            chart_summaries = [
+                summarize_chart_data(chart, filtered_df) 
+                for tab_charts in tabs_layout.values() for chart in tab_charts
+            ]
+            
+            # --- CHAMADA CORRIGIDA ---
+            # Passa o provedor escolhido como argumento para a função
+            ai_analysis = get_ai_insights(st.session_state.get('project_name'), chart_summaries, provider_to_use)
+            
+            if ai_analysis:
+                # Guarda o resultado na sessão para que não se perca
+                st.session_state.ai_analysis_result = ai_analysis
+
+        # Limpa o gatilho da análise para não re-executar
+        st.session_state.run_ai_analysis = False
+
+    # Exibe o último resultado da análise que está na memória
+    if 'ai_analysis_result' in st.session_state and st.session_state.ai_analysis_result:
+        st.divider()
+        st.markdown("### Resumo da Análise:")
+        st.markdown(st.session_state.ai_analysis_result)
 
     st.divider()
 
-    if not tabs_with_charts:
-        st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
-    else:
-        tab_names = list(tabs_with_charts.keys())
-        st_tabs = st.tabs(tab_names)
-        for i, tab_name in enumerate(tab_names):
-            with st_tabs[i]:
-                dashboard_items_in_tab = tabs_with_charts[tab_name]
-                cols = st.columns(num_columns, gap="large")
-                for j, chart_to_render in enumerate(dashboard_items_in_tab):
-                    with cols[j % num_columns]:
-                        with st.container(border=True):
-                            header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
-                            with header_cols[0]:
-                                card_title = chart_to_render.get('title', 'Visualização'); card_icon = chart_to_render.get('icon', '📊')
-                                st.markdown(f"**{card_icon} {card_title}**")
-                            with header_cols[1]:
-                                if st.button("⬆️", key=f"up_{chart_to_render['id']}", help="Mover", disabled=(j == 0), use_container_width=True):
-                                    tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j - 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                            with header_cols[2]:
-                                if st.button("⬇️", key=f"down_{chart_to_render['id']}", help="Mover", disabled=(j == len(dashboard_items_in_tab) - 1), use_container_width=True):
-                                    tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j + 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                            with header_cols[3]:
-                                if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar", use_container_width=True):
-                                    st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
-                            with header_cols[4]:
-                                if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover", use_container_width=True):
-                                    tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]; all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                            render_chart(chart_to_render, filtered_df)
+if not tabs_with_charts:
+    st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
+else:
+    tab_names = list(tabs_with_charts.keys())
+    st_tabs = st.tabs(tab_names)
+    for i, tab_name in enumerate(tab_names):
+        with st_tabs[i]:
+            dashboard_items_in_tab = tabs_with_charts[tab_name]
+            cols = st.columns(num_columns, gap="large")
+            for j, chart_to_render in enumerate(dashboard_items_in_tab):
+                with cols[j % num_columns]:
+                    with st.container(border=True):
+                        header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
+                        with header_cols[0]:
+                            card_title = chart_to_render.get('title', 'Visualização'); card_icon = chart_to_render.get('icon', '📊')
+                            st.markdown(f"**{card_icon} {card_title}**")
+                        with header_cols[1]:
+                            if st.button("⬆️", key=f"up_{chart_to_render['id']}", help="Mover", disabled=(j == 0), use_container_width=True):
+                                tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j - 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                        with header_cols[2]:
+                            if st.button("⬇️", key=f"down_{chart_to_render['id']}", help="Mover", disabled=(j == len(dashboard_items_in_tab) - 1), use_container_width=True):
+                                tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j + 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                        with header_cols[3]:
+                            if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar", use_container_width=True):
+                                st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
+                        with header_cols[4]:
+                            if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover", use_container_width=True):
+                                tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]; all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
+                        render_chart(chart_to_render, filtered_df)

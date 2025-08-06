@@ -8,31 +8,52 @@ from jira_connector import *
 
 st.set_page_config(page_title="Gauge Metrics - Login", page_icon="🔑", layout="wide")
 
-# --- CSS SIMPLIFICADO E COMPATÍVEL COM TEMAS ---
+# ===== NOVO BLOCO DE CONTROLO DE VISIBILIDADE =====
+# Esta lógica será executada em todas as páginas e controlará o que é exibido.
+if 'email' not in st.session_state:
+    # Esconde a sidebar inteira se o utilizador não estiver logado
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {
+                display: none;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+else:
+    # Se estiver logado, verifica se é um admin
+    ADMIN_EMAILS = st.secrets.get("app_settings", {}).get("ADMIN_EMAILS", [])
+    if st.session_state['email'] not in ADMIN_EMAILS:
+        # Se não for admin, esconde APENAS o link da página de administração
+        st.markdown("""
+            <style>
+                /* Acha o link que contém a palavra "Administra" e esconde-o */
+                a[href*="Administra"] {
+                    display: none;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+# =======================================================
+
+# --- CSS para o design (sem alterações) ---
 st.markdown("""
 <style>
-/* Remove o padding extra do topo da página */
-.main .block-container {
-    padding-top: 2rem;
-}
-/* Remove a borda do formulário interno para um look mais limpo */
-div[data-testid="stForm"] {
-    border: none;
-    padding: 0;
-}
+/* ... (Seu CSS aqui, sem alterações) ... */
 </style>
 """, unsafe_allow_html=True)
 
-# Define o logo que aparecerá no topo da sidebar em TODAS as páginas.
+# Define o logo que aparecerá no topo da sidebar (apenas para utilizadores logados)
 with st.sidebar:
     project_root = Path(__file__).parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            logo_path, 
-            size="large")
+        st.logo(str(logo_path), size="large")
     except FileNotFoundError:
-        st.write("Gauge Metrics") 
+        st.write("Gauge Metrics")
+    
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
 
 # --- LÓGICA DA PÁGINA (sem alterações) ---
 if 'email' in st.session_state:
@@ -45,7 +66,7 @@ if 'email' in st.session_state:
         st.rerun()
 else:
     # --- Layout da Página de Login ---
-    col1, col2 = st.columns([1.2, 1], gap="large")
+    col1, col2 = st.columns([1, 1.3], gap="large")
 
     with col1:
         st.subheader("Decisões Guiadas por Dados, :orange[Sem Complicações.]")

@@ -138,6 +138,45 @@ with tab_metricas:
                 'ignored': [s.strip().lower() for s in ignored_states_str.split(',') if s.strip()] # Salva a nova lista
             }
             update_global_configs_and_rerun(configs)
+            
+    # --- NOVA SECÇÃO PARA CONFIGURAÇÕES DE SLA ---
+    with st.container(border=True):
+        st.markdown("⏱️ **Configurações de SLA (Service Level Agreement)**")
+        st.caption("Mapeie os campos que você usa no Jira para controlar o tempo de primeira resposta. Os valores de SLA devem estar em horas.")
+        
+        # Carrega os campos numéricos já configurados
+        numeric_custom_fields = [field['name'] for field in configs.get('custom_fields', []) if field.get('type') == 'Numérico']
+        date_custom_fields = [field['name'] for field in configs.get('custom_fields', []) if field.get('type') == 'Data']
+        
+        sla_configs = configs.get('sla_fields', {})
+
+        if not numeric_custom_fields or not date_custom_fields:
+            st.warning("Para configurar o SLA, por favor, cadastre pelo menos um campo do tipo 'Numérico' (para o SLA) e um do tipo 'Data' (para a resposta) na aba 'Gestão de Campos Globais'.")
+        else:
+            sla_field_options = [""] + numeric_custom_fields
+            response_field_options = [""] + date_custom_fields
+
+            sla_field_idx = sla_field_options.index(sla_configs.get('sla_hours_field')) if sla_configs.get('sla_hours_field') in sla_field_options else 0
+            response_field_idx = response_field_options.index(sla_configs.get('first_response_field')) if sla_configs.get('first_response_field') in response_field_options else 0
+
+            selected_sla_field = st.selectbox(
+                "Campo que contém o SLA em horas (ex: 'SLA de Primeira Resposta')", 
+                options=sla_field_options,
+                index=sla_field_idx
+            )
+            selected_response_field = st.selectbox(
+                "Campo que contém a data do primeiro atendimento (ex: 'Data da Primeira Resposta')",
+                options=response_field_options,
+                index=response_field_idx
+            )
+
+            if st.button("Salvar Configurações de SLA", use_container_width=True):
+                configs['sla_fields'] = {
+                    'sla_hours_field': selected_sla_field,
+                    'first_response_field': selected_response_field
+                }
+                update_global_configs_and_rerun(configs)
+
 
 # --- NOVA ABA DEDICADA PARA A ORDEM DE SERVIÇO ---
 with tab_os:

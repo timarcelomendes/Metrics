@@ -11,6 +11,9 @@ import uuid
 import google.generativeai as genai
 from security import find_user, decrypt_token
 from datetime import datetime, timedelta
+import openai
+from sklearn.linear_model import LinearRegression
+import numpy as np
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -50,46 +53,54 @@ def convert_dates_in_filters(filters):
 
 def render_chart(chart_config, df):
     """
-    Renderiza um único gráfico, KPI ou tabela com base na sua configuração.
-    Esta é a versão final e completa, com todas as funcionalidades.
+    Renderiza um único gráfico, aplicando os seus próprios filtros ao dataframe original.
+    Esta é a versão final e completa, com a lógica de filtragem corrigida.
     """
     try:
-        # 1. Validação de Campos Necessários
+        # --- ETAPA 1: LÓGICA DE FILTRAGEM (ÚNICA E CORRETA) ---
+        df_to_render = df.copy() 
+        
+        chart_filters = chart_config.get('filters', [])
+        if chart_filters:
+            for f in chart_filters:
+                field, op, val = f.get('field'), f.get('operator'), f.get('value')
+                if field and op and val is not None and field in df_to_render.columns:
+                    try:
+                        if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
+                        elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
+                        elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
+                        elif op == 'não está em': df_to_render = df_to_render[~df_to_render[field].isin(val)]
+                        elif op == 'maior que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') > val]
+                        elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
+                        elif op == 'entre' and isinstance(val, list) and len(val) == 2:
+                             df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
+                    except Exception:
+                        # Ignora silenciosamente um filtro malformado
+                        pass
+        
+        # --- ETAPA 2: VALIDAÇÃO DE CAMPOS ---
         required_cols = []
         chart_type = chart_config.get('type')
         if chart_type in ['dispersão', 'linha']:
             required_cols.extend([chart_config.get('x'), chart_config.get('y')])
+            if chart_config.get('color_by') and chart_config.get('color_by') != 'Nenhum':
+                required_cols.append(chart_config.get('color_by'))
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
             required_cols.append(chart_config.get('dimension'))
-            if chart_config.get('measure') != 'Contagem de Issues': required_cols.append(chart_config.get('measure'))
+            if chart_config.get('measure') != 'Contagem de Issues':
+                required_cols.append(chart_config.get('measure'))
         elif chart_type == 'tabela':
             required_cols.extend(chart_config.get('columns', []))
         elif chart_type == 'pivot_table':
             required_cols.extend([chart_config.get('rows'), chart_config.get('columns'), chart_config.get('values')])
         
-        missing_cols = [col for col in required_cols if col and col not in df.columns]
+        missing_cols = [col for col in required_cols if col and col not in df_to_render.columns]
         if missing_cols:
             st.warning(f"Não foi possível renderizar esta visualização.", icon="⚠️")
             st.error(f"Motivo: O(s) campo(s) **{', '.join(missing_cols)}** não foi/foram encontrado(s) nos dados atuais.")
             return
 
-        # 2. Lógica de Filtragem e Renderização
-        df_to_render = df.copy()
-        chart_filters = chart_config.get('filters', [])
-        if chart_filters:
-            for f in chart_filters:
-                field, values = f.get('field'), f.get('values')
-                if field and values and field in df_to_render.columns:
-                    if isinstance(values, list) and len(values) == 2 and isinstance(values[0], str) and '-' in values[0]:
-                        try:
-                            start_date, end_date = pd.to_datetime(values[0]), pd.to_datetime(values[1])
-                            df_to_render[field] = pd.to_datetime(df_to_render[field], errors='coerce')
-                            df_to_render = df_to_render.dropna(subset=[field])
-                            df_to_render = df_to_render[(df_to_render[field] >= start_date) & (df_to_render[field] <= end_date)]
-                        except (ValueError, TypeError): pass
-                    elif isinstance(values, list):
-                        df_to_render = df_to_render[df_to_render[field].isin(values)]
-
+        # --- ETAPA 3: RENDERIZAÇÃO ---
         source_type = chart_config.get('source_type', 'visual')
         fig = None
         template = "plotly_white"
@@ -118,6 +129,7 @@ def render_chart(chart_config, df):
                         delta_str = f"{int(delta_value):,}" if delta_value == int(delta_value) else f"{delta_value:,.2f}"
                     st.metric(label="", value=value_str, delta=delta_str)
                 return
+            
             else: # Construtor Visual
                 def calculate_value(op, field, data_frame):
                     if not op or not field: return None
@@ -287,61 +299,81 @@ def create_os_pdf(os_data):
     # Converte o PDF para bytes para o Streamlit poder usar
     return pdf.output(dest='S').encode('latin-1')
 
+# --- FUNÇÃO AUXILIAR PARA CÁLCULO DE KPI ---
+def calculate_kpi_value(chart_config, df):
+    op = chart_config.get('num_op')
+    field = chart_config.get('num_field')
+    data_frame = df
+    if not op or not field: return None
+    if field == 'Contagem de Issues':
+        return len(data_frame)
+    if field not in data_frame.columns: return None
+    if op == 'Contagem': return len(data_frame.dropna(subset=[field]))
+    numeric_series = pd.to_numeric(data_frame[field], errors='coerce')
+    if numeric_series.isnull().all(): return None
+    if op == 'Soma': return numeric_series.sum()
+    if op == 'Média': return numeric_series.mean()
+    return None
+
+# --- NOVA FUNÇÃO "LEITORA DE GRÁFICOS" PARA A IA ---
 def summarize_chart_data(chart_config, df):
     """Gera um resumo em texto dos dados de um único gráfico."""
     title = chart_config.get('title', 'um gráfico')
     chart_type = chart_config.get('type')
     
     try:
+        df_to_render = df.copy()
+        chart_filters = chart_config.get('filters', [])
+        if chart_filters:
+            for f in chart_filters:
+                field, op, val = f.get('field'), f.get('operator'), f.get('value')
+                if field and op and val is not None and field in df_to_render.columns:
+                    if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
+                    elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
+                    elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
+                    elif op == 'não está em': df_to_render = df_to_render[~df_to_render[field].isin(val)]
+                    elif op == 'maior que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') > val]
+                    elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
+                    elif op == 'entre' and len(val) == 2:
+                        df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
+            
         if chart_type == 'indicator':
-            # A lógica para extrair o valor de um KPI precisa ser simplificada aqui
-            # Esta é uma simulação, uma implementação real precisaria da função calculate_value
-            return f"O indicador '{title}' está a mostrar um valor principal."
-
-        elif chart_type in ['barra', 'linha_agregada', 'pizza']:
-            dimension = chart_config.get('dimension')
-            measure = chart_config.get('measure')
-            if not dimension or not measure: return None
-
-            if measure == 'Contagem de Issues':
-                summary_df = df.groupby(dimension).size().nlargest(3)
-                return f"O gráfico '{title}' mostra a contagem de issues por '{dimension}'. Os 3 maiores grupos são: {', '.join([f'{idx} ({val})' for idx, val in summary_df.items()])}."
+            if chart_config.get('source_type') == 'jql':
+                return f"O indicador '{title}' é calculado com uma consulta JQL personalizada."
             else:
-                agg = chart_config.get('agg', 'Soma')
-                summary_df = df.groupby(dimension)[measure].agg(agg.lower()).nlargest(3)
-                return f"O gráfico '{title}' mostra a {agg} de '{measure}' por '{dimension}'. Os 3 maiores grupos são: {', '.join([f'{idx} ({val:.1f})' for idx, val in summary_df.items()])}."
+                value = calculate_kpi_value(chart_config, df_to_render)
+                if value is not None and pd.notna(value):
+                    return f"O indicador '{title}' mostra o valor de {value:.1f}."
+                else:
+                    return f"O indicador '{title}' não pôde ser calculado (N/A)."
+
+        elif chart_type in ['barra', 'pizza']:
+            dimension = chart_config.get('dimension'); measure = chart_config.get('measure'); agg = chart_config.get('agg', 'Soma')
+            if not dimension or not measure: return None
+            if measure == 'Contagem de Issues':
+                summary_df = df_to_render.groupby(dimension).size().nlargest(5)
+                return f"No gráfico '{title}', a contagem de issues por '{dimension}' revela que os 5 maiores grupos são: {', '.join([f'{idx} ({val})' for idx, val in summary_df.items()])}."
+            else:
+                summary_df = df_to_render.groupby(dimension)[measure].agg(agg.lower()).nlargest(5)
+                return f"No gráfico '{title}', a {agg.lower()} de '{measure}' por '{dimension}' revela que os 5 maiores grupos são: {', '.join([f'{idx} ({val:.1f})' for idx, val in summary_df.items()])}."
+        
+        elif chart_type == 'linha':
+            x_col, y_col = chart_config['x'], chart_config['y']
+            plot_df = df_to_render.dropna(subset=[x_col, y_col])
+            if len(plot_df) > 2:
+                X = np.array(range(len(plot_df))).reshape(-1, 1); y = plot_df[y_col]
+                model = LinearRegression().fit(X, y)
+                trend = "de subida" if model.coef_[0] > 0 else "de descida"
+                return f"O gráfico de linha '{title}' mostra '{y_col}' ao longo de '{x_col}', com uma tendência geral {trend}."
         
         return f"Dados para o gráfico '{title}' do tipo {chart_type}."
     except Exception:
         return f"Não foi possível processar os dados para o gráfico '{title}'."
 
-
-def get_ai_insights(project_name, chart_summaries):
-    """
-    Chama a API do Gemini para gerar insights, usando a chave de API guardada
-    no perfil do utilizador.
-    """
-    # 1. Busca os dados do utilizador logado
+# --- FUNÇÃO DE IA ATUALIZADA ---
+def get_ai_insights(project_name, chart_summaries, provider):
+    """Chama a API de IA preferida do utilizador para gerar insights."""
     user_data = find_user(st.session_state['email'])
-    if not user_data or 'encrypted_gemini_key' not in user_data:
-        st.error("Nenhuma chave de API do Gemini configurada.")
-        st.info("Por favor, adicione a sua chave na página 'Minha Conta' para usar esta funcionalidade.")
-        st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Chave de IA", icon="🤖")
-        return None
-
-    try:
-        # 2. Desencripta a chave e configura a API
-        api_key = decrypt_token(user_data['encrypted_gemini_key'])
-        genai.configure(api_key=api_key)
-        # Usa o modelo guardado no perfil do utilizador, ou o 'flash' como padrão
-        model_to_use = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
-        model = genai.GenerativeModel(model_to_use)
-
-    except Exception as e:
-        st.error(f"Erro ao configurar a API do Gemini. A sua chave pode ser inválida. Detalhes: {e}")
-        return None
-
-    # Constrói um prompt detalhado para a IA
     prompt = f"""
     Aja como um Analista de Negócios especialista em projetos de software e metodologias ágeis.
     O seu trabalho é analisar os dados de um dashboard do Jira para o projeto "{project_name}" e fornecer um resumo executivo em português.
@@ -349,19 +381,37 @@ def get_ai_insights(project_name, chart_summaries):
     Aqui estão os dados resumidos de cada gráfico no dashboard:
     {chr(10).join(f"- {s}" for s in chart_summaries if s)}
 
-    Com base nestes dados, por favor, gere uma análise concisa e acionável. A sua resposta deve ser formatada em Markdown e dividida nas seguintes secções:
+    Com base nestes dados, gere uma análise concisa e acionável. A sua resposta deve ser formatada em Markdown e dividida nas seguintes secções:
     1.  **🎯 Pontos Fortes:** O que os dados indicam que está a correr bem? Seja específico.
     2.  **⚠️ Pontos de Atenção:** Onde podem estar os riscos, gargalos ou desvios? Aponte as métricas preocupantes.
     3.  **🚀 Recomendações:** Sugira 1 a 2 ações práticas que a equipa ou o gestor do projeto poderiam tomar com base nesta análise.
     """
 
-    # 4. Chama a API e retorna a resposta
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        st.error(f"Ocorreu um erro ao comunicar com a API do Gemini: {e}")
-        return "Não foi possível gerar a análise. Tente novamente mais tarde."
+    if provider == "Google Gemini":
+        api_key_encrypted = user_data.get('encrypted_gemini_key')
+        if not api_key_encrypted: st.error("Nenhuma chave de API do Gemini configurada."); return None
+        try:
+            api_key = decrypt_token(api_key_encrypted); genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e: st.error(f"Erro com a API do Gemini: {e}"); return None
+
+    elif provider == "OpenAI (ChatGPT)":
+        api_key_encrypted = user_data.get('encrypted_openai_key')
+        if not api_key_encrypted: st.error("Nenhuma chave de API da OpenAI configurada."); return None
+        try:
+            api_key = decrypt_token(api_key_encrypted); client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Aja como um Analista de Negócios especialista em projetos de software..."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content
+        except Exception as e: st.error(f"Erro com a API da OpenAI: {e}"); return None
 
 def generate_chart_config_from_text(prompt, numeric_cols, categorical_cols):
     """
@@ -427,3 +477,291 @@ def generate_chart_config_from_text(prompt, numeric_cols, categorical_cols):
         config['num_field'] = 'Issues'
 
     return config, None
+
+def generate_risk_analysis_with_ai(project_name, metrics_summary):
+    """
+    Usa a API de IA preferida do utilizador para analisar um resumo de métricas
+    e gerar uma lista de descrições de riscos potenciais.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    prompt = f"""
+    Aja como um Agile Coach especialista. Analise o seguinte resumo de métricas do projeto "{project_name}":
+    {metrics_summary}
+
+    Com base nestes dados, identifique 2 a 3 riscos ou pontos de atenção críticos.
+    A sua resposta deve ser uma lista de descrições de riscos, formatada como um JSON array de strings.
+    Exemplo de resposta: ["O Lead Time médio está a aumentar, o que pode indicar gargalos no início do fluxo.", "A baixa taxa de entregas no último mês sugere uma possível sobrecarga da equipa ou bloqueios externos."]
+    Responda APENAS com o JSON array.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            api_key = decrypt_token(user_data['encrypted_gemini_key'])
+            genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            # Limpa a resposta para garantir que é um JSON válido
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+            return json.loads(cleaned_response)
+
+        elif provider == "OpenAI (ChatGPT)":
+            api_key = decrypt_token(user_data['encrypted_openai_key'])
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Responda apenas com um JSON array de strings."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"} # Pede à OpenAI para forçar a saída em JSON
+            )
+            # A resposta da OpenAI pode vir num formato ligeiramente diferente, ajuste se necessário
+            return json.loads(response.choices[0].message.content)
+
+    except Exception as e:
+        st.error(f"Erro ao gerar análise de riscos: {e}")
+        return [f"Erro na comunicação com a API: {e}"]
+
+def generate_ai_risk_assessment(project_name, metrics_summary):
+    """
+    Usa a API de IA preferida do utilizador para analisar métricas e gerar
+    um nível de risco e uma lista de descrições de riscos.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    prompt = f"""
+    Aja como um Gestor de Projetos Sênior. Analise o seguinte resumo de métricas do projeto "{project_name}":
+    {metrics_summary}
+
+    Com base nestes dados, faça o seguinte:
+    1.  Classifique o Nível de Risco geral do projeto como "Baixo", "Moderado", "Alto" ou "Crítico".
+    2.  Identifique de 2 a 3 riscos ou pontos de atenção críticos que justificam essa classificação.
+
+    A sua resposta deve ser um objeto JSON com a seguinte estrutura:
+    {{
+      "risk_level": "Seu Nível de Risco aqui",
+      "risks": [
+        "Descrição detalhada do primeiro risco.",
+        "Descrição detalhada do segundo risco."
+      ]
+    }}
+    Responda APENAS com o objeto JSON.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            api_key = decrypt_token(user_data['encrypted_gemini_key'])
+            genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+            return json.loads(cleaned_response)
+
+        elif provider == "OpenAI (ChatGPT)":
+            api_key = decrypt_token(user_data['encrypted_openai_key'])
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Responda apenas com um objeto JSON válido."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            return json.loads(response.choices[0].message.content)
+
+    except Exception as e:
+        st.error(f"Erro ao gerar análise de riscos: {e}")
+        return {"risk_level": "Erro", "risks": [f"Erro na comunicação com a API: {e}"]}
+
+def get_ai_rag_status(project_name, metrics_summary):
+    """
+    Usa a API de IA preferida do utilizador para analisar métricas e determinar
+    um status RAG para o projeto.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    prompt = f"""
+    Aja como um Diretor de Projetos (PMO). Analise o seguinte resumo de métricas do projeto "{project_name}":
+    {metrics_summary}
+
+    Com base nestes dados, classifique o status do projeto em UMA das seguintes quatro categorias: 
+    "🟢 No prazo", "🟡 Atraso moderado", "🔴 Atrasado", "⚪ Não definido".
+
+    Use o seguinte critério:
+    - Se o percentual concluído for alto e o desvio de prazo for negativo ou próximo de zero, o status é "🟢 No prazo".
+    - Se o percentual concluído for médio e o desvio de prazo for positivo, mas pequeno, o status é "🟡 Atraso moderado".
+    - Se o percentual concluído for baixo e o desvio de prazo for significativamente positivo, o status é "🔴 Atrasado".
+    - Se os dados forem insuficientes para uma conclusão, use "⚪ Não definido".
+
+    Responda APENAS com a string da categoria escolhida, sem nenhuma outra palavra.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            api_key = decrypt_token(user_data['encrypted_gemini_key'])
+            genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text.strip()
+
+        elif provider == "OpenAI (ChatGPT)":
+            api_key = decrypt_token(user_data['encrypted_openai_key'])
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Responda apenas com a string da categoria escolhida."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        st.error(f"Erro ao gerar status RAG: {e}")
+        return "⚪ Erro"
+    
+
+def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
+    """
+    Cria a interface para o utilizador definir uma dimensão combinada e retorna
+    o novo nome da dimensão e um dataframe com a nova coluna.
+    """
+    st.info("Selecione dois campos para criar uma dimensão combinada (ex: 'Data de Conclusão - Status').", icon="🔗")
+    
+    c1, c2, c3 = st.columns(3)
+    
+    field1_options = [""] + date_cols + categorical_cols
+    field2_options = [""] + categorical_cols + date_cols
+    
+    field1 = c1.selectbox("Campo 1", options=field1_options, key=f"combo_field1_{key_suffix}")
+    separator = c2.text_input("Separador", value=" - ", key=f"combo_sep_{key_suffix}")
+    field2 = c3.selectbox("Campo 2", options=field2_options, key=f"combo_field2_{key_suffix}")
+    
+    if field1 and field2:
+        new_dimension_name = f"{field1}{separator}{field2}"
+        df_copy = df.copy()
+        
+        field1_str = pd.to_datetime(df_copy[field1]).dt.strftime('%Y-%m-%d') if field1 in date_cols else df_copy[field1].astype(str).fillna('')
+        field2_str = pd.to_datetime(df_copy[field2]).dt.strftime('%Y-%m-%d') if field2 in date_cols else df_copy[field2].astype(str).fillna('')
+        
+        df_copy[new_dimension_name] = field1_str + separator + field2_str
+        return new_dimension_name, df_copy
+        
+    return None, df
+
+def get_ai_forecast_analysis(project_name, scope_total, completed_pct, avg_velocity, trend_velocity, forecast_date_str):
+    """
+    Usa a API de IA preferida do utilizador para analisar as métricas de forecast
+    e gerar um resumo executivo.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    # Constrói um resumo das métricas para enviar à IA
+    metrics_summary = f"""
+    - Escopo Total: {scope_total}
+    - Percentual Concluído: {completed_pct}%
+    - Velocidade Média (histórica): {avg_velocity:.1f} por semana
+    - Velocidade de Tendência (recente): {trend_velocity:.1f} por semana
+    - Previsão de Conclusão: {forecast_date_str}
+    """
+    
+    prompt = f"""
+    Aja como um Gestor de Projetos especialista em análise de dados. Analise o seguinte resumo de métricas de forecast para o projeto "{project_name}":
+    {metrics_summary}
+
+    Com base nestes dados, escreva um parágrafo de "Resumo Executivo". O seu texto deve ser conciso e focado em responder às seguintes perguntas:
+    1.  Qual é a saúde geral do projeto com base no progresso e no escopo?
+    2.  A equipa está a acelerar ou a desacelerar, comparando a velocidade média com a tendência recente?
+    3.  A previsão de entrega é realista? Há algum risco implícito nos números?
+
+    Seja direto e use uma linguagem clara e profissional.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            api_key = decrypt_token(user_data['encrypted_gemini_key'])
+            genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+
+        elif provider == "OpenAI (ChatGPT)":
+            api_key = decrypt_token(user_data['encrypted_openai_key'])
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Aja como um Gestor de Projetos especialista em análise de dados."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content
+
+    except Exception as e:
+        st.error(f"Erro ao gerar a análise de forecast: {e}")
+        return "Não foi possível gerar a análise de forecast."
+    
+def get_ai_planning_analysis(project_name, remaining_work, remaining_weeks, required_throughput, trend_velocity, people_needed, current_team_size):
+    """
+    Usa a API de IA preferida do utilizador para analisar um cenário de planeamento
+    e gerar uma análise de viabilidade.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    # Constrói um resumo das métricas para enviar à IA
+    metrics_summary = f"""
+    - Trabalho Restante: {remaining_work}
+    - Semanas Restantes até a meta: {remaining_weeks:.1f}
+    - Vazão (Throughput) Necessária: {required_throughput:.1f} por semana
+    - Vazão de Tendência (performance recente): {trend_velocity:.1f} por semana
+    - Pessoas Necessárias (estimativa): {people_needed}
+    - Tamanho da Equipa Atual: {current_team_size}
+    """
+    
+    prompt = f"""
+    Aja como um Agile Coach Sênior. Analise o seguinte cenário de planeamento de entrega para o projeto "{project_name}":
+    {metrics_summary}
+
+    Com base nesta comparação entre o necessário e o histórico, escreva um parágrafo de "Análise de Viabilidade". O seu texto deve ser conciso e focado em responder às seguintes perguntas:
+    1.  O plano é realista? Compare a "Vazão Necessária" com a "Vazão de Tendência".
+    2.  Quais são os principais riscos se a vazão necessária for muito maior que a tendência? (Ex: risco de burnout, queda na qualidade).
+    3.  Com base na estimativa de "Pessoas Necessárias" vs. o tamanho atual da equipa, qual é a sua recomendação? (Ex: "o plano é viável com a equipa atual", "o plano exige recursos adicionais", etc.).
+
+    Seja direto e use uma linguagem clara e profissional.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            api_key = decrypt_token(user_data['encrypted_gemini_key'])
+            genai.configure(api_key=api_key)
+            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+
+        elif provider == "OpenAI (ChatGPT)":
+            api_key = decrypt_token(user_data['encrypted_openai_key'])
+            client = openai.OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Aja como um Agile Coach Sênior."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return response.choices[0].message.content
+
+    except Exception as e:
+        st.error(f"Erro ao gerar a análise de planeamento: {e}")
+        return "Não foi possível gerar a análise de planeamento."

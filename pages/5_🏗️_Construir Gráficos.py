@@ -135,51 +135,86 @@ categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in m
 measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols; all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols)))
 
 # --- Filtros Dinâmicos ---
+st.divider()
 st.subheader("Filtros da Pré-visualização")
-if not editing_mode and 'creator_filters' not in st.session_state: st.session_state.creator_filters = []
-elif editing_mode and 'creator_filters' not in st.session_state: st.session_state.creator_filters = chart_data.get('filters', [])
-with st.container():
-    for i, f in enumerate(st.session_state.creator_filters):
-        cols = st.columns([3, 4, 1])
-        previous_field = f.get('field'); all_filterable_fields = [""] + categorical_cols + date_cols
-        selected_field = cols[0].selectbox("Campo a Filtrar", all_filterable_fields, key=f"filter_field_{i}", index=all_filterable_fields.index(previous_field) if previous_field in all_filterable_fields else 0)
-        if selected_field != previous_field:
-            st.session_state.creator_filters[i] = {'field': selected_field, 'values': None}
-            if f'period_type_{i}' in st.session_state: del st.session_state[f'period_type_{i}']
-            if f'custom_date_range_{i}' in st.session_state: del st.session_state[f'custom_date_range_{i}']
-            st.rerun()
-        st.session_state.creator_filters[i]['field'] = selected_field
-        if selected_field:
-            if selected_field in date_cols:
-                period_options = ["Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias", "Últimos 180 dias", "Período Personalizado"]
-                if f'period_type_{i}' not in st.session_state: st.session_state[f'period_type_{i}'] = "Últimos 30 dias"
-                period_type = cols[1].selectbox(f"Período para '{selected_field}'", period_options, key=f'period_type_{i}')
-                if period_type == "Período Personalizado":
-                    if f'custom_date_range_{i}' not in st.session_state: st.session_state[f'custom_date_range_{i}'] = (datetime.now().date() - timedelta(days=30), datetime.now().date())
-                    selected_values = st.date_input(f"Período para '{selected_field}'", key=f"custom_date_range_{i}")
-                else:
-                    days_map = {"Últimos 7 dias": 7, "Últimos 30 dias": 30, "Últimos 90 dias": 90, "Últimos 180 dias": 180}
-                    end_date = datetime.now().date(); start_date = end_date - timedelta(days=days_map[period_type])
-                    selected_values = (start_date, end_date)
-                st.session_state.creator_filters[i]['values'] = selected_values
-            else: # Categórico
-                default_val = f.get('values') if isinstance(f.get('values'), list) else []
-                options = sorted(df[selected_field].dropna().unique())
-                selected_values = cols[1].multiselect(f"Valores para '{selected_field}'", options, default=default_val, key=f"filter_value_{i}")
-                st.session_state.creator_filters[i]['values'] = selected_values
-        if cols[2].button("❌", key=f"remove_filter_{i}", use_container_width=True, help=f"Remover filtro {i+1}"):
-            st.session_state.creator_filters.pop(i); st.rerun()
-if st.button("➕ Adicionar Filtro", use_container_width=True):
-    st.session_state.creator_filters.append({}); st.rerun()
 
+if 'creator_filters' not in st.session_state:
+    if editing_mode:
+        st.session_state.creator_filters = chart_data.get('filters', [])
+    else:
+        st.session_state.creator_filters = []
+
+def add_filter():
+    st.session_state.creator_filters.append({})
+
+def remove_filter(index):
+    st.session_state.creator_filters.pop(index)
+
+filter_container = st.container()
+with filter_container:
+    for i, f in enumerate(st.session_state.creator_filters):
+        cols = st.columns([2, 2, 3, 1])
+        
+        all_filterable_fields = [""] + categorical_cols + numeric_cols
+        
+        # --- 1. Selecionar o Campo ---
+        selected_field = cols[0].selectbox("Campo", options=all_filterable_fields, key=f"filter_field_{i}", index=all_filterable_fields.index(f.get('field')) if f.get('field') in all_filterable_fields else 0)
+        st.session_state.creator_filters[i]['field'] = selected_field
+        
+        # --- 2. Selecionar Operador e Valor ---
+        if selected_field:
+            field_type = 'numeric' if selected_field in numeric_cols else 'categorical'
+            op_options = ['está em', 'não está em', 'é igual a', 'não é igual a'] if field_type == 'categorical' else ['maior que', 'menor que', 'entre', 'é igual a', 'não é igual a']
+            
+            operator = cols[1].selectbox("Operador", options=op_options, key=f"filter_op_{i}", index=op_options.index(f.get('operator')) if f.get('operator') in op_options else 0)
+            st.session_state.creator_filters[i]['operator'] = operator
+            
+            with cols[2]:
+                if operator in ['está em', 'não está em']:
+                    options = sorted(df[selected_field].dropna().unique())
+                    value = st.multiselect("Valores", options=options, key=f"filter_val_multi_{i}", default=f.get('value', []))
+                elif operator == 'entre':
+                    min_val, max_val = df[selected_field].min(), df[selected_field].max()
+                    value = st.slider("Intervalo", float(min_val), float(max_val), f.get('value', [min_val, max_val]), key=f"filter_val_slider_{i}")
+                else: # Inputs únicos
+                    if field_type == 'categorical':
+                        options = sorted(df[selected_field].dropna().unique())
+                        value = st.selectbox("Valor", options=options, key=f"filter_val_single_cat_{i}", index=options.index(f.get('value')) if f.get('value') in options else 0)
+                    else: # Numérico
+                        value = st.number_input("Valor", key=f"filter_val_single_num_{i}", value=f.get('value', 0.0))
+            st.session_state.creator_filters[i]['value'] = value
+
+        cols[3].button("❌", key=f"remove_filter_{i}", on_click=remove_filter, args=(i,), use_container_width=True)
+
+st.button("➕ Adicionar Filtro", on_click=add_filter, use_container_width=True)
+
+# --- Lógica de Aplicação dos Filtros (Atualizada) ---
 filtered_df = df.copy()
 for f in st.session_state.creator_filters:
-    field, values = f.get('field'), f.get('values')
-    if field and values:
-        if field in categorical_cols: filtered_df = filtered_df[filtered_df[field].isin(values)]
-        elif field in date_cols and len(values) == 2:
-            start_date, end_date = pd.to_datetime(values[0]), pd.to_datetime(values[1])
-            filtered_df = filtered_df[(pd.to_datetime(filtered_df[field]) >= start_date) & (pd.to_datetime(filtered_df[field]) <= end_date)]
+    field, op, val = f.get('field'), f.get('operator'), f.get('value')
+    if field and op and val is not None:
+        if op == 'é igual a': filtered_df = filtered_df[filtered_df[field] == val]
+        elif op == 'não é igual a': filtered_df = filtered_df[filtered_df[field] != val]
+        elif op == 'está em': filtered_df = filtered_df[filtered_df[field].isin(val)]
+        elif op == 'não está em': filtered_df = filtered_df[~filtered_df[field].isin(val)]
+        elif op == 'maior que': filtered_df = filtered_df[pd.to_numeric(filtered_df[field], errors='coerce') > val]
+        elif op == 'menor que': filtered_df = filtered_df[pd.to_numeric(filtered_df[field], errors='coerce') < val]
+        elif op == 'entre' and len(val) == 2:
+            filtered_df = filtered_df[pd.to_numeric(filtered_df[field], errors='coerce').between(val[0], val[1])]
+        if field in date_cols:
+            if op == "Períodos Relativos":
+                # --- NOVOS MAPEAMENTOS ADICIONADOS AQUI ---
+                days_map = {
+                    "Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30, 
+                    "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120, 
+                    "Últimos 150 dias": 150, "Últimos 180 dias": 180
+                }
+                end_date = pd.to_datetime(datetime.now().date())
+                start_date = end_date - timedelta(days=days_map.get(val, 0))
+                filtered_df = filtered_df[(pd.to_datetime(filtered_df[field]) >= start_date) & (pd.to_datetime(filtered_df[field]) <= end_date)]
+            elif op == "Período Personalizado" and len(val) == 2:
+                start_date, end_date = pd.to_datetime(val[0]), pd.to_datetime(val[1])
+                filtered_df = filtered_df[(pd.to_datetime(filtered_df[field]) >= start_date) & (pd.to_datetime(filtered_df[field]) <= end_date)]
 
 st.divider()
 
@@ -191,73 +226,100 @@ chart_config = {}
 if creation_mode == "Construtor Visual":
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
     default_creator_index = creator_type_options.index(chart_data.get('creator_type')) if editing_mode and chart_data.get('creator_type') in creator_type_options else 0
-    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
+    
+    chart_creator_type = st.radio(
+        "Selecione o tipo de visualização:",
+        creator_type_options,
+        key="visual_creator_type", # Chave única para este seletor
+        horizontal=True,
+        index=default_creator_index
+    )
+    
+    # Define um dataframe temporário que pode ser modificado pelos construtores
+    df_for_preview = filtered_df.copy()
+
     with st.container(border=True):
         if chart_creator_type == "Gráfico X-Y":
-            c1, c2, c3, c4 = st.columns(4)
-            x_options = date_cols + numeric_cols; y_options = numeric_cols; color_options = ["Nenhum"] + categorical_cols; type_options = ["Dispersão", "Linha"]
+            # --- Interface Principal ---
+            st.markdown("###### **Configuração do Gráfico X-Y**")
+            c1, c2, c3 = st.columns(3)
+            x_options = date_cols + numeric_cols
+            y_options = numeric_cols
+            type_options = ["Dispersão", "Linha"]
+
             x_idx = x_options.index(chart_data.get('x')) if editing_mode and chart_data.get('x') in x_options else 0
             y_idx = y_options.index(chart_data.get('y')) if editing_mode and chart_data.get('y') in y_options else 0
-            color_idx = color_options.index(chart_data.get('color_by')) if editing_mode and chart_data.get('color_by') in color_options else 0
             type_idx = type_options.index(chart_data.get('type', 'dispersão').capitalize()) if editing_mode and chart_data.get('type','').capitalize() in type_options else 0
-            x = c1.selectbox("Eixo X", x_options, index=x_idx); y = c2.selectbox("Eixo Y", y_options, index=y_idx)
-            color_by = c3.selectbox("Colorir por (Dimensão)", color_options, index=color_idx)
-            chart_type = c4.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
-            custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', f"{y} vs {x}"), key="chart_title_input_xy")
+            
+            x = c1.selectbox("Eixo X", x_options, index=x_idx)
+            y = c2.selectbox("Eixo Y", y_options, index=y_idx)
+            chart_type = c3.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
+            
+            st.divider()
+
+            # --- Interface para Cor e Dimensão Combinada ---
+            COMBINED_DIMENSION_OPTION = "— Criar Dimensão Combinada —"
+            color_options = ["Nenhum", COMBINED_DIMENSION_OPTION] + categorical_cols
+            color_idx = color_options.index(chart_data.get('color_by')) if editing_mode and chart_data.get('color_by') in color_options else 0
+            color_selection = st.selectbox("Colorir por (Dimensão Opcional)", color_options, index=color_idx)
+            
+            final_color_by = color_selection
+            if color_selection == COMBINED_DIMENSION_OPTION:
+                with st.container(border=True):
+                    final_color_by, df_for_preview = combined_dimension_ui(filtered_df, categorical_cols, date_cols, key_suffix="xy")
+
+            # --- Título e Rótulos ---
+            custom_title_input = st.text_input("Título do Gráfico:", value=chart_data.get('title', f"{y} vs {x}"), key="chart_title_input_xy")
             show_labels = st.toggle("Exibir Rótulos de Dados", key="xy_labels", value=chart_data.get('show_data_labels', False))
-            chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'x': x, 'y': y, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'color_by': color_by, 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
-        elif chart_creator_type == "Gráfico Agregado":
-            c1, c2, c3, c4 = st.columns([2, 2, 1, 2])
-            dim_idx = categorical_cols.index(chart_data.get('dimension')) if editing_mode and chart_data.get('dimension') in categorical_cols else 0
-            measure_idx = measure_options.index(chart_data.get('measure')) if editing_mode and chart_data.get('measure') in measure_options else 0
-            dim = c1.selectbox("Dimensão", categorical_cols, index=dim_idx); measure = c2.selectbox("Medida", measure_options, index=measure_idx)
-            if measure in categorical_cols:
-                agg = 'Contagem Distinta'; c3.info("Contagem Distinta", icon="🔢")
-            elif measure in numeric_cols:
-                agg_options = ["Soma", "Média"]; agg_idx = agg_options.index(chart_data.get('agg', 'Soma')) if editing_mode and chart_data.get('agg') in agg_options else 0
-                agg = c3.radio("Cálculo", agg_options, index=agg_idx, horizontal=True)
-            else:
-                agg = 'Contagem'; c3.info("Contagem", icon="🧮")
-            format_options = ["Barras", "Linhas", "Pizza", "Treemap", "Funil", "Tabela"]
-            type_map_inv = {'barra': 'Barras', 'linha_agregada': 'Linhas', 'pizza': 'Pizza', 'treemap': 'Treemap', 'funil': 'Funil', 'tabela':'Tabela'}
-            type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
-            chart_type_str = c4.radio("Formato", format_options, index=type_idx, horizontal=True); chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
-            auto_title = f"Análise de '{measure}' por '{dim}'" if chart_type != 'tabela' else "Tabela de Dados"
-            custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
-            show_labels = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=chart_data.get('show_data_labels', False))
-            if chart_type == 'tabela':
-                selected_cols = st.multiselect("Selecione as colunas para a tabela", options=all_cols_for_table, default=chart_data.get('columns', []))
-                chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', [])}
-            else:
-                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': dim, 'measure': measure, 'agg': agg, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
+            chart_config = {
+                'id': str(uuid.uuid4()), 'type': chart_type, 'x': x, 'y': y, 
+                'title': custom_title_input.strip(),
+                'creator_type': chart_creator_type, 'source_type': 'visual', 
+                'color_by': final_color_by, 'filters': st.session_state.get('creator_filters', []), 
+                'show_data_labels': show_labels
+            }
 
         elif chart_creator_type == "Gráfico Agregado":
-            c1, c2, c3, c4 = st.columns([2, 2, 1, 2])
-            dim_idx = categorical_cols.index(chart_data.get('dimension')) if editing_mode and chart_data.get('dimension') in categorical_cols else 0
-            measure_idx = measure_options.index(chart_data.get('measure')) if editing_mode and chart_data.get('measure') in measure_options else 0
-            dim = c1.selectbox("Dimensão", categorical_cols, index=dim_idx)
-            measure = c2.selectbox("Medida", measure_options, index=measure_idx)
+            # --- Interface Principal ---
+            st.markdown("###### **Configuração do Gráfico Agregado**")
+            COMBINED_DIMENSION_OPTION = "— Criar Dimensão Combinada —"
+            dim_options = [COMBINED_DIMENSION_OPTION] + categorical_cols
+            dim_selection = st.selectbox("Dimensão (Agrupar por)", options=dim_options, index=dim_options.index(chart_data.get('dimension')) if editing_mode and chart_data.get('dimension') in dim_options else 0)
+            
+            final_dimension = dim_selection
+            if dim_selection == COMBINED_DIMENSION_OPTION:
+                with st.container(border=True):
+                    final_dimension, df_for_preview = combined_dimension_ui(filtered_df, categorical_cols, date_cols, key_suffix="agg")
+
+            st.divider()
+            c1, c2, c3 = st.columns([2, 1, 2])
+            measure = c1.selectbox("Medida (Calcular)", options=measure_options, index=measure_options.index(chart_data.get('measure')) if editing_mode and chart_data.get('measure') in measure_options else 0)
+            
             if measure in categorical_cols:
-                agg = 'Contagem Distinta'; c3.info("Contagem Distinta", icon="🔢")
+                agg = 'Contagem Distinta'; c2.info("Contagem Distinta", icon="🔢")
             elif measure in numeric_cols:
                 agg_options = ["Soma", "Média"]; agg_idx = agg_options.index(chart_data.get('agg', 'Soma')) if editing_mode and chart_data.get('agg') in agg_options else 0
-                agg = c3.radio("Cálculo", agg_options, index=agg_idx, horizontal=True)
-            else:
-                agg = 'Contagem'; c3.info("Contagem", icon="🧮")
+                agg = c2.radio("Cálculo", agg_options, index=agg_idx, horizontal=True)
+            else: # Contagem de Issues
+                agg = 'Contagem'; c2.info("Contagem", icon="🧮")
+
             format_options = ["Barras", "Linhas", "Pizza", "Treemap", "Funil", "Tabela"]
             type_map_inv = {'barra': 'Barras', 'linha_agregada': 'Linhas', 'pizza': 'Pizza', 'treemap': 'Treemap', 'funil': 'Funil', 'tabela':'Tabela'}
             type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
-            chart_type_str = c4.radio("Formato", format_options, index=type_idx, horizontal=True)
+            chart_type_str = c3.radio("Formato", format_options, index=type_idx, horizontal=True)
             chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
-            auto_title = f"Análise de '{measure}' por '{dim}'" if chart_type != 'tabela' else "Tabela de Dados"
-            custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
+            
+            # --- Título, Rótulos e Configuração Final ---
+            auto_title = f"Análise de '{measure}' por '{final_dimension}'" if chart_type != 'tabela' and final_dimension else f"Análise de '{measure}'"
+            custom_title_input = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
             show_labels = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=chart_data.get('show_data_labels', False))
+
             if chart_type == 'tabela':
                 selected_cols = st.multiselect("Selecione as colunas para a tabela", options=all_cols_for_table, default=chart_data.get('columns', []))
-                chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', [])}
+                chart_config = {'id': str(uuid.uuid4()), 'type': chart_type, 'columns': selected_cols, 'title': custom_title_input.strip(), 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', [])}
             else:
-                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': dim, 'measure': measure, 'agg': agg, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
-    
+                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': final_dimension, 'measure': measure, 'agg': agg, 'title': custom_title_input.strip(), 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}                        
+        
         # --- CONSTRUTOR DE INDICADOR (KPI) (COMPLETO) ---
         elif chart_creator_type == "Indicador (KPI)":
             
@@ -409,12 +471,12 @@ if creation_mode == "Construtor Visual":
             aggfunc = c4.selectbox("Usando o Cálculo:", options=agg_opts, key="pivot_agg", index=agg_idx)
 
             auto_title = f"{aggfunc} de '{values}' por '{rows}' e '{columns}'"
-            custom_title = st.text_input("Título da Tabela:", value=chart_data.get('title', auto_title))
+            custom_title_input = st.text_input("Título da Tabela:", value=chart_data.get('title', auto_title))
 
             
             chart_config = {
-                'id': str(uuid.uuid4()), 'type': 'pivot_table',
-                'title': f"{aggfunc} de '{values}' por '{rows}' e '{columns}'",
+                'id': str(uuid.uuid4()), 'type': 'pivot_table', 
+                'title': custom_title_input.strip(), # Limpa o título
                 'rows': rows, 'columns': columns, 'values': values, 'aggfunc': aggfunc,
                 'creator_type': chart_creator_type, 'source_type': 'visual',
                 'filters': st.session_state.get('creator_filters', [])
@@ -443,7 +505,8 @@ if creation_mode == "Gerar com IA ✨":
 st.divider()
 st.subheader("Pré-visualização da Configuração Atual")
 if chart_config:
-    with st.container(border=True): render_chart(chart_config, filtered_df)
+    with st.container(border=True):
+        render_chart(chart_config, df_for_preview)
 else:
     st.info("Configure ou gere uma visualização acima para ver a pré-visualização.")
 

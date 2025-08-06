@@ -117,41 +117,62 @@ with tab2:
 
 with tab3:
     st.subheader("🤖 Configurações de Inteligência Artificial")
+    st.caption("Selecione o seu provedor de IA preferido e insira a sua chave de API pessoal.")
+
     with st.container(border=True):
-        st.caption("Para usar as funcionalidades de IA, como a geração de insights, você precisa de fornecer a sua própria chave de API do Google Gemini e escolher o modelo a ser utilizado.")
+        provider_options = ["Google Gemini", "OpenAI (ChatGPT)"]
+        user_provider = user_data.get('ai_provider_preference', 'Google Gemini')
         
-        # --- Campo para a Chave de API ---
-        key_exists = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
-        if key_exists: st.success("Uma chave de API do Gemini já está configurada.", icon="✅")
-        else: st.warning("Nenhuma chave de API do Gemini encontrada.", icon="⚠️")
+        selected_provider = st.radio(
+            "Selecione o seu Provedor de IA Preferido:",
+            provider_options,
+            index=provider_options.index(user_provider) if user_provider in provider_options else 0,
+            horizontal=True
+        )
 
-        with st.form("gemini_config_form"):
-            api_key = st.text_input("Sua Chave de API do Google Gemini", type="password", placeholder="Cole a sua chave de API aqui")
-            
-            # --- LINK DE AJUDA ADICIONADO AQUI ---
-            st.caption("Não tem uma chave? [**Clique aqui para criar uma gratuitamente no Google AI Studio**](https://aistudio.google.com/app/apikey)")
+        if selected_provider != user_provider:
+            save_user_ai_provider_preference(email, selected_provider)
+            st.session_state['user_data'] = find_user(email)
+            st.rerun()
+        
+        st.divider()
 
-            # --- Seletor de Modelo ---
-            model_options = {
-                "Gemini 1.5 Pro (Mais poderoso)": "gemini-1.5-pro-latest",
-                "Gemini 1.5 Flash (Mais rápido)": "gemini-1.5-flash-latest"
-            }
-            user_preference = user_data.get('ai_model_preference', 'gemini-1.5-pro-latest')
-            default_model_name = next((name for name, model_id in model_options.items() if model_id == user_preference), None)
+        if selected_provider == "Google Gemini":
+            key_exists = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
+            if key_exists: st.success("Uma chave de API do Gemini já está configurada.", icon="✅")
             
-            selected_model_name = st.selectbox(
-                "Modelo de IA Preferido",
-                options=model_options.keys(),
-                index=list(model_options.keys()).index(default_model_name) if default_model_name else 0
-            )
+            with st.form("gemini_form"):
+                api_key_input = st.text_input("Chave de API do Google Gemini", type="password", placeholder="Cole a sua chave aqui para adicionar ou alterar")
+                model_options = {"Gemini 1.5 Pro (Mais poderoso)": "gemini-1.5-pro-latest", "Gemini 1.5 Flash (Mais rápido)": "gemini-1.5-flash-latest"}
+                user_model = user_data.get('ai_model_preference', 'gemini-1.5-pro-latest')
+                default_model_name = next((name for name, model_id in model_options.items() if model_id == user_model), None)
+                selected_model_name = st.selectbox("Modelo Gemini Preferido", options=model_options.keys(), index=list(model_options.keys()).index(default_model_name) if default_model_name else 0)
+                st.caption("[Crie uma chave gratuitamente no Google AI Studio](https://aistudio.google.com/app/apikey)")
+                
+                s1, s2 = st.columns([1,1])
+                if s1.form_submit_button("Salvar / Alterar", use_container_width=True, type="primary"):
+                    if api_key_input: save_user_gemini_key(email, encrypt_token(api_key_input))
+                    if 'selected_model_name' in locals(): save_user_ai_model_preference(email, model_options[selected_model_name])
+                    st.session_state['user_data'] = find_user(email); st.success("Configurações do Gemini guardadas!"); st.rerun()
+                if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
+                    remove_user_gemini_key(email)
+                    st.session_state['user_data'] = find_user(email); st.success("Chave do Gemini removida!"); st.rerun()
+
+        else: # OpenAI
+            key_exists = 'encrypted_openai_key' in user_data and user_data['encrypted_openai_key']
+            if key_exists: st.success("Uma chave de API da OpenAI já está configurada.", icon="✅")
             
-            if st.form_submit_button("Salvar Configurações de IA", use_container_width=True, type="primary"):
-                if api_key:
-                    encrypted_key = encrypt_token(api_key)
-                    save_user_gemini_key(email, encrypted_key)
-                
-                selected_model_id = model_options[selected_model_name]
-                save_user_ai_model_preference(email, selected_model_id)
-                
-                st.success("Suas configurações de IA foram guardadas com segurança!")
-                st.rerun()
+            with st.form("openai_form"):
+                api_key_input = st.text_input("Chave de API da OpenAI", type="password", placeholder="Cole a sua chave de API aqui (sk-...)")
+                st.caption("[Crie uma chave no site da OpenAI](https://platform.openai.com/api-keys)")
+
+                s1, s2 = st.columns([1,1])
+                if s1.form_submit_button("Salvar / Alterar Chave", use_container_width=True, type="primary"):
+                    if api_key_input:
+                        save_user_openai_key(email, encrypt_token(api_key_input))
+                        st.session_state['user_data'] = find_user(email); st.success("Chave da OpenAI guardada!"); st.rerun()
+                    else:
+                        st.warning("Por favor, insira uma chave para salvar.")
+                if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
+                    remove_user_openai_key(email)
+                    st.session_state['user_data'] = find_user(email); st.success("Chave da OpenAI removida!"); st.rerun()
