@@ -370,7 +370,7 @@ def _get_ai_client_and_model(provider, user_data):
         if not api_key_encrypted:
             st.warning("Nenhuma chave de API do Gemini configurada.", icon="🔑")
             st.info("Para usar esta funcionalidade, por favor, adicione a sua chave na página 'Minha Conta'.")
-            st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
+            st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
             return None
         try:
             api_key = decrypt_token(api_key_encrypted)
@@ -385,7 +385,7 @@ def _get_ai_client_and_model(provider, user_data):
         if not api_key_encrypted:
             st.warning("Nenhuma chave de API da OpenAI configurada.", icon="🔑")
             st.info("Para usar esta funcionalidade, por favor, adicione a sua chave na página 'Minha Conta'.")
-            st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
+            st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
             return None
         try:
             api_key = decrypt_token(api_key_encrypted)
@@ -422,62 +422,64 @@ def get_ai_insights(project_name, chart_summaries, provider):
             return response.choices[0].message.content
     except Exception as e:
         st.error(f"Erro ao gerar insights: {e}"); return None
-
+    
 def generate_chart_config_from_text(prompt, numeric_cols, categorical_cols):
     """
     Usa a API de IA preferida do utilizador para gerar uma configuração de gráfico.
-    Agora, com tratamento robusto para respostas vazias da IA.
+    Versão aprimorada com prompt mais detalhado e verificação de segurança.
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
     
-    # 1. Obtém o cliente de IA de forma segura
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
-        return None, "A sua chave de API não está configurada ou é inválida. Por favor, verifique-a na página 'Minha Conta'."
+        return None, "A sua chave de API não está configurada ou é inválida."
 
-    # 2. Constrói o prompt de engenharia (sem alterações)
+    # --- PROMPT DE ENGENHARIA MELHORADO ---
     system_prompt = f"""
     Aja como um especialista em Business Intelligence. A sua tarefa é converter um pedido de utilizador em linguagem natural para um objeto JSON que define uma visualização.
+
     O utilizador tem acesso aos seguintes campos:
-    - Campos Categóricos: {', '.join(categorical_cols)}
-    - Campos Numéricos: {', '.join(numeric_cols)}
-    O JSON de saída deve ter a estrutura: {{"type": "...", "dimension": "...", "measure": "...", "agg": "...", "title": "..."}}
-    Responda APENAS com o objeto JSON.
+    - Campos Categóricos (para dimensões): {', '.join(categorical_cols)}
+    - Campos Numéricos (para medidas): {', '.join(numeric_cols)}
+
+    O JSON de saída deve ter a seguinte estrutura:
+    {{"type": "tipo_do_grafico", "dimension": "campo_categorico", "measure": "campo_numerico_ou_Contagem de Issues", "agg": "Soma | Média | Contagem", "title": "titulo_descritivo"}}
+
+    Regras para a conversão:
+    1.  **IMPORTANTE:** Se o pedido mencionar "contagem", "quantidade" ou "número de issues", a 'measure' DEVE ser a string exata "Contagem de Issues" e o 'agg' DEVE ser "Contagem".
+    2.  Se o pedido mencionar um campo numérico, use-o como 'measure'. O 'agg' deve ser "Média" se o pedido mencionar "média", caso contrário, use "Soma".
+    3.  A 'dimension' é geralmente o campo que vem depois de palavras como "por", "pelo" ou "de".
+    4.  O 'type' do gráfico deve ser 'barra', 'pizza' ou 'linha_agregada'. Se não for especificado, use 'barra'.
+    5.  O 'title' deve ser um resumo descritivo do que o gráfico mostra.
+    6.  Se não conseguir determinar a dimensão, retorne um erro.
+    7.  Responda APENAS com o objeto JSON.
     """
     full_prompt = f"{system_prompt}\n\nPedido do Utilizador: \"{prompt}\""
 
-    # 3. Chama a API e processa a resposta de forma segura
     try:
         if provider == "Google Gemini":
             response = model_client.generate_content(full_prompt)
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
         else: # OpenAI
-            response = model_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "Responda apenas com um objeto JSON válido."},
-                    {"role": "user", "content": full_prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
+            response = model_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}], response_format={"type": "json_object"})
             cleaned_response = response.choices[0].message.content
         
-        # --- CORREÇÃO AQUI: Verifica se a resposta está vazia ANTES de tentar processar ---
         if not cleaned_response:
-            return None, "A IA não conseguiu gerar uma configuração válida. Tente reformular o seu pedido com mais detalhes (ex: 'gráfico de barras da contagem de issues por status')."
+            return None, "A IA não conseguiu gerar uma configuração válida. Tente reformular o seu pedido."
 
         chart_config = json.loads(cleaned_response)
+        
+        # --- VERIFICAÇÃO DE SEGURANÇA ---
+        # Garante que, se o cálculo for 'Contagem', a medida seja a correta.
+        if chart_config.get('agg', '').lower() == 'contagem':
+            chart_config['measure'] = 'Contagem de Issues'
+            
         chart_config['id'] = str(uuid.uuid4())
         chart_config['source_type'] = 'visual'
-        if chart_config.get('dimension'):
-            chart_config['creator_type'] = 'Gráfico Agregado'
-        else:
-            chart_config['creator_type'] = 'Indicador (KPI)'
-            
+        chart_config['creator_type'] = 'Gráfico Agregado'
+        
         return chart_config, None
-    except json.JSONDecodeError:
-        return None, "A IA retornou uma resposta em formato inválido. Tente ser mais específico no seu pedido."
     except Exception as e:
         return None, f"Ocorreu um erro ao comunicar com a IA: {e}"
 
@@ -803,7 +805,7 @@ def send_notification_email(to_address, subject, body_html):
         msg['From'] = sender_email
         msg['To'] = to_address
         msg['Subject'] = subject
-        msg.attach(MIMEText(body_html, 'html')) # Define o corpo do e-mail como HTML
+        msg.attach(MIMEText(body_html, 'html')) 
         
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()

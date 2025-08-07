@@ -56,74 +56,43 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
     if selected_project_name:
-        project_key = projects[selected_project_name]
-        st.session_state.project_key = projects[selected_project_name]; 
-        st.session_state.project_name = selected_project_name
+        st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
         is_data_loaded = 'dynamic_df' in st.session_state and not st.session_state.dynamic_df.empty
         with st.expander("Carregar Dados", expanded=not is_data_loaded):
             if st.button("Carregar / Atualizar Dados", use_container_width=True, type="primary"):
-
-                with st.spinner(f"A carregar e processar dados de '{selected_project_name}'..."):
-                    all_issues_raw = get_all_project_issues(st.session_state.jira_client, project_key)
+                with st.spinner(f"A carregar e processar dados de '{st.session_state.project_name}'..."):
+                    all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
                     valid_issues = filter_ignored_issues(all_issues_raw)
                     
-                    data = []
-                    user_data = find_user(st.session_state['email'])
-                    global_configs = st.session_state.get('global_configs', {})
-                    project_config = get_project_config(project_key) or {}
+                    data = []; user_data = find_user(st.session_state['email']); global_configs = st.session_state.get('global_configs', {})
+                    project_config = get_project_config(st.session_state.project_key) or {}
                     
-                    user_enabled_standard = user_data.get('standard_fields', [])
-                    user_enabled_custom = user_data.get('enabled_custom_fields', [])
-                    all_available_standard = global_configs.get('available_standard_fields', {})
-                    all_available_custom = global_configs.get('custom_fields', [])
+                    user_enabled_standard = user_data.get('standard_fields', []); user_enabled_custom = user_data.get('enabled_custom_fields', [])
+                    all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
                     estimation_config = project_config.get('estimation_field', {})
 
                     for i in valid_issues:
                         completion_date = find_completion_date(i)
-                        issue_data = {
-                            'Issue': i.key,
-                            'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),
-                            'Data de Conclusão': completion_date,
-                            'Lead Time (dias)': calculate_lead_time(i),
-                            'Cycle Time (dias)': calculate_cycle_time(i),
-                        }
+                        issue_data = {'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date,'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i)}
                         
-                        # --- LÓGICA DE PROCESSAMENTO UNIVERSAL CORRIGIDA ---
                         fields_to_process = []
                         for field_name in user_enabled_standard:
-                            if field_name in all_available_standard:
-                                fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
+                            if field_name in all_available_standard: fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
                         for field_config in all_available_custom:
-                            if field_config.get('name') in user_enabled_custom:
-                                fields_to_process.append(field_config)
+                            if field_config.get('name') in user_enabled_custom: fields_to_process.append(field_config)
                         
                         for field in fields_to_process:
-                            field_id, field_name = field['id'], field['name']
-                            value = getattr(i.fields, field_id, None)
-                            
-                            # Lógica inteligente para extrair o valor correto de qualquer tipo de campo
-                            if value is None:
-                                issue_data[field_name] = None
-                            elif hasattr(value, 'displayName'): # Para campos de Utilizador (Assignee, Reporter)
-                                issue_data[field_name] = value.displayName
-                            elif isinstance(value, list) and value: # Para campos de lista (Seleção Múltipla, Componentes, etc.)
-                                processed_list = []
-                                for item in value:
-                                    if hasattr(item, 'value'): processed_list.append(item.value)
-                                    elif hasattr(item, 'name'): processed_list.append(item.name)
-                                    else: processed_list.append(str(item))
-                                issue_data[field_name] = ', '.join(processed_list)
-                            elif hasattr(value, 'value'): # Para campos de Seleção Única
-                                issue_data[field_name] = value.value
-                            elif hasattr(value, 'name'): # Para campos de Objeto Simples (Status, Priority)
-                                issue_data[field_name] = value.name
-                            else: # Para campos de texto simples, número ou data
-                                issue_data[field_name] = str(value).split('T')[0]
+                            field_id, field_name = field['id'], field['name']; value = getattr(i.fields, field_id, None)
+                            if hasattr(value, 'displayName'): issue_data[field_name] = value.displayName
+                            elif isinstance(value, list): issue_data[field_name] = ', '.join([getattr(v, 'name', str(v)) for v in value]) if value else None
+                            elif hasattr(value, 'value'): issue_data[field_name] = value.value
+                            elif hasattr(value, 'name'): issue_data[field_name] = value.name
+                            elif value: issue_data[field_name] = str(value).split('T')[0]
+                            else: issue_data[field_name] = None
 
-                        # Adiciona o campo de estimativa
                         if estimation_config.get('id'):
                             issue_data[estimation_config['name']] = get_issue_estimation(i, estimation_config)
-                            
+                        
                         data.append(issue_data)
                     
                     st.session_state.dynamic_df = pd.DataFrame(data)
@@ -176,7 +145,7 @@ if project_estimation_field and project_estimation_field.get('name') not in [f['
     est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
 base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']; base_date_cols = ['Data de Criação', 'Data de Conclusão']
-base_categorical_cols = ['Issue'] # Adicione outros campos base se desejar que apareçam sempre
+base_categorical_cols = ['Issue']
 numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_field_list if f['type'] in ['Numérico', 'Horas']])))
 date_cols = sorted(list(set(base_date_cols + [f['name'] for f in master_field_list if f['type'] == 'Data'])))
 categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto']])))
@@ -266,28 +235,17 @@ for f in st.session_state.creator_filters:
 
 st.divider()
 
-# --- SELETOR PRINCIPAL DE TIPO DE CRIAÇÃO ---
-creation_mode = st.radio(
-    "Como deseja criar a sua visualização?",
-    ["Construtor Visual", "Gerar com IA ✨"],
-    horizontal=True,
-    key="creation_mode_selector"
-)
+# --- Construtor de Gráficos Unificado ---
+st.subheader("Configuração da Visualização")
+creation_mode = st.radio("Como deseja criar a sua visualização?", ["Construtor Visual", "Gerar com IA ✨"], horizontal=True, key="creation_mode_selector")
 chart_config = {}
 df_for_preview = filtered_df.copy()
 
-# --- LÓGICA PARA O MODO DE CRIAÇÃO ESCOLHIDO ---
 if creation_mode == "Construtor Visual":
+    # --- CONSTRUTOR VISUAL COMPLETO ---
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
     default_creator_index = creator_type_options.index(chart_data.get('creator_type')) if editing_mode and chart_data.get('creator_type') in creator_type_options else 0
-    
-    chart_creator_type = st.radio(
-        "Selecione o tipo de visualização:",
-        creator_type_options,
-        key="visual_creator_type",
-        horizontal=True,
-        index=default_creator_index
-    )
+    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
 
     with st.container(border=True):
         if chart_creator_type == "Gráfico X-Y":
@@ -541,16 +499,12 @@ else: # MODO DE GERAÇÃO COM IA
     if st.button("Gerar Gráfico com IA", use_container_width=True, type="primary"):
         if prompt:
             with st.spinner("A IA está a pensar..."):
-                # A chamada à nossa nova função robusta
                 generated_config, error_message = generate_chart_config_from_text(prompt, numeric_cols, categorical_cols)
-                
-                # Exibe o erro se houver um, ou guarda a configuração se for bem-sucedido
                 if error_message:
                     st.error(error_message)
-                    if 'chart_config_ia' in st.session_state: del st.session_state.chart_config_ia
+                    if 'chart_config_ia' in st.session_state: del st.session_state['chart_config_ia']
                 else:
                     st.session_state.chart_config_ia = generated_config
-                    st.rerun() # Força o recarregamento para mostrar a pré-visualização
         else:
             st.warning("Por favor, escreva o seu pedido.")
 
@@ -558,12 +512,11 @@ else: # MODO DE GERAÇÃO COM IA
 if creation_mode == "Gerar com IA ✨":
     chart_config = st.session_state.get('chart_config_ia', {})
 
-# --- Lógica de Pré-visualização Unificada ---
 st.divider()
-
 st.subheader("Pré-visualização da Configuração Atual")
 if chart_config:
-    with st.container(border=True): render_chart(chart_config, df_for_preview)
+    with st.container(border=True):
+        render_chart(chart_config, df_for_preview)
 else:
     st.info("Configure ou gere uma visualização acima para ver a pré-visualização.")
 
