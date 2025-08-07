@@ -64,7 +64,19 @@ if 'jira_client' not in st.session_state:
             if client:
                 st.session_state.jira_client = client; st.session_state.projects = get_projects(client); st.rerun()
             else: st.error("Falha na conexão com o Jira."); st.page_link("pages/9_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤"); st.stop()
-    else: st.warning("Credenciais do Jira não configuradas."); st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Credenciais", icon="👤"); st.stop()
+
+    if not user_data:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
 
 # --- BARRA LATERAL SIMPLIFICADA ---
 with st.sidebar:

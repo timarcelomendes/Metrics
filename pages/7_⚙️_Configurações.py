@@ -3,8 +3,10 @@
 import streamlit as st
 from security import get_global_configs, save_global_configs, get_project_config, save_project_config, get_project_configs_collection
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
-from jira_connector import validate_jira_field
+from jira_connector import *
 from pathlib import Path
+from security import *
+
 
 st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
 
@@ -14,7 +16,21 @@ st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder a esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
-    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar Conexão", icon="🔗"); st.stop()
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
+    user_connections = get_user_connections(st.session_state['email'])
+    
+    if not user_connections:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
 
 configs = st.session_state.get('global_configs', get_global_configs())
 projects = st.session_state.get('projects', {})

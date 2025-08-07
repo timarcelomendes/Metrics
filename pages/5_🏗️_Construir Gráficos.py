@@ -31,8 +31,6 @@ def on_project_change():
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-if 'jira_client' not in st.session_state:
-    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -140,6 +138,23 @@ chart_data = st.session_state.get('chart_to_edit', {})
 if editing_mode: st.header(f"✏️ Editando: {chart_data.get('title', 'Visualização')}", divider='orange')
 else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
+if 'jira_client' not in st.session_state:
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
+    user_connections = get_user_connections(st.session_state['email'])
+    
+    if not user_connections:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
+        
 df = st.session_state.get('dynamic_df')
 if df is None or df.empty:
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Carregar / Atualizar Dados' para começar."); st.stop()

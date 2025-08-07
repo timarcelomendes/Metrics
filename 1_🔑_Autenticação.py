@@ -78,14 +78,14 @@ else:
             - 📈 Prever datas de entrega com base na performance real da sua equipa.
             - 🔬 Analisar o fluxo de trabalho para identificar e remover gargalos.
             
-            **Faça login ou registe-se para começar!**
+            **Faça login ou registre-se para começar!**
             """
         )
 
     with col2:
         # --- USA UM CONTAINER NATIVO PARA O CARTÃO ---
         with st.container(border=True):
-            col1, col2, col3 = st.tabs(["**Entrar**", "**Registar-se**", "**Recuperar Senha**"])
+            col1, col2, col3 = st.tabs(["**Entrar**", "**Registrar-se**", "**Recuperar Senha**"])
 
         with col1:
             with st.form("login_form"):
@@ -127,15 +127,15 @@ else:
         with col2:
             with st.form("register_form", clear_on_submit=True):
                 st.markdown("##### Crie a sua conta")
-                new_email = st.text_input("O seu Email corporativo", key="reg_email")
+                new_email = st.text_input("O seu E-mail corporativo", key="reg_email")
                 new_password = st.text_input("Crie uma Senha", type="password", key="reg_pass")
                 confirm_password = st.text_input("Confirme a Senha", type="password", key="reg_confirm")
                 
-                if st.form_submit_button("Registar", use_container_width=True):
+                if st.form_submit_button("Registrar", use_container_width=True):
                     if not all([new_email, new_password, confirm_password]):
                         st.warning("Por favor, preencha todos os campos.")
                     elif find_user(new_email):
-                        st.error("Este e-mail já está registado.")
+                        st.error("Este e-mail já está registrado.")
                     elif len(new_password) < 8:
                         st.error("A senha deve ter pelo menos 8 caracteres.")
                     elif new_password != confirm_password:
@@ -144,6 +144,8 @@ else:
                         create_user(new_email, new_password)
                         st.success("Conta criada com sucesso! Por favor, faça login.")
                         
+                        st.info("**Nota:** Para utilizar a ferramenta, você precisará de uma **conexão com o Jira**, que pode ser configurada após o seu primeiro login.", icon="ℹ️")
+
                         # --- ENVIO DO E-MAIL DE BOAS-VINDAS ---
                         welcome_subject = "Bem-vindo ao Gauge Metrics!"
                         welcome_html = """
@@ -155,10 +157,12 @@ else:
                         </body></html>
                         """
                         send_notification_email(new_email, welcome_subject, welcome_html)
+                                        # --- NOVA MENSAGEM INFORMATIVA ---
+
 
             with col3:
                 st.markdown("##### Recuperação de Senha")
-                st.info("Por favor, insira o seu e-mail. Se estiver registado, enviaremos uma senha temporária para si.")
+                st.info("Por favor, insira o seu e-mail. Se estiver registrado, enviaremos uma senha temporária para si.")
                 with st.form("recover_form"):
                     recover_email = st.text_input("Email", placeholder="email@exemplo.com")
                     if st.form_submit_button("Enviar E-mail de Recuperação", use_container_width=True, type="primary"):
