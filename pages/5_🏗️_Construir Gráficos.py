@@ -24,9 +24,11 @@ st.markdown("""<style>
 
 def on_project_change():
     """Limpa o estado relevante ao trocar de projeto."""
-    keys_to_clear = ['dynamic_df', 'chart_to_edit', 'creator_filters']
+    keys_to_clear = ['dynamic_df', 'chart_to_edit', 'creator_filters', 'chart_config_ia']
     for key in keys_to_clear:
         if key in st.session_state: st.session_state.pop(key, None)
+
+st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
@@ -136,7 +138,6 @@ editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to
 chart_data = st.session_state.get('chart_to_edit', {})
 
 if editing_mode: st.header(f"✏️ Editando: {chart_data.get('title', 'Visualização')}", divider='orange')
-else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados
@@ -265,20 +266,28 @@ for f in st.session_state.creator_filters:
 
 st.divider()
 
-# --- Construtor de Gráficos Unificado ---
-st.subheader("Configuração da Visualização")
-creation_mode = st.radio("Como deseja criar a sua visualização?", ["Construtor Visual", "Gerar com IA ✨"], horizontal=True, key="creation_mode_selector")
+# --- SELETOR PRINCIPAL DE TIPO DE CRIAÇÃO ---
+creation_mode = st.radio(
+    "Como deseja criar a sua visualização?",
+    ["Construtor Visual", "Gerar com IA ✨"],
+    horizontal=True,
+    key="creation_mode_selector"
+)
 chart_config = {}
 df_for_preview = filtered_df.copy()
 
+# --- LÓGICA PARA O MODO DE CRIAÇÃO ESCOLHIDO ---
 if creation_mode == "Construtor Visual":
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
     default_creator_index = creator_type_options.index(chart_data.get('creator_type')) if editing_mode and chart_data.get('creator_type') in creator_type_options else 0
-    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
     
-    # Define um dataframe temporário que pode ser modificado pelos construtores
-    chart_config = {}
-    df_for_preview = filtered_df.copy()
+    chart_creator_type = st.radio(
+        "Selecione o tipo de visualização:",
+        creator_type_options,
+        key="visual_creator_type",
+        horizontal=True,
+        index=default_creator_index
+    )
 
     with st.container(border=True):
         if chart_creator_type == "Gráfico X-Y":
@@ -525,18 +534,23 @@ if creation_mode == "Construtor Visual":
             }
 else: # MODO DE GERAÇÃO COM IA
     st.subheader("🤖 Assistente de Geração de Gráficos com IA")
-    st.info("Descreva o gráfico que você quer ver, e o Gemini irá tentar criá-lo para si.")
+    st.info("Descreva o gráfico que você quer ver, e a IA irá tentar criá-lo para si.")
     
     prompt = st.text_area("O seu pedido:", placeholder="Ex: Crie um gráfico de barras com a contagem de issues por responsável", height=100)
     
     if st.button("Gerar Gráfico com IA", use_container_width=True, type="primary"):
         if prompt:
-            with st.spinner("O Gemini está a pensar..."):
+            with st.spinner("A IA está a pensar..."):
+                # A chamada à nossa nova função robusta
                 generated_config, error_message = generate_chart_config_from_text(prompt, numeric_cols, categorical_cols)
+                
+                # Exibe o erro se houver um, ou guarda a configuração se for bem-sucedido
                 if error_message:
                     st.error(error_message)
+                    if 'chart_config_ia' in st.session_state: del st.session_state.chart_config_ia
                 else:
                     st.session_state.chart_config_ia = generated_config
+                    st.rerun() # Força o recarregamento para mostrar a pré-visualização
         else:
             st.warning("Por favor, escreva o seu pedido.")
 

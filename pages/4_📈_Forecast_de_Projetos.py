@@ -33,10 +33,30 @@ def on_project_change():
     for key in keys_to_clear:
         if key in st.session_state: st.session_state.pop(key, None)
 
+# --- LÓGICA PRINCIPAL DA PÁGINA ---
+st.header("📈 Forecast & Planeamento de Entregas", divider='rainbow')
+
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
+if 'jira_client' not in st.session_state:
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
+    user_connections = get_user_connections(st.session_state['email'])
+    
+    if not user_connections:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
+        
 # --- BARRA LATERAL (PADRÃO RESTAURADO) ---
 with st.sidebar:
     project_root = Path(__file__).parent.parent
@@ -101,26 +121,6 @@ with st.sidebar:
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
-# --- LÓGICA PRINCIPAL DA PÁGINA ---
-st.header("📈 Forecast & Planeamento de Entregas", divider='rainbow')
-
-if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
-    user_connections = get_user_connections(st.session_state['email'])
-    
-    if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
-        
 if st.session_state.get('view_to_show') != 'forecast_view':
     st.info("⬅️ Na barra lateral, selecione os parâmetros e clique em 'Analisar Escopo' para começar.")
     st.stop()
@@ -161,8 +161,21 @@ with tab1:
         st.warning("Não foi possível gerar o gráfico de burnup.")
     
     with st.expander("🤖 Resumo Executivo com IA"):
-        # (código da análise com IA para o Burnup, que já estava funcional)
-        pass
+        if st.button("Gerar Resumo com IA", use_container_width=True):
+            with st.spinner("A IA está a analisar o seu forecast..."):
+                forecast_date_str = forecast_date.strftime('%d/%m/%Y') if forecast_date else "Incalculável"
+                ai_summary = get_ai_forecast_analysis(
+                    project_name=st.session_state.get('project_name', 'este projeto'),
+                    scope_total=f"{total_scope:.0f} {unit_display}",
+                    completed_pct=f"{completed_pct:.0f}",
+                    avg_velocity=avg_velocity,
+                    trend_velocity=trend_velocity,
+                    forecast_date_str=forecast_date_str
+                )
+                st.session_state.ai_forecast_summary = ai_summary
+        
+        if 'ai_forecast_summary' in st.session_state:
+            st.markdown(st.session_state.ai_forecast_summary)
 
 with tab2:
     st.subheader("Qual a vazão necessária para atingir uma data?")
@@ -197,5 +210,18 @@ with tab2:
     kpi_team2.metric(label="👩‍💻 Pessoas Necessárias", value=f"{people_needed:.0f} pessoas", delta=f"{(people_needed - team_size):.0f} vs. equipa atual", delta_color="inverse" if people_needed > team_size else "normal")
     
     with st.expander("🤖 Análise de Viabilidade com IA"):
-        # (código da análise com IA para o Planeamento, que já estava funcional)
-        pass
+        if st.button("Analisar Cenário com IA", use_container_width=True):
+            with st.spinner("A IA está a analisar o seu plano..."):
+                ai_planning_summary = get_ai_planning_analysis(
+                    project_name=st.session_state.get('project_name', 'este projeto'),
+                    remaining_work=f"{remaining_work:.0f} {unit_display}",
+                    remaining_weeks=remaining_weeks,
+                    required_throughput=required_throughput,
+                    trend_velocity=trend_velocity,
+                    people_needed=f"{np.ceil(people_needed):.0f}",
+                    current_team_size=f"{team_size}"
+                )
+                st.session_state.ai_planning_summary = ai_planning_summary
+            
+            if 'ai_planning_summary' in st.session_state:
+                st.markdown(st.session_state.ai_planning_summary)

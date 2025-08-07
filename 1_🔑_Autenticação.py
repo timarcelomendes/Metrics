@@ -7,7 +7,10 @@ from pathlib import Path
 from jira_connector import *
 from utils import send_notification_email
 
-st.set_page_config(page_title="Gauge Metrics - Login", page_icon="🔑", layout="wide")
+st.set_page_config(page_title="Gauge Metrics - Login", 
+                   page_icon="🔑", 
+                   layout="wide" 
+                   )
 
 # ===== NOVO BLOCO DE CONTROLO DE VISIBILIDADE =====
 # Esta lógica será executada em todas as páginas e controlará o que é exibido.
