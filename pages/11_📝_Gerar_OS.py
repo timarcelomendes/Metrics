@@ -5,10 +5,30 @@ import pandas as pd
 from datetime import datetime
 from security import get_global_configs
 from utils import create_os_pdf, send_email_with_attachment
+from pathlib import Path
 
 st.set_page_config(page_title="Gerar Ordem de Serviço", page_icon="📝", layout="wide")
 
 st.header("📝 Gerador de Ordem de Serviço (OS)", divider='rainbow')
+
+with st.sidebar:
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
+        st.write("Gauge Metrics") 
+    
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+
+    if st.button("Logout", use_container_width=True, type='secondary'):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Autenticação.py")
 
 # --- Bloco de Autenticação ---
 if 'email' not in st.session_state:
