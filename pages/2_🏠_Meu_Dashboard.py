@@ -55,16 +55,11 @@ st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Pr
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
+# --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
-    if user_connections and user_connections.get('encrypted_token'):
-        with st.spinner("A conectar ao Jira..."):
-            token = decrypt_token(user_connections['encrypted_token'])
-            client = connect_to_jira(user_connections['jira_url'], user_connections['jira_email'], token)
-            if client:
-                st.session_state.jira_client = client; st.session_state.projects = get_projects(client); st.rerun()
-            else: st.error("Falha na conexão com o Jira."); st.page_link("pages/9_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤"); st.stop()
-
+    
     if not user_connections:
         # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
