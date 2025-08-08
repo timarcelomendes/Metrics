@@ -19,6 +19,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from pathlib import Path
+import re
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -878,3 +879,22 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
         return True, "E-mail enviado com sucesso!"
     except Exception as e:
         return False, f"Falha ao enviar o e-mail: {e}"
+    
+# --- NOVAS FUNÇÕES DE VALIDAÇÃO ---
+def is_valid_url(url):
+    """Verifica se uma string corresponde ao formato de um URL."""
+    # Expressão regular simples para validar URLs
+    regex = re.compile(
+        r'^(?:http|ftp)s?://' # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' # domain...
+        r'localhost|' # localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
+        r'(?::\d+)?' # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    return re.match(regex, url) is not None
+
+def is_valid_email(email):
+    """Verifica se uma string corresponde ao formato de um e-mail."""
+    # Expressão regular para validar e-mails
+    regex = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
+    return re.fullmatch(regex, email)
