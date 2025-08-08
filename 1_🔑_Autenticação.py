@@ -78,7 +78,7 @@ else:
             """
             Transforme os dados do seu Jira em insights acionáveis. Com o **Gauge Metrics**, você pode:
             - 📊 Criar dashboards personalizados com um clique.
-            - 📈 Prever datas de entrega com base na performance real da sua equipa.
+            - 📈 Prever datas de entrega com base na performance real da sua equipe.
             - 🔬 Analisar o fluxo de trabalho para identificar e remover gargalos.
             
             **Faça login ou registre-se para começar!**
@@ -156,7 +156,7 @@ else:
                             <h2>Olá!</h2>
                             <p>A sua conta na plataforma Gauge Metrics foi criada com sucesso.</p>
                             <p>Estamos felizes por tê-lo a bordo. Faça login para começar a transformar os seus dados em insights.</p>
-                            <p>Atenciosamente,<br>A Equipa Gauge Metrics</p>
+                            <p>Atenciosamente,<br>A Equipe Gauge Metrics</p>
                         </body></html>
                         """
                         send_notification_email(new_email, welcome_subject, welcome_html)

@@ -184,7 +184,7 @@ with tab2:
     with st.container(border=True):
         c1, c2 = st.columns(2)
         target_date = c1.date_input("Data de Entrega Desejada", value=datetime.now() + timedelta(days=90))
-        team_size = c2.number_input("Tamanho da Equipa Atual", min_value=1, value=5)
+        team_size = c2.number_input("Tamanho da Equipe Atual", min_value=1, value=5)
     
     remaining_work = total_scope - total_completed
     if target_date > datetime.now().date() and remaining_work > 0:
@@ -204,10 +204,10 @@ with tab2:
     kpi2.metric("🗓️ Semanas Restantes", f"{remaining_weeks:.1f} semanas")
     kpi3.metric(label="⚡ Vazão Necessária", value=f"{required_throughput:.1f} {unit_display}/sem", delta=f"{(required_throughput - trend_velocity):.1f} vs. tendência")
 
-    st.subheader("Análise da Equipa")
+    st.subheader("Análise da Equipe")
     kpi_team1, kpi_team2 = st.columns(2)
     kpi_team1.metric(f"Produtividade ({projection_base})", f"{productivity_per_person:.1f} {unit_display}/pessoa/semana")
-    kpi_team2.metric(label="👩‍💻 Pessoas Necessárias", value=f"{people_needed:.0f} pessoas", delta=f"{(people_needed - team_size):.0f} vs. equipa atual", delta_color="inverse" if people_needed > team_size else "normal")
+    kpi_team2.metric(label="👩‍💻 Pessoas Necessárias", value=f"{people_needed:.0f} pessoas", delta=f"{(people_needed - team_size):.0f} vs. equipe atual", delta_color="inverse" if people_needed > team_size else "normal")
     
     with st.expander("🤖 Análise de Viabilidade com IA"):
         if st.button("Analisar Cenário com IA", use_container_width=True):

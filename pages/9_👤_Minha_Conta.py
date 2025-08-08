@@ -77,7 +77,7 @@ with tab1:
                             <h2>Olá,</h2>
                             <p>Este é um e-mail para confirmar que a senha da sua conta ({email}) na plataforma Gauge Metrics foi alterada com sucesso.</p>
                             <p>Se não foi você que fez esta alteração, por favor, contacte o suporte imediatamente.</p>
-                            <p>Atenciosamente,<br>A Equipa Gauge Metrics</p>
+                            <p>Atenciosamente,<br>A Equipe Gauge Metrics</p>
                         </body></html>
                         """
                         send_notification_email(email, subject, body_html)
