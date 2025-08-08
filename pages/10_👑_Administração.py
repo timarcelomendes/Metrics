@@ -10,7 +10,7 @@ st.header("👑 Painel de Administração", divider='rainbow')
 
 # --- BLOCO DE CONTROLO DE ACESSO ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 ADMIN_EMAILS = st.secrets.get("app_settings", {}).get("ADMIN_EMAILS", [])
 if st.session_state['email'] not in ADMIN_EMAILS:

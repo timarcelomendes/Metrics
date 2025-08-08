@@ -11,7 +11,7 @@ st.set_page_config(page_title="Minha Conta", page_icon="👤", layout="wide")
 st.header("👤 Minha Conta", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder a esta página.")
+    st.warning("⚠️ Por favor, faça login para acessar.")
     st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 

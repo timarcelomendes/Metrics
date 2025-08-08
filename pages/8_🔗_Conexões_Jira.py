@@ -12,7 +12,7 @@ st.set_page_config(page_title="Conexões Jira", page_icon="🔗", layout="wide")
 st.header("🔗 Gerir Conexões Jira", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 email = st.session_state['email']
 

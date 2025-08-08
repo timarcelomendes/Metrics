@@ -181,7 +181,7 @@ if df is None or not current_project_key:
     st.stop()
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça autenticação para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 # --- Carregamento e Preparação das Configurações ---
 user_data = find_user(st.session_state['email']); all_layouts = user_data.get('dashboard_layout', {})

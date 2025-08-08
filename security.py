@@ -13,13 +13,12 @@ import string
 
 # --- Configuração de Hashing de Senha ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+cipher_suite = Fernet(st.secrets["SECRET_KEY"].encode())
 
 def verify_password(plain_password, hashed_password):
-    """Verifica uma senha em texto plano contra uma senha com hash."""
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
-    """Gera o hash de uma senha."""
     return pwd_context.hash(password)
 
 # --- Funções de Criptografia de Token ---
@@ -29,13 +28,12 @@ def get_cipher():
     key = st.secrets["ENCRYPTION_KEY"]
     return Fernet(key.encode())
 
-def encrypt_token(token: str):
-    """Encripta um token."""
-    return get_cipher().encrypt(token.encode()).decode()
+def encrypt_token(token):
+    return cipher_suite.encrypt(token.encode()).decode()
 
-def decrypt_token(encrypted_token: str):
-    """Desencripta um token."""
-    return get_cipher().decrypt(encrypted_token.encode()).decode()
+def decrypt_token(encrypted_token):
+    return cipher_suite.decrypt(encrypted_token.encode()).decode()
+
 
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
@@ -100,9 +98,11 @@ def find_user(email):
             
     return user
 
-def create_user(email, hashed_password):
-    """Cria um novo utilizador na base de dados."""
+def create_user(email, password):
+    """Cria um novo utilizador, garantindo que a senha seja hashed."""
+    hashed_password = get_password_hash(password)
     get_users_collection().insert_one({'email': email, 'hashed_password': hashed_password})
+
 
 # --- Funções de Gestão de Conexões Jira ---
 def add_jira_connection(user_email, conn_name, url, api_email, encrypted_token):
@@ -248,11 +248,8 @@ def generate_temporary_password(length=12):
     return password
 
 def update_user_password(email, new_hashed_password):
-    """Atualiza a senha com hash de um utilizador específico."""
-    get_users_collection().update_one(
-        {'email': email},
-        {'$set': {'hashed_password': new_hashed_password}}
-    )
+    get_users_collection().update_one({'email': email}, {'$set': {'hashed_password': new_hashed_password}})
+
 
 def save_user_tabs(email, tabs_list):
     """Guarda a lista de abas personalizadas de um utilizador."""

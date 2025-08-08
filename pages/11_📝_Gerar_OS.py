@@ -32,7 +32,7 @@ with st.sidebar:
 
 # --- Bloco de Autenticação ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder a esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 # --- Carrega os valores padrão das configurações globais ---
 global_configs = st.session_state.get('global_configs', get_global_configs())

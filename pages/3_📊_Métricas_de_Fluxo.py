@@ -20,7 +20,7 @@ st.set_page_config(page_title="Métricas de Fluxo", page_icon="📊", layout="wi
 st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça autenticação para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
     
 if 'jira_client' not in st.session_state:
     user_data = find_user(st.session_state['email'])

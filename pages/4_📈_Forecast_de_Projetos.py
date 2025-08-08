@@ -38,7 +38,7 @@ st.header("📈 Forecast & Planeamento de Entregas", divider='rainbow')
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados

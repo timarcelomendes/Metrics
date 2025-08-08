@@ -14,7 +14,7 @@ st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items: center; 
 st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder a esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
