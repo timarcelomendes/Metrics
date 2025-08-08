@@ -28,9 +28,16 @@ def on_project_change():
     for key in keys_to_clear:
         if key in st.session_state: st.session_state.pop(key, None)
 
+editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
+chart_data = st.session_state.get('chart_to_edit', {})
+
+if editing_mode: st.header(f"✏️ Editando: {chart_data.get('title', 'Visualização')}", divider='orange')
+else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
+
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
@@ -117,11 +124,6 @@ with st.sidebar:
             st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
-editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
-chart_data = st.session_state.get('chart_to_edit', {})
-
-if editing_mode: st.header(f"✏️ Editando: {chart_data.get('title', 'Visualização')}", divider='orange')
-else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')

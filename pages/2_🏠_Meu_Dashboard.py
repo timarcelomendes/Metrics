@@ -49,17 +49,23 @@ def move_item(items_list, from_index, to_index):
         items_list.insert(to_index, item)
     return items_list
 
+st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
+
+# --- Bloco de Autenticação e Conexão ---
+if 'email' not in st.session_state:
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
 if 'jira_client' not in st.session_state:
-    user_data = find_user(st.session_state['email'])
-    if user_data and user_data.get('encrypted_token'):
+    user_connections = get_user_connections(st.session_state['email'])
+    if user_connections and user_connections.get('encrypted_token'):
         with st.spinner("A conectar ao Jira..."):
-            token = decrypt_token(user_data['encrypted_token'])
-            client = connect_to_jira(user_data['jira_url'], user_data['jira_email'], token)
+            token = decrypt_token(user_connections['encrypted_token'])
+            client = connect_to_jira(user_connections['jira_url'], user_connections['jira_email'], token)
             if client:
                 st.session_state.jira_client = client; st.session_state.projects = get_projects(client); st.rerun()
             else: st.error("Falha na conexão com o Jira."); st.page_link("pages/9_👤_Minha_Conta.py", label="Verificar Credenciais", icon="👤"); st.stop()
 
-    if not user_data:
+    if not user_connections:
         # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
@@ -171,17 +177,12 @@ with st.sidebar:
             st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
-st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
-
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
 
 if df is None or not current_project_key:
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar / Atualizar Dashboard' para carregar os dados.")
     st.stop()
-
-if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 # --- Carregamento e Preparação das Configurações ---
 user_data = find_user(st.session_state['email']); all_layouts = user_data.get('dashboard_layout', {})
@@ -334,7 +335,7 @@ if organize_mode:
         for db_id, db_config in available_dashboards.items():
             with st.container():
                 # --- NOVO LAYOUT DE AÇÕES NA MESMA LINHA ---
-                name_col, actions_col = st.columns([2, 1])
+                name_col, actions_col = st.columns([2, 1,3])
                 with name_col:
                     st.markdown(f"**{db_config.get('name')}** {'(Ativo)' if db_id == active_dashboard_id else ''}")
                 
