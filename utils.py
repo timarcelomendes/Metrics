@@ -626,6 +626,8 @@ def get_ai_rag_status(project_name, metrics_summary):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client: return "Análise indisponível. Verifique a configuração da sua chave de IA."
     
     prompt = f"""
     Aja como um Diretor de Projetos (PMO). Analise o seguinte resumo de métricas do projeto "{project_name}":
@@ -645,11 +647,7 @@ def get_ai_rag_status(project_name, metrics_summary):
 
     try:
         if provider == "Google Gemini":
-            api_key = decrypt_token(user_data['encrypted_gemini_key'])
-            genai.configure(api_key=api_key)
-            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            response = model_client.generate_content(prompt)
             return response.text.strip()
 
         elif provider == "OpenAI (ChatGPT)":
