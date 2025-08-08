@@ -330,7 +330,7 @@ if organize_mode:
         for db_id, db_config in available_dashboards.items():
             with st.container():
                 # --- NOVO LAYOUT DE AÇÕES NA MESMA LINHA ---
-                name_col, actions_col = st.columns([2, 1,3])
+                name_col, actions_col = st.columns([2, 1.8])
                 with name_col:
                     st.markdown(f"**{db_config.get('name')}** {'(Ativo)' if db_id == active_dashboard_id else ''}")
                 
