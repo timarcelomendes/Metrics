@@ -49,12 +49,6 @@ def move_item(items_list, from_index, to_index):
         items_list.insert(to_index, item)
     return items_list
 
-# --- Bloco de Autenticação e Conexão (sem alterações) ---
-st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
-
-if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
 if 'jira_client' not in st.session_state:
     user_data = find_user(st.session_state['email'])
     if user_data and user_data.get('encrypted_token'):
@@ -176,31 +170,94 @@ with st.sidebar:
             for key in list(st.session_state.keys()): del st.session_state[key]
             st.switch_page("1_🔑_Autenticação.py")
 
-# --- CONTEÚDO PRINCIPAL ---
+# --- LÓGICA PRINCIPAL DA PÁGINA ---
+st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Nenhum Projeto Carregado')}", divider='rainbow')
+
 df = st.session_state.get('dynamic_df')
-if df is None:
-    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar / Atualizar Dashboard' para começar."); st.stop()
+current_project_key = st.session_state.get('project_key')
 
-user_data = find_user(st.session_state['email']); all_dashboards = user_data.get('dashboard_layout', {})
-current_project_key = st.session_state.get('project_key'); dashboard_config = all_dashboards.get(current_project_key, {})
-if isinstance(dashboard_config, list):
-    dashboard_config = {"tabs": {"Geral": dashboard_config}}; all_dashboards[current_project_key] = dashboard_config
-    save_user_dashboard(st.session_state['email'], all_dashboards)
-tabs_layout = dashboard_config.get("tabs", {"Geral": []}); all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
+if df is None or not current_project_key:
+    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar / Atualizar Dashboard' para carregar os dados.")
+    st.stop()
+
+if 'email' not in st.session_state:
+    st.warning("⚠️ Por favor, faça autenticação para acessar esta página."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+# --- Carregamento e Preparação das Configurações ---
+user_data = find_user(st.session_state['email']); all_layouts = user_data.get('dashboard_layout', {})
+project_layouts = all_layouts.get(current_project_key, {})
+available_dashboards = project_layouts.get('dashboards', {})
+if not available_dashboards:
+    available_dashboards["main"] = {"id": "main", "name": "Dashboard Principal", "tabs": {"Geral": []}}
+    project_layouts['dashboards'] = available_dashboards
+    project_layouts['active_dashboard_id'] = "main"
+
+active_dashboard_id = project_layouts.get('active_dashboard_id')
+active_dashboard_config = available_dashboards.get(active_dashboard_id, {})
+tabs_layout = active_dashboard_config.get('tabs', {"Geral": []})
+all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
 project_config = get_project_config(current_project_key) or {}
-default_cols = project_config.get('dashboard_columns', 2) 
+default_cols = project_config.get('dashboard_columns', 2)
+active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
 
-# --- FILTROS GLOBAIS DO DASHBOARD ---
-with st.expander("Filtros do Dashboard (afetam todas as visualizações)", expanded=True):
-    filter_cols = st.columns(4)
+# --- NOVO SELETOR DE DASHBOARDS ---
+dashboard_names = {db['name']: db['id'] for db_id, db in available_dashboards.items()}
+selected_dashboard_name = st.selectbox(
+    "Selecione o Dashboard para Visualizar:",
+    options=dashboard_names.keys(),
+    index=list(dashboard_names.keys()).index(active_dashboard_name) if active_dashboard_name in dashboard_names else 0
+)
+selected_dashboard_id = dashboard_names.get(selected_dashboard_name)
+if selected_dashboard_id != active_dashboard_id:
+    project_layouts['active_dashboard_id'] = selected_dashboard_id
+    all_layouts[current_project_key] = project_layouts
+    save_user_dashboard(st.session_state['email'], all_layouts); st.rerun()
+
+# --- LÓGICA DE AUTOCORREÇÃO ---
+all_charts_in_db = [chart for tab_charts in tabs_layout.values() for chart in tab_charts if isinstance(chart, dict)]
+clean_tabs_layout = {name: [] for name in tabs_layout.keys()}
+all_chart_ids_in_clean_layout = set()
+
+for chart in all_charts_in_db:
+    current_tab = next((tab for tab, charts in tabs_layout.items() if chart.get('id') in [c.get('id') for c in charts if isinstance(c, dict)]), "Geral")
+    if chart.get('id') not in all_chart_ids_in_clean_layout:
+         clean_tabs_layout[current_tab].append(chart)
+         all_chart_ids_in_clean_layout.add(chart['id'])
+
+if json.dumps(tabs_layout, sort_keys=True) != json.dumps(clean_tabs_layout, sort_keys=True):
+    project_layouts['dashboards'][active_dashboard_id]['tabs'] = clean_tabs_layout
+    all_layouts[current_project_key] = project_layouts
+    save_user_dashboard(st.session_state['email'], all_layouts)
+    st.toast("Layout do dashboard foi limpo e sincronizado!", icon="🧹")
+    st.rerun()
+
+all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
+project_config = get_project_config(current_project_key) or {}
+default_cols = project_config.get('dashboard_columns', 2)
+
+
+# ===== FILTROS GLOBAIS DINÂMICOS E INTELIGENTES =====
+with st.expander("Filtros do Dashboard (afetam todas as visualizações)", expanded=False):
     
-    # Define os campos de filtro padrão que queremos exibir
-    default_filter_fields = ["Tipo de Issue", "Responsável", "Status", "Prioridade"]
+    # --- LÓGICA PARA DESCOBRIR OS NOMES DOS CAMPOS ---
+    global_configs = st.session_state.get('global_configs', {})
+    all_std_fields = global_configs.get('available_standard_fields', {})
+
+    # Procura pelo nome que o utilizador deu a cada campo padrão
+    name_for_issuetype = next((name for name, conf in all_std_fields.items() if conf.get('id') == 'issuetype'), 'Tipo de Issue')
+    name_for_assignee = next((name for name, conf in all_std_fields.items() if conf.get('id') == 'assignee'), 'Responsável')
+    name_for_status = next((name for name, conf in all_std_fields.items() if conf.get('id') == 'status'), 'Status')
+    name_for_priority = next((name for name, conf in all_std_fields.items() if conf.get('id') == 'priority'), 'Prioridade')
     
-    # Dicionário para guardar as seleções
+    # Lista dos campos a serem exibidos como filtros
+    filter_fields_to_display = [
+        name_for_issuetype, name_for_assignee, name_for_status, name_for_priority
+    ]
+
+    filter_cols = st.columns(len(filter_fields_to_display))
     selections = {}
 
-    for i, field_name in enumerate(default_filter_fields):
+    for i, field_name in enumerate(filter_fields_to_display):
         has_field = field_name in df.columns
         options = sorted(df[field_name].dropna().unique()) if has_field else []
         
@@ -221,34 +278,102 @@ with st.expander("Filtros do Dashboard (afetam todas as visualizações)", expan
 st.caption(f"A exibir visualizações para o projeto: **{st.session_state.project_name}**.")
 
 # --- PAINEL DE CONTROLE ---
-# Adiciona um container com um ID para o CSS
 st.markdown('<div id="control-panel">', unsafe_allow_html=True)
 with st.container(border=True):
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    
     with col1:
         st.metric("Visualizações", f"{len(all_charts)} / {DASHBOARD_CHART_LIMIT}")
+
     with col2:
-        use_two_columns = st.toggle("2 Colunas", value=(default_cols == 2), key="dashboard_layout_toggle", on_change=on_layout_change)
-        num_columns = 2 if use_two_columns else 1
+        st.caption("Controlos de Layout")
+        toggle_cols = st.columns(2)
+        with toggle_cols[0]:
+            use_two_columns = st.toggle("2 Colunas", value=(default_cols == 2), key="dashboard_layout_toggle", on_change=on_layout_change)
+            num_columns = 2 if use_two_columns else 1
+        with toggle_cols[1]:
+            organize_mode = st.toggle("Organizar", help="Ative para gerir dashboards, abas e mover gráficos.")
+            
     with col3:
-        organize_mode = st.toggle("Organizar", help="Ative para adicionar/renomear abas e mover gráficos.")
-    with col4:
-        limit_reached = len(all_charts) >= 12
-        if limit_reached:
+        st.caption("Ações")
+        if len(all_charts) >= DASHBOARD_CHART_LIMIT:
             st.button("Limite Atingido", disabled=True, use_container_width=True)
         else:
-            # --- BOTÃO MELHORADO AQUI ---
-            # Usamos um st.button com type="primary" e st.switch_page para navegação
             if st.button("➕ Adicionar Gráfico", use_container_width=True, type="primary"):
                 st.switch_page("pages/5_🏗️_Construir Gráficos.py")
 
 st.markdown('</div>', unsafe_allow_html=True)
-
+st.divider()
 
 # --- INTERFACE DE ORGANIZAÇÃO OU VISUALIZAÇÃO ---
 if organize_mode:
-    st.subheader("🛠️ Modo de Organização do Dashboard")
-    st.markdown("**1. Gerir Abas**")
+    st.subheader("🛠️ Modo de Organização")
+    
+    # --- 1. GESTÃO DE DASHBOARDS ---
+    st.markdown("**1. Gerir Dashboards**")
+    with st.container(border=True):
+        st.markdown("**Criar Novo Dashboard**")
+        with st.form("new_dashboard_form"):
+            new_dashboard_name = st.text_input("Nome do Novo Dashboard", placeholder="Ex: Dashboard Técnico")
+            if st.form_submit_button("➕ Criar", use_container_width=True):
+                if new_dashboard_name:
+                    new_id = str(uuid.uuid4())
+                    layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                    proj_layouts = layouts.get(current_project_key, {})
+                    if 'dashboards' not in proj_layouts: proj_layouts['dashboards'] = {}
+                    proj_layouts['dashboards'][new_id] = {"id": new_id, "name": new_dashboard_name, "tabs": {"Geral": []}}
+                    proj_layouts['active_dashboard_id'] = new_id
+                    layouts[current_project_key] = proj_layouts
+                    save_user_dashboard(st.session_state['email'], layouts)
+                    st.success(f"Dashboard '{new_dashboard_name}' criado!")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("**Dashboards Existentes**")
+        st.divider()
+        for db_id, db_config in available_dashboards.items():
+            with st.container():
+                # --- NOVO LAYOUT DE AÇÕES NA MESMA LINHA ---
+                name_col, actions_col = st.columns([2, 1])
+                with name_col:
+                    st.markdown(f"**{db_config.get('name')}** {'(Ativo)' if db_id == active_dashboard_id else ''}")
+                
+                with actions_col:
+                    btn_cols = st.columns(3)
+                    with btn_cols[0]:
+                        with st.popover("Partilhar", use_container_width=True):
+                            with st.form(f"share_form_{db_id}"):
+                                st.markdown(f"Partilhar '{db_config.get('name')}'")
+                                all_other_users = get_all_users(exclude_email=st.session_state['email'])
+                                selected_users = st.multiselect("Selecione os utilizadores:", options=all_other_users)
+                                if st.form_submit_button("Confirmar Partilha", type="primary"):
+                                    if selected_users:
+                                        success, message = share_specific_dashboard(st.session_state['email'], selected_users, current_project_key, db_id)
+                                        if success: st.success(message)
+                                        else: st.error(message)
+
+                    with btn_cols[1]:
+                        with st.popover("Renomear", use_container_width=True):
+                            with st.form(f"rename_form_{db_id}"):
+                                new_name = st.text_input("Novo Nome", value=db_config.get('name'))
+                                if st.form_submit_button("Confirmar"):
+                                    if new_name:
+                                        layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                                        layouts[current_project_key]['dashboards'][db_id]['name'] = new_name
+                                        save_user_dashboard(st.session_state['email'], layouts)
+                                        st.rerun()
+
+                    with btn_cols[2]:
+                        if st.button("Apagar", key=f"del_{db_id}", disabled=(len(available_dashboards) <= 1), use_container_width=True):
+                            layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                            del layouts[current_project_key]['dashboards'][db_id]
+                            if active_dashboard_id == db_id:
+                                layouts[current_project_key]['active_dashboard_id'] = next(iter(layouts[current_project_key]['dashboards']))
+                            save_user_dashboard(st.session_state['email'], layouts)
+                            st.rerun()
+
+    # --- 2. GESTÃO DE ABAS (opera no dashboard ativo) ---
+    st.markdown("**2. Gerir Abas do Dashboard Atual**")
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -256,117 +381,88 @@ if organize_mode:
                 new_tab_name = st.text_input("Nome da Nova Aba")
                 if st.form_submit_button("Adicionar Aba", use_container_width=True):
                     if new_tab_name and new_tab_name not in tabs_layout:
-                        tabs_layout[new_tab_name] = []; dashboard_config["tabs"] = tabs_layout
-                        all_dashboards[current_project_key] = dashboard_config; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                    else: st.error("Nome de aba inválido ou já existente.")
+                        layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                        layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'][new_tab_name] = []
+                        save_user_dashboard(st.session_state['email'], layouts)
+                        st.rerun()
         with c2:
             with st.form("remove_tab_form"):
                 tabs_to_remove = [name for name, charts in tabs_layout.items() if not charts and name != "Geral"]
-                selected_tab_to_remove = st.selectbox("Remover Aba Vazia", options=[""] + tabs_to_remove, format_func=lambda x: "Selecione..." if x == "" else x)
-                if st.form_submit_button("Remover Aba Selecionada", use_container_width=True, type="secondary"):
+                selected_tab_to_remove = st.selectbox("Remover Aba Vazia", options=[""] + tabs_to_remove)
+                if st.form_submit_button("Remover Aba", use_container_width=True, type="secondary"):
                     if selected_tab_to_remove:
-                        del tabs_layout[selected_tab_to_remove]; dashboard_config["tabs"] = tabs_layout
-                        all_dashboards[current_project_key] = dashboard_config; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-    st.divider()
-    st.markdown("**2. Atribuir Gráficos às Abas**")
-    new_assignments = {}
-    for chart in all_charts:
-        current_tab = next((tab_name for tab_name, charts in tabs_layout.items() if chart['id'] in [c['id'] for c in charts]), "Geral")
-        tab_options = list(tabs_layout.keys()); default_index = tab_options.index(current_tab) if current_tab in tab_options else 0
-        new_assignments[chart['id']] = st.selectbox(f"**{chart.get('title', 'Gráfico')}**:", options=tab_options, index=default_index, key=f"select_tab_{chart['id']}")
-    if st.button("Salvar Organização dos Gráficos", use_container_width=True, type="primary"):
-        new_tabs_layout = {tab_name: [] for tab_name in tabs_layout.keys()}
-        for chart in all_charts: new_tabs_layout[new_assignments[chart['id']]].append(chart)
-        dashboard_config["tabs"] = new_tabs_layout; all_dashboards[current_project_key] = dashboard_config
-        save_user_dashboard(st.session_state['email'], all_dashboards); st.success("Organização do dashboard guardada!"); st.rerun()
-else:
-    tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
+                        layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                        del layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'][selected_tab_to_remove]
+                        save_user_dashboard(st.session_state['email'], layouts)
+                        st.rerun()
 
-# ===== PAINEL DE INSIGHTS COM IA (INTELIGENTE E CONTEXTUAL) =====
-st.divider()
-with st.expander("🤖 Análise com IA: Obter Insights do Dashboard"):
-    
-    # Verifica se o utilizador tem pelo menos uma chave de IA configurada
-    has_gemini_key = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
-    has_openai_key = 'encrypted_openai_key' in user_data and user_data['encrypted_openai_key']
-
-    if not has_gemini_key and not has_openai_key:
-        st.warning("Nenhuma chave de API de IA configurada.", icon="⚠️")
-        st.info("Para usar esta funcionalidade, por favor, adicione a sua chave de API do Gemini ou da OpenAI na sua página de 'Minha Conta'.")
-        st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
-    else:
-        # Determina qual provedor de IA está ativo e se a chave correspondente existe
-        ai_provider = user_data.get('ai_provider_preference', 'Google Gemini')
-        provider_key_exists = (ai_provider == 'Google Gemini' and has_gemini_key) or \
-                              (ai_provider == 'OpenAI (ChatGPT)' and has_openai_key)
-
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.info(f"A sua análise será gerada usando o seu provedor preferido: **{ai_provider}**.")
+        # --- NOVA INTERFACE DE ATRIBUIÇÃO (ESTILO PLAYLIST) ---
+        st.markdown("**Atribuir Gráficos às Abas:**")
         
-        with col2:
-            if st.button(f"Gerar Insights com {ai_provider.split(' ')[0]}", use_container_width=True, type="primary", disabled=not provider_key_exists):
-                st.session_state.run_ai_analysis = True
-                st.session_state.provider_for_analysis = ai_provider # Guarda o provedor a ser usado
-
-        if not provider_key_exists:
-            st.error(f"Você selecionou **{ai_provider}** como seu provedor, mas nenhuma chave de API foi encontrada para ele. Por favor, adicione-a em 'Minha Conta'.", icon="🔑")
-
-    # Lógica para executar e exibir a análise apenas quando o botão é clicado
-    if st.session_state.get('run_ai_analysis', False):
-        provider_to_use = st.session_state.provider_for_analysis
-        with st.spinner(f"A IA ({provider_to_use}) está a analisar os seus gráficos..."):
-            chart_summaries = [
-                summarize_chart_data(chart, filtered_df) 
-                for tab_charts in tabs_layout.values() for chart in tab_charts
-            ]
+        # Cria uma lista de todos os gráficos disponíveis para seleção
+        all_available_charts = {chart['id']: chart.get('title', 'Gráfico Sem Título') for chart in all_charts}
+        
+        new_assignments = {}
+        for tab_name in tabs_layout.keys():
+            # Para cada aba, mostra um seletor múltiplo
+            current_charts_in_tab = [chart['id'] for chart in tabs_layout[tab_name]]
             
-            # --- CHAMADA CORRIGIDA ---
-            # Passa o provedor escolhido como argumento para a função
-            ai_analysis = get_ai_insights(st.session_state.get('project_name'), chart_summaries, provider_to_use)
-            
-            if ai_analysis:
-                # Guarda o resultado na sessão para que não se perca
-                st.session_state.ai_analysis_result = ai_analysis
+            selected_chart_ids = st.multiselect(
+                f"Gráficos na Aba '{tab_name}'",
+                options=all_available_charts.keys(),
+                default=current_charts_in_tab,
+                format_func=lambda chart_id: all_available_charts[chart_id] # Mostra o título do gráfico em vez do ID
+            )
+            new_assignments[tab_name] = selected_chart_ids
 
-        # Limpa o gatilho da análise para não re-executar
-        st.session_state.run_ai_analysis = False
+    if st.button("Salvar Organização", use_container_width=True, type="primary"):
+        # Reconstrói a estrutura de abas com base nas seleções
+        layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+        new_tabs_layout = {tab_name: [] for tab_name in tabs_layout.keys()}
+        
+        # Mapeia os IDs de volta para os objetos de gráfico completos
+        all_charts_map = {chart['id']: chart for chart in all_charts}
+        
+        for tab_name, chart_ids in new_assignments.items():
+            for chart_id in chart_ids:
+                if chart_id in all_charts_map:
+                    new_tabs_layout[tab_name].append(all_charts_map[chart_id])
+        
+        layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = new_tabs_layout
+        save_user_dashboard(st.session_state['email'], layouts)
+        st.success("Organização do dashboard guardada!")
+        st.rerun()
 
-    # Exibe o último resultado da análise que está na memória
-    if 'ai_analysis_result' in st.session_state and st.session_state.ai_analysis_result:
-        st.divider()
-        st.markdown("### Resumo da Análise:")
-        st.markdown(st.session_state.ai_analysis_result)
-
-    st.divider()
-
-tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
-if not tabs_with_charts:
-    st.info(f"O dashboard para o projeto **{st.session_state.get('project_name')}** está vazio.")
 else:
-    tab_names = list(tabs_with_charts.keys())
-    st_tabs = st.tabs(tab_names)
-    for i, tab_name in enumerate(tab_names):
-        with st_tabs[i]:
-            dashboard_items_in_tab = tabs_with_charts[tab_name]
-            cols = st.columns(num_columns, gap="large")
-            for j, chart_to_render in enumerate(dashboard_items_in_tab):
-                with cols[j % num_columns]:
-                    with st.container(border=True):
-                        header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
-                        with header_cols[0]:
-                            card_title = chart_to_render.get('title', 'Visualização'); card_icon = chart_to_render.get('icon', '📊')
-                            st.markdown(f"**{card_icon} {card_title}**")
-                        with header_cols[1]:
-                            if st.button("⬆️", key=f"up_{chart_to_render['id']}", help="Mover", disabled=(j == 0), use_container_width=True):
-                                tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j - 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                        with header_cols[2]:
-                            if st.button("⬇️", key=f"down_{chart_to_render['id']}", help="Mover", disabled=(j == len(dashboard_items_in_tab) - 1), use_container_width=True):
-                                tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j + 1); all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                        with header_cols[3]:
-                            if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar", use_container_width=True):
-                                st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
-                        with header_cols[4]:
-                            if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover", use_container_width=True):
-                                tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]; all_dashboards[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_dashboards); st.rerun()
-                        render_chart(chart_to_render, filtered_df)
+    # ===== MODO DE VISUALIZAÇÃO COM ABAS =====
+    tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
+    if not tabs_with_charts:
+        st.info(f"O dashboard '{active_dashboard_name}' está vazio.")
+    else:
+        tab_names = list(tabs_with_charts.keys())
+        st_tabs = st.tabs(tab_names)
+        for i, tab_name in enumerate(tab_names):
+            with st_tabs[i]:
+                dashboard_items_in_tab = tabs_with_charts[tab_name]
+                cols = st.columns(num_columns, gap="large")
+                for j, chart_to_render in enumerate(dashboard_items_in_tab):
+                    with cols[j % num_columns]:
+                        with st.container(border=True):
+                            header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
+                            with header_cols[0]:
+                                card_title = chart_to_render.get('title', 'Visualização'); card_icon = chart_to_render.get('icon', '📊')
+                                st.markdown(f"**{card_icon} {card_title}**")
+                            with header_cols[1]:
+                                if st.button("⬆️", key=f"up_{chart_to_render['id']}", help="Mover", disabled=(j == 0), use_container_width=True):
+                                    tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j - 1); all_layouts[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_layouts); st.rerun()
+                            with header_cols[2]:
+                                if st.button("⬇️", key=f"down_{chart_to_render['id']}", help="Mover", disabled=(j == len(dashboard_items_in_tab) - 1), use_container_width=True):
+                                    tabs_layout[tab_name] = move_item(list(dashboard_items_in_tab), j, j + 1); all_layouts[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_layouts); st.rerun()
+                            with header_cols[3]:
+                                if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar", use_container_width=True):
+                                    st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
+                            with header_cols[4]:
+                                if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover", use_container_width=True):
+                                    tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]; all_layouts[current_project_key]["tabs"] = tabs_layout; save_user_dashboard(st.session_state['email'], all_layouts); st.rerun()
+                            st.divider()
+                            render_chart(chart_to_render, filtered_df)

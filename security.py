@@ -69,8 +69,36 @@ def get_project_configs_collection():
 
 # --- Funções de Gestão de Utilizadores ---
 def find_user(email):
-    """Encontra um utilizador pelo email."""
-    return get_users_collection().find_one({'email': email})
+    """
+    Busca um utilizador e migra o seu layout de dashboard se estiver no formato antigo.
+    Esta é a versão final e corrigida.
+    """
+    user = get_users_collection().find_one({'email': email})
+    
+    if user and 'dashboard_layout' in user:
+        needs_update = False
+        for project_key, layout in user['dashboard_layout'].items():
+            # --- CORREÇÃO AQUI ---
+            # Verifica se o layout é uma lista (o formato antigo)
+            if isinstance(layout, list):
+                needs_update = True
+                # Converte a lista de gráficos antiga para a nova estrutura com abas
+                new_layout_structure = {
+                    "active_dashboard_id": "main_dashboard",
+                    "dashboards": {
+                        "main_dashboard": {
+                            "id": "main_dashboard",
+                            "name": "Dashboard Principal",
+                            "tabs": {"Geral": layout} # A lista antiga vai para a aba "Geral"
+                        }
+                    }
+                }
+                user['dashboard_layout'][project_key] = new_layout_structure
+        
+        if needs_update:
+            save_user_dashboard(email, user['dashboard_layout'])
+            
+    return user
 
 def create_user(email, hashed_password):
     """Cria um novo utilizador na base de dados."""
@@ -289,3 +317,33 @@ def reset_user_password_with_temporary(email):
     
     # Retorna a senha em texto plano para o envio do e-mail
     return temp_password
+
+def get_all_users(exclude_email=None):
+    """Retorna uma lista de todos os e-mails de utilizadores, opcionalmente excluindo um."""
+    query = {}
+    if exclude_email:
+        query = {'email': {'$ne': exclude_email}}
+    users = get_users_collection().find(query, {'email': 1})
+    return [user['email'] for user in users]
+
+def share_specific_dashboard(source_email, target_emails, project_key, dashboard_id):
+    """Copia um layout de dashboard específico de um utilizador para outros."""
+    users_collection = get_users_collection()
+    
+    # 1. Busca o layout do utilizador de origem
+    source_user = find_user(source_email)
+    source_layout = source_user.get('dashboard_layout', {}).get(project_key, {})
+    dashboard_to_share = source_layout.get('dashboards', {}).get(dashboard_id)
+
+    if not dashboard_to_share:
+        return False, "Dashboard de origem não encontrado."
+        
+    # 2. Atualiza o layout para todos os utilizadores de destino
+    for target_email in target_emails:
+        # Usa a notação de ponto para atualizar/criar o dashboard específico
+        users_collection.update_one(
+            {'email': target_email},
+            {'$set': {f'dashboard_layout.{project_key}.dashboards.{dashboard_id}': dashboard_to_share}}
+        )
+    
+    return True, "Dashboard partilhado com sucesso!"

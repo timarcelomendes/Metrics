@@ -59,18 +59,19 @@ def convert_dates_in_filters(filters):
 def render_chart(chart_config, df):
     """
     Renderiza um único gráfico, aplicando os seus próprios filtros ao dataframe original.
-    Esta é a versão final e completa, com a lógica de filtragem corrigida.
+    Esta é a versão final e completa.
     """
     try:
-        # --- ETAPA 1: LÓGICA DE FILTRAGEM (ÚNICA E CORRETA) ---
         df_to_render = df.copy() 
         
+        # --- LÓGICA DE FILTRAGEM COMPLETA E CORRIGIDA ---
         chart_filters = chart_config.get('filters', [])
         if chart_filters:
             for f in chart_filters:
                 field, op, val = f.get('field'), f.get('operator'), f.get('value')
                 if field and op and val is not None and field in df_to_render.columns:
                     try:
+                        # Filtros Categóricos e Numéricos
                         if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
                         elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
                         elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
@@ -79,9 +80,22 @@ def render_chart(chart_config, df):
                         elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
                         elif op == 'entre' and isinstance(val, list) and len(val) == 2:
                              df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
+                        
+                        # Filtros de Data
+                        elif op == "Períodos Relativos":
+                            days_map = {
+                                "Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30, 
+                                "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120, 
+                                "Últimos 150 dias": 150, "Últimos 180 dias": 180
+                            }
+                            end_date = pd.to_datetime(datetime.now().date())
+                            start_date = end_date - timedelta(days=days_map.get(val, 0))
+                            df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
+                        elif op == "Período Personalizado" and len(val) == 2:
+                            start_date, end_date = pd.to_datetime(val[0]), pd.to_datetime(val[1])
+                            df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
                     except Exception:
-                        # Ignora silenciosamente um filtro malformado
-                        pass
+                        pass # Ignora filtros malformados
         
         # --- ETAPA 2: VALIDAÇÃO DE CAMPOS ---
         required_cols = []
@@ -196,8 +210,11 @@ def render_chart(chart_config, df):
             if chart_config.get('show_data_labels') and fig:
                 fig.update_traces(textposition='top center', texttemplate='%{text:,.2f}')
 
+ 
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
             measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
+            
+            # Lógica de agregação para criar o grouped_df
             if measure == 'Contagem de Issues':
                 grouped_df = df_to_render.groupby(dimension).size().reset_index(name='Contagem'); y_axis, values_col = 'Contagem', 'Contagem'
             elif agg == 'Contagem Distinta':
@@ -208,26 +225,24 @@ def render_chart(chart_config, df):
             show_labels = chart_config.get('show_data_labels', False)
             text_param = y_axis if show_labels else None
 
+            # Criação dos gráficos
             if chart_type == 'barra': fig = px.bar(grouped_df, x=dimension, y=y_axis, color=dimension, title=None, template=template, text=text_param)
             elif chart_type == 'linha_agregada': fig = px.line(grouped_df.sort_values(by=dimension), x=dimension, y=y_axis, title=None, template=template, markers=True, text=text_param)
             elif chart_type == 'pizza': fig = px.pie(grouped_df, names=dimension, values=values_col, title=None, template=template)
             elif chart_type == 'treemap': fig = px.treemap(grouped_df, path=[px.Constant("Todos"), dimension], values=values_col, color=y_axis, title=None, color_continuous_scale='Blues', template=template)
-            elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=None, template=template)
+            elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=None, template=template, text=text_param)
             
-            # --- LÓGICA DE RÓTULOS ESPECÍFICA E CORRIGIDA ---
+            # Lógica de rótulos específica por tipo de gráfico
             if show_labels and fig:
-                if chart_type in ['barra', 'funil']:
+                if chart_type in ['barra', 'linha_agregada', 'funil']:
                     is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
                     text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
                     fig.update_traces(texttemplate=text_template, textposition='outside')
-                elif chart_type == 'linha_agregada':
-                    is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
-                    text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
-                    fig.update_traces(texttemplate=text_template, textposition='top center') # Usa 'top center'
                 elif chart_type == 'pizza':
                     fig.update_traces(textinfo='percent+label', textposition='inside')
                 elif chart_type == 'treemap':
                     fig.update_traces(textinfo='label+value+percent root')
+        
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
             
@@ -420,8 +435,28 @@ def get_ai_insights(project_name, chart_summaries, provider):
         else: # OpenAI
             response = model_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
             return response.choices[0].message.content
+    # --- NOVA MENSAGEM AMIGÁVEL PARA ERRO DE QUOTA ---
+    except openai.RateLimitError:
+        st.error(
+            """
+            **Sua quota de utilização da API da OpenAI foi excedida.** 😟
+
+            Isto geralmente acontece quando os créditos gratuitos expiram ou o seu limite de faturação é atingido.
+
+            **O que fazer?**
+            1. Aceda ao seu painel da [OpenAI Platform](https://platform.openai.com/account/billing/overview).
+            2. Verifique a sua secção de **"Billing" (Faturação)** para adicionar um método de pagamento ou aumentar os seus limites.
+
+            Enquanto isso, você pode ir à sua página **'Minha Conta'** e mudar o seu provedor de IA para o **Google Gemini**.
+            """,
+            icon="💳"
+        )
+        return None
+    except openai.AuthenticationError:
+        st.error("A sua chave de API da OpenAI é inválida ou foi revogada. Por favor, verifique-a na página 'Minha Conta'.", icon="🔑")
+        return None
     except Exception as e:
-        st.error(f"Erro ao gerar insights: {e}"); return None
+        st.error(f"Ocorreu um erro inesperado com a API da OpenAI: {e}"); return None
     
 def generate_chart_config_from_text(prompt, numeric_cols, categorical_cols):
     """
