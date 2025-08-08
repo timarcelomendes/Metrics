@@ -81,43 +81,9 @@ with st.sidebar:
         is_data_loaded = 'dynamic_df' in st.session_state and not st.session_state.dynamic_df.empty
         with st.expander("Carregar Dados", expanded=not is_data_loaded):
             if st.button("Carregar / Atualizar Dados", use_container_width=True, type="primary"):
-                with st.spinner(f"A carregar e processar dados de '{st.session_state.project_name}'..."):
-                    all_issues_raw = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
-                    valid_issues = filter_ignored_issues(all_issues_raw)
-                    
-                    data = []; user_data = find_user(st.session_state['email']); global_configs = st.session_state.get('global_configs', {})
-                    project_config = get_project_config(st.session_state.project_key) or {}
-                    
-                    user_enabled_standard = user_data.get('standard_fields', []); user_enabled_custom = user_data.get('enabled_custom_fields', [])
-                    all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
-                    estimation_config = project_config.get('estimation_field', {})
-
-                    for i in valid_issues:
-                        completion_date = find_completion_date(i)
-                        issue_data = {'Issue': i.key, 'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),'Data de Conclusão': completion_date,'Lead Time (dias)': calculate_lead_time(i), 'Cycle Time (dias)': calculate_cycle_time(i)}
-                        
-                        fields_to_process = []
-                        for field_name in user_enabled_standard:
-                            if field_name in all_available_standard: fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
-                        for field_config in all_available_custom:
-                            if field_config.get('name') in user_enabled_custom: fields_to_process.append(field_config)
-                        
-                        for field in fields_to_process:
-                            field_id, field_name = field['id'], field['name']; value = getattr(i.fields, field_id, None)
-                            if hasattr(value, 'displayName'): issue_data[field_name] = value.displayName
-                            elif isinstance(value, list): issue_data[field_name] = ', '.join([getattr(v, 'name', str(v)) for v in value]) if value else None
-                            elif hasattr(value, 'value'): issue_data[field_name] = value.value
-                            elif hasattr(value, 'name'): issue_data[field_name] = value.name
-                            elif value: issue_data[field_name] = str(value).split('T')[0]
-                            else: issue_data[field_name] = None
-
-                        if estimation_config.get('id'):
-                            issue_data[estimation_config['name']] = get_issue_estimation(i, estimation_config)
-                        
-                        data.append(issue_data)
-                    
-                    st.session_state.dynamic_df = pd.DataFrame(data)
-                    st.rerun()
+                df = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+                st.session_state.dynamic_df = df
+                st.rerun()
 
         if st.button("Logout", use_container_width=True, type='secondary'):
             for key in list(st.session_state.keys()): del st.session_state[key]

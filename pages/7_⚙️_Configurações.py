@@ -1,7 +1,7 @@
 # pages/6_⚙️_Configurações.py
 
 import streamlit as st
-from security import get_global_configs, save_global_configs, get_project_config, save_project_config, get_project_configs_collection
+from security import *
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from jira_connector import *
 from pathlib import Path

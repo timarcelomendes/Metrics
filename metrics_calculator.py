@@ -1,14 +1,13 @@
 # metrics_calculator.py (VERSÃO FINAL COM CORREÇÃO DE CYCLE TIME)
-
+import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from jira_connector import get_sprint_issues
-from utils import *
 from config import STATUS_MAPPING_FILE, DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
-from utils import load_config 
 from datetime import datetime, timedelta
-
+import plotly.graph_objects as go
+from security import load_config
 
 # --- Listas Configuráveis ---
 INITIAL_STATES = ['to do', 'a fazer', 'backlog', 'aberto', 'novo']
@@ -285,7 +284,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     """
     if burnup_df.empty or 'Trabalho Concluído' not in burnup_df.columns:
         return None, None, 0, 0
-    
+
     # --- Cálculo da Velocidade Média (Histórica) ---
     total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
     first_work_day = burnup_df[burnup_df['Trabalho Concluído'] > 0].index.min()
@@ -333,12 +332,13 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
         
         if forecast_date:
             future_days = (forecast_date - trend_data.index[-1]).days
-            future_X = np.array(range(len(trend_data), len(trend_data) + future_days)).reshape(-1, 1)
-            future_trend = model.predict(future_X)
-            extended_dates = pd.to_datetime([trend_data.index[-1] + timedelta(days=i) for i in range(1, future_days + 1)])
-            full_trend_dates = trend_data.index.append(extended_dates)
-            full_trend_values = np.concatenate([trend_line, future_trend])
-            fig.add_trace(go.Scatter(x=full_trend_dates, y=full_trend_values, mode='lines', name='Tendência', line=dict(color='green', dash='dash')))
+            if future_days > 0:
+                future_X = np.array(range(len(trend_data), len(trend_data) + future_days)).reshape(-1, 1)
+                future_trend = model.predict(future_X)
+                extended_dates = pd.to_datetime([trend_data.index[-1] + timedelta(days=i) for i in range(1, future_days + 1)])
+                full_trend_dates = trend_data.index.append(extended_dates)
+                full_trend_values = np.concatenate([trend_line, future_trend])
+                fig.add_trace(go.Scatter(x=full_trend_dates, y=full_trend_values, mode='lines', name='Tendência', line=dict(color='green', dash='dash')))
     
     fig.update_layout(
         title_text=None,

@@ -4,7 +4,6 @@ import streamlit as st
 import json, os, pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from jira_connector import get_jql_issue_count
 from fpdf import FPDF
 import pandas as pd
 import uuid
@@ -20,6 +19,9 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from pathlib import Path
 import re
+from jira_connector import *
+from security import *
+from metrics_calculator import *
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -116,6 +118,7 @@ def render_chart(chart_config, df):
         if missing_cols:
             st.warning(f"Não foi possível renderizar esta visualização.", icon="⚠️")
             st.error(f"Motivo: O(s) campo(s) **{', '.join(missing_cols)}** não foi/foram encontrado(s) nos dados atuais.")
+            st.badge("Habilite o campo que deseja utilizar e **atualize os dados**", color='orange')
             return
 
         # --- ETAPA 3: RENDERIZAÇÃO ---
@@ -898,3 +901,52 @@ def is_valid_email(email):
     # Expressão regular para validar e-mails
     regex = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
     return re.fullmatch(regex, email)
+
+# --- FUNÇÃO CENTRAL DE CARREGAMENTO DE DADOS ---
+def load_and_process_project_data(jira_client, project_key):
+    """
+    Busca todas as issues de um projeto no Jira, processa os campos
+    e retorna um DataFrame pronto para análise.
+    """
+    with st.spinner(f"A carregar e processar dados do projeto..."):
+        all_issues_raw = get_all_project_issues(jira_client, project_key)
+        st.session_state['raw_issues_for_fluxo'] = all_issues_raw
+        valid_issues = filter_ignored_issues(all_issues_raw)
+        
+        data = []
+        user_data = find_user(st.session_state['email'])
+        global_configs = st.session_state.get('global_configs', {})
+        project_config = get_project_config(project_key) or {}
+        
+        user_enabled_standard = user_data.get('standard_fields', [])
+        user_enabled_custom = user_data.get('enabled_custom_fields', [])
+        all_available_standard = global_configs.get('available_standard_fields', {})
+        all_available_custom = global_configs.get('custom_fields', [])
+        estimation_config = project_config.get('estimation_field', {})
+
+        for i in valid_issues:
+            issue_data = {
+                'Issue': i.key,
+                'Data de Criação': pd.to_datetime(i.fields.created).tz_localize(None),
+                'Data de Conclusão': find_completion_date(i),
+                'Lead Time (dias)': calculate_lead_time(i),
+                'Cycle Time (dias)': calculate_cycle_time(i),
+            }
+            
+            fields_to_process = []
+            for field_name in user_enabled_standard:
+                if field_name in all_available_standard:
+                    fields_to_process.append({**all_available_standard[field_name], 'name': field_name})
+            for field_config in all_available_custom:
+                if field_config.get('name') in user_enabled_custom:
+                    fields_to_process.append(field_config)
+            
+            for field in fields_to_process:
+                issue_data[field['name']] = get_field_value(i, field)
+
+            if estimation_config.get('id'):
+                issue_data[estimation_config['name']] = get_issue_estimation(i, estimation_config)
+            
+            data.append(issue_data)
+            
+        return pd.DataFrame(data)

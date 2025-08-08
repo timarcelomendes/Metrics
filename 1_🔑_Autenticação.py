@@ -12,7 +12,6 @@ st.set_page_config(page_title="Gauge Metrics - Login",
                    layout="wide" 
                    )
 
-# ===== NOVO BLOCO DE CONTROLO DE VISIBILIDADE =====
 # Esta lógica será executada em todas as páginas e controlará o que é exibido.
 if 'email' not in st.session_state:
     # Esconde a sidebar inteira se o utilizador não estiver logado

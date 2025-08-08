@@ -10,6 +10,19 @@ import string
 import secrets
 import random
 import string
+import os
+import json
+
+def load_config(file_path, default_value):
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            try: return json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError): return default_value
+    return default_value
+
+def save_config(data, file_path):
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4)
 
 # --- Configuração de Hashing de Senha ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -76,7 +89,6 @@ def find_user(email):
     if user and 'dashboard_layout' in user:
         needs_update = False
         for project_key, layout in user['dashboard_layout'].items():
-            # --- CORREÇÃO AQUI ---
             # Verifica se o layout é uma lista (o formato antigo)
             if isinstance(layout, list):
                 needs_update = True
