@@ -57,9 +57,9 @@ with st.sidebar:
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- ESTRUTURA DE ABAS PRINCIPAL ---
-tab1, tab2, tab3 = st.tabs(["**Perfil e Segurança**", "**Preferências de Campos**", "**Configurações de IA**"])
+tab_perfil, tab_campos, tab_ai, tab_tokens = st.tabs(["👤 Perfil e Senha", "Jira: Campos Dinâmicos", "Configurações de AI", "🔑 Tokens e Credenciais"])
 
-with tab1:
+with tab_perfil:
     st.subheader("Informações do Perfil")
     col1, col2 = st.columns(2, gap="large")
     with col1:
@@ -98,7 +98,7 @@ with tab1:
                         </body></html>
                         """
                         send_notification_email(email, subject, body_html)
-with tab2:
+with tab_campos:
     st.subheader("Preferências de Campos para Análise")
     st.caption("Ative os campos que você deseja que apareçam como opções nas páginas de análise. As alterações são guardadas para o seu perfil.")
 
@@ -144,7 +144,7 @@ with tab2:
         st.success("Suas preferências de campos foram guardadas!")
         st.rerun()
 
-with tab3:
+with tab_ai:
     st.subheader("🤖 Configurações de Inteligência Artificial")
     st.caption("Selecione o seu provedor de IA preferido e insira a sua chave de API pessoal.")
 
@@ -209,3 +209,61 @@ with tab3:
                 if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
                     remove_user_openai_key(email)
                     st.session_state['user_data'] = find_user(email); st.success("Chave da OpenAI removida!"); st.rerun()
+
+# ===== ABA DE TOKENS E CREDENCIAIS =====
+with tab_tokens:
+    st.subheader("Gestão de Tokens de API e Credenciais de E-mail")
+    st.caption("Guarde as suas credenciais aqui. Elas são guardadas de forma encriptada na base de dados.")
+    
+    # --- Seção do Figma ---
+    with st.container(border=True):
+        with st.form("figma_token_form"):
+            st.markdown("**Token de Acesso Pessoal do Figma**")
+            st.info("Este token é necessário para usar a funcionalidade 'Gerador de Histórias com IA'. [Clique aqui para criar um novo token no Figma](https://www.figma.com/developers/api#access-tokens).", icon="💡")
+            
+            # Busca o token existente para exibi-lo (se houver)
+            current_figma_token = get_user_figma_token(email)
+            
+            figma_token = st.text_input(
+                "Seu Token do Figma", 
+                value=current_figma_token or "",
+                type="password",
+                help="O seu token é guardado de forma encriptada na base de dados."
+            )
+
+            if current_figma_token:
+                st.warning("O seu token está a ser exibido. Não partilhe esta informação.", icon="⚠️")
+            
+            if st.form_submit_button("Salvar Token do Figma", use_container_width=True, type="primary"):
+                save_user_figma_token(email, figma_token)
+                st.success("Token do Figma guardado com sucesso!")
+                st.rerun()
+
+    # --- Seção de E-mail ---
+    with st.container(border=True):
+        st.markdown("**Configuração de Envio de E-mail**")
+        current_smtp_configs = get_smtp_configs() or {}
+        current_provider = current_smtp_configs.get('provider', 'SendGrid')
+
+        provider_options = ["SendGrid", "Gmail (SMTP)"]
+        provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
+        email_provider = st.radio("Selecione o seu provedor:", provider_options, horizontal=True, index=provider_index)
+        
+        with st.form("smtp_config_form"):
+            if email_provider == 'Gmail (SMTP)':
+                from_email = st.text_input("E-mail de Origem (Gmail)", value=current_smtp_configs.get('from_email', ''))
+                app_password = st.text_input("Senha de Aplicação (App Password)", value=current_smtp_configs.get('app_password', ''), type="password")
+                smtp_configs_to_save = {'provider': 'Gmail (SMTP)', 'from_email': from_email, 'app_password': app_password}
+            
+            elif email_provider == 'SendGrid':
+                from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', ''))
+                sendgrid_api_key = st.text_input("SendGrid API Key", value=current_smtp_configs.get('api_key', ''), type="password")
+                smtp_configs_to_save = {'provider': 'SendGrid', 'from_email': from_email, 'api_key': sendgrid_api_key}
+            
+            if st.form_submit_button("Salvar Credenciais de E-mail", use_container_width=True, type="primary"):
+                if from_email:
+                    save_smtp_configs(smtp_configs_to_save)
+                    st.success("Configurações de e-mail salvas com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Por favor, preencha o e-mail de origem.")

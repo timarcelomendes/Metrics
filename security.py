@@ -457,3 +457,34 @@ def decrypt_smtp_password(encrypted_password):
         return decrypt_token(encrypted_password)
     except Exception:
         return None
+    
+def save_user_figma_token(user_email, figma_token):
+    """Encripta e guarda o Token de Acesso Pessoal do Figma para um utilizador."""
+    if not figma_token:
+        # Se o token estiver vazio, remove-o da base de dados
+        get_users_collection().update_one(
+            {'email': user_email},
+            {'$unset': {'figma_token': ""}}
+        )
+        return
+        
+    encrypted_token = encrypt_token(figma_token)
+    get_users_collection().update_one(
+        {'email': user_email},
+        {'$set': {'figma_token': encrypted_token}},
+        upsert=True
+    )
+
+def get_user_figma_token(user_email):
+    """Busca e desencripta o Token de Acesso Pessoal do Figma de um utilizador."""
+    user = find_user(user_email)
+    encrypted_token = user.get('figma_token')
+    
+    if not encrypted_token:
+        return None
+        
+    try:
+        return decrypt_token(encrypted_token)
+    except InvalidToken:
+        st.error("O seu token do Figma parece estar corrompido. Por favor, guarde-o novamente.")
+        return None
