@@ -1,0 +1,15 @@
+# requirements.txt
+streamlit
+pandas
+jira
+plotly
+numpy
+scikit-learn
+pymongo
+cryptography
+dnspython
+passlib[bcrypt]
+fpdf2
+google-generativeai
+openai
+matplotlib

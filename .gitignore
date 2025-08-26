@@ -1,0 +1,45 @@
+# ==================================
+# Python
+# ==================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# VSCode / IDE configs
+.vscode/
+.idea/
+*.swp
+
+# ==================================
+# Streamlit
+# ==================================
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# ==================================
+# OS / Misc
+# ==================================
+.DS_Store
+Thumbs.db
+*.log
+*.tmp

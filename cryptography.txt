@@ -1,0 +1,57 @@
+Olá! Este erro, KeyError: 'st.secrets has no key "SECRET_KEY"', é uma mensagem de segurança muito importante.
+
+Ele significa que uma chave de segurança crucial, a SECRET_KEY, está em falta no seu ficheiro de configuração (.streamlit/secrets.toml). Esta chave é essencial para encriptar e desencriptar dados sensíveis, como os seus tokens de conexão do Jira.
+
+A solução é gerar uma nova chave e adicioná-la ao seu ficheiro de segredos.
+
+Passo 1: Gere a sua Chave Secreta
+Para criar uma chave de encriptação forte e segura, vamos usar um pequeno script Python.
+
+Crie um novo ficheiro na pasta principal do seu projeto e nomeie-o, por exemplo, generate_key.py.
+
+Cole o seguinte código nesse ficheiro:
+
+Python
+
+# generate_key.py
+from cryptography.fernet import Fernet
+
+# Gera uma nova chave de encriptação segura
+key = Fernet.generate_key()
+
+print("A sua nova chave secreta é:")
+print(key.decode())
+print("\nCopie esta chave e cole-a no seu ficheiro .streamlit/secrets.toml")
+Abra o seu terminal, navegue até à pasta do seu projeto e execute o script:
+
+Bash
+
+python generate_key.py
+O terminal irá exibir uma chave longa e aleatória. Copie esta chave.
+
+Passo 2: Adicione a Chave ao seu Ficheiro de Segredos
+Na pasta do seu projeto, encontre a subpasta oculta chamada .streamlit.
+
+Dentro dela, abra o ficheiro secrets.toml.
+
+Adicione a chave que você acabou de copiar, como no exemplo abaixo:
+
+Ini, TOML
+
+# .streamlit/secrets.toml
+
+MONGO_CONNECTION_STRING = "mongodb+srv://..."
+
+# --- ADICIONE A SUA CHAVE DE ENCRIPTAÇÃO AQUI ---
+SECRET_KEY = "COLE_A_SUA_CHAVE_GERADA_AQUI"
+# ----------------------------------------------------
+
+[gmail_smtp]
+EMAIL_ADDRESS = "o.seu.email@gmail.com"
+EMAIL_PASSWORD = "a-sua-senha-de-app-de-16-digitos"
+
+[app_settings]
+ADMIN_EMAILS = ["seu.email@exemplo.com"]
+Salve o ficheiro secrets.toml.
+
+Após adicionar a chave, reinicie a sua aplicação Streamlit. O erro KeyError será resolvido e a sua aplicação voltará a funcionar normalmente.
