@@ -122,7 +122,9 @@ else:
                             
                             # Lê o config.toml e guarda na memória da sessão
                             st.session_state['global_configs'] = get_app_configs()
-                                
+                            st.session_state['global_configs'] = get_global_configs()
+                            st.session_state['smtp_configs'] = get_smtp_configs()
+                            
                             st.success("Login bem-sucedido! A carregar...")
                             st.switch_page("pages/2_🏠_Meu_Dashboard.py")
                         else:

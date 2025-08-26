@@ -219,22 +219,15 @@ with tab_tokens:
     with st.container(border=True):
         with st.form("figma_token_form"):
             st.markdown("**Token de Acesso Pessoal do Figma**")
-            st.info("Este token é necessário para usar a funcionalidade 'Gerador de Histórias com IA'. [Clique aqui para criar um novo token no Figma](https://www.figma.com/developers/api#access-tokens).", icon="💡")
-            
-            # Busca o token existente para exibi-lo (se houver)
             current_figma_token = get_user_figma_token(email)
-            
             figma_token = st.text_input(
                 "Seu Token do Figma", 
                 value=current_figma_token or "",
                 type="password",
-                help="O seu token é guardado de forma encriptada na base de dados."
+                help="O seu token é guardado de forma encriptada."
             )
-
-            if current_figma_token:
-                st.warning("O seu token está a ser exibido. Não partilhe esta informação.", icon="⚠️")
             
-            if st.form_submit_button("Salvar Token do Figma", use_container_width=True, type="primary"):
+            if st.form_submit_button("Salvar Token do Figma", use_container_width=True):
                 save_user_figma_token(email, figma_token)
                 st.success("Token do Figma guardado com sucesso!")
                 st.rerun()
@@ -247,17 +240,22 @@ with tab_tokens:
 
         provider_options = ["SendGrid", "Gmail (SMTP)"]
         provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
-        email_provider = st.radio("Selecione o seu provedor:", provider_options, horizontal=True, index=provider_index)
+        email_provider = st.radio(
+            "Selecione o seu provedor:",
+            provider_options,
+            horizontal=True,
+            index=provider_index
+        )
         
         with st.form("smtp_config_form"):
             if email_provider == 'Gmail (SMTP)':
-                from_email = st.text_input("E-mail de Origem (Gmail)", value=current_smtp_configs.get('from_email', ''))
-                app_password = st.text_input("Senha de Aplicação (App Password)", value=current_smtp_configs.get('app_password', ''), type="password")
+                from_email = st.text_input("E-mail de Origem (Gmail)", value=current_smtp_configs.get('from_email', '') if current_provider == 'Gmail (SMTP)' else '')
+                app_password = st.text_input("Senha de Aplicação (App Password)", value=current_smtp_configs.get('app_password', '') if current_provider == 'Gmail (SMTP)' else '', type="password")
                 smtp_configs_to_save = {'provider': 'Gmail (SMTP)', 'from_email': from_email, 'app_password': app_password}
             
             elif email_provider == 'SendGrid':
-                from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', ''))
-                sendgrid_api_key = st.text_input("SendGrid API Key", value=current_smtp_configs.get('api_key', ''), type="password")
+                from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', '') if current_provider == 'SendGrid' else '')
+                sendgrid_api_key = st.text_input("SendGrid API Key", value=current_smtp_configs.get('api_key', '') if current_provider == 'SendGrid' else '', type="password")
                 smtp_configs_to_save = {'provider': 'SendGrid', 'from_email': from_email, 'api_key': sendgrid_api_key}
             
             if st.form_submit_button("Salvar Credenciais de E-mail", use_container_width=True, type="primary"):
