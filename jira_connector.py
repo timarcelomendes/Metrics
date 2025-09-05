@@ -289,3 +289,66 @@ def get_project_issue_types(jira_client, project_key):
     except Exception as e:
         print(f"Erro ao buscar tipos de issues para o projeto {project_key}: {e}")
         return []
+    
+def get_issue(jira_client, issue_key):
+    """
+    Busca uma única issue no Jira pela sua chave.
+    """
+    try:
+        issue = jira_client.issue(issue_key)
+        return issue
+    except Exception as e:
+        # Adiciona um tratamento de erro mais detalhado
+        print(f"Erro ao buscar a issue '{issue_key}': {e}")
+        raise e
+    
+def get_issue_as_dict(jira_client, issue_key):
+    """
+    Busca uma única issue no Jira e converte todos os seus campos num
+    dicionário de texto simples para ser usado pela IA.
+    Esta versão é mais robusta e não depende da chave '_schema'.
+    """
+    try:
+        # Passo 1: Obter um mapa de todos os campos disponíveis (ID -> Nome)
+        all_fields = jira_client.fields()
+        field_map = {field['id']: field['name'] for field in all_fields}
+
+        # Passo 2: Buscar a issue
+        issue = jira_client.issue(issue_key)
+        
+        # Dicionário para armazenar os dados limpos
+        issue_data = {}
+        
+        # Passo 3: Percorrer os campos da issue e usar o mapa para "traduzir" os nomes
+        for field_id in issue.raw['fields']:
+            field_value = getattr(issue.fields, field_id, None)
+            
+            if field_value is None:
+                continue
+            
+            cleaned_value = ""
+            if isinstance(field_value, str):
+                cleaned_value = field_value
+            elif isinstance(field_value, list):
+                str_values = []
+                for item in field_value:
+                    if hasattr(item, 'name'): str_values.append(item.name)
+                    elif hasattr(item, 'value'): str_values.append(item.value)
+                    elif isinstance(item, str): str_values.append(item)
+                cleaned_value = ", ".join(str_values)
+            elif hasattr(field_value, 'name'):
+                cleaned_value = field_value.name
+            elif hasattr(field_value, 'displayName'):
+                cleaned_value = field_value.displayName
+            else:
+                cleaned_value = str(field_value)
+
+            # Usa o mapa para obter o nome amigável do campo
+            friendly_name = field_map.get(field_id, field_id)
+            issue_data[friendly_name] = cleaned_value
+
+        return issue_data
+        
+    except Exception as e:
+        print(f"Erro ao buscar ou processar a issue '{issue_key}': {e}")
+        raise e

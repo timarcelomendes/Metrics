@@ -262,6 +262,8 @@ with tab_tokens:
                 if from_email:
                     save_smtp_configs(smtp_configs_to_save)
                     st.success("Configurações de e-mail salvas com sucesso!")
+                    # --- CORREÇÃO AQUI: ATUALIZA A MEMÓRIA DA SESSÃO ---
+                    st.session_state['smtp_configs'] = get_smtp_configs()
                     st.rerun()
                 else:
                     st.error("Por favor, preencha o e-mail de origem.")

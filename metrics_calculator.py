@@ -83,8 +83,8 @@ def calculate_cycle_time(issue, completion_date=None):
         return (completion_date - start_date).days
     return None
 
-def calculate_throughput(issues):
-    return len([i for i in issues if find_completion_date(i) is not None])
+def calculate_throughput(issues, project_config):
+    return len([i for i in issues if find_completion_date(i, project_config) is not None])
 
 def get_filtered_issues(issues):
     """Função auxiliar para remover issues com status ignorados."""
@@ -130,25 +130,25 @@ def get_issue_estimation(issue, estimation_config):
     
     return float(value)
 
-def calculate_predictability(sprint_issues, estimation_field_id):
-    if not sprint_issues or not estimation_field_id: return 0.0
-    story_points_field = estimation_field_id; total_points_planned = 0; total_points_completed = 0
+def calculate_predictability(sprint_issues, estimation_config, project_config):
+    if not sprint_issues or not estimation_config.get('id'): return 0.0
+    story_points_field = estimation_config.get('id'); total_points_planned = 0; total_points_completed = 0
     for issue in sprint_issues:
-        points = getattr(issue.fields, story_points_field, 0) or 0
+        points = get_issue_estimation(issue, estimation_config) or 0
         total_points_planned += points
-        if find_completion_date(issue) is not None:
-            completed_points_value = getattr(issue.fields, story_points_field, 0) or 0
+        if find_completion_date(issue, project_config) is not None:
+            completed_points_value = get_issue_estimation(issue, estimation_config) or 0
             total_points_completed += completed_points_value
     if total_points_planned == 0: return 100.0
     return (total_points_completed / total_points_planned) * 100
 
-def generate_sprint_health_summary(issues, predictability):
+def generate_sprint_health_summary(issues, predictability, project_config):
     insights = []
     if predictability >= 95: insights.append(f"✅ **Previsibilidade Excelente ({predictability:.0f}%):** O time demonstrou um domínio notável do seu planejamento.")
     elif 80 <= predictability < 95: insights.append(f"✅ **Previsibilidade Saudável ({predictability:.0f}%):** O time é bastante confiável em suas previsões.")
     elif 60 <= predictability < 80: insights.append(f"⚠️ **Previsibilidade em Desenvolvimento ({predictability:.0f}%):** Há espaço para melhorar a precisão do planejamento ou a gestão de interrupções.")
     else: insights.append(f"🚨 **Alerta de Previsibilidade ({predictability:.0f}%):** Forte indicação de que o planejamento não está conectado à entrega.")
-    completed_issues = [i for i in issues if find_completion_date(i) is not None]
+    completed_issues = [i for i in issues if find_completion_date(i, project_config) is not None]
     if not completed_issues: insights.append("ℹ️ Não há dados de fluxo ou qualidade, pois nenhuma issue foi concluída."); return insights
     issue_types = [i.fields.issuetype.name.lower() for i in completed_issues]
     bug_count = sum(1 for t in issue_types if 'bug' in t); total_completed = len(completed_issues)
@@ -162,10 +162,10 @@ def generate_sprint_health_summary(issues, predictability):
         else: insights.append(f"✅ **Fluxo de Trabalho Estável:** O tempo de conclusão das tarefas foi consistente.")
     return insights
 
-def prepare_burndown_data(client, sprint_obj, estimation_config):
+# ############### FUNÇÃO CORRIGIDA ###############
+def prepare_burndown_data(client, sprint_obj, estimation_config, project_config):
     """
     Prepara os dados para o gráfico de Burndown de uma sprint.
-    Agora recebe o objeto sprint completo e a configuração de estimativa.
     """
     estimation_field_id = estimation_config.get('id')
     if not estimation_field_id:
@@ -173,17 +173,14 @@ def prepare_burndown_data(client, sprint_obj, estimation_config):
         return pd.DataFrame()
 
     try:
-        # Extrai as datas do objeto sprint
         start_date = pd.to_datetime(sprint_obj.startDate).tz_localize(None).normalize()
         end_date = pd.to_datetime(sprint_obj.endDate).tz_localize(None).normalize()
         sprint_id = sprint_obj.id
     except AttributeError:
-        # Se o objeto sprint não tiver as datas, retorna um dataframe vazio
         return pd.DataFrame()
 
     issues = get_sprint_issues(client, sprint_id)
-    if not issues:
-        return pd.DataFrame()
+    if not issues: return pd.DataFrame()
         
     total_points_planned = sum(get_issue_estimation(i, estimation_config) for i in issues)
     
@@ -191,7 +188,7 @@ def prepare_burndown_data(client, sprint_obj, estimation_config):
     points_completed_per_day = {day: 0 for day in date_range}
     
     for issue in issues:
-        completion_date = find_completion_date(issue)
+        completion_date = find_completion_date(issue, project_config)
         if completion_date and start_date <= completion_date <= end_date:
             points = get_issue_estimation(issue, estimation_config)
             points_completed_per_day[completion_date] += points
@@ -264,22 +261,18 @@ def prepare_cfd_data(issues, start_date, end_date):
 
     return cfd_cumulative, wip_df
 
-def prepare_project_burnup_data(issues, unit, estimation_config):
+def prepare_project_burnup_data(issues, unit, estimation_config, project_config):
     """Prepara o burnup, agora ignorando issues canceladas."""
-    
-    # Filtra as issues no início
     valid_issues = get_filtered_issues(issues)
 
-    # Se a unidade for 'points', mas não houver campo configurado, retorna vazio.
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
-        st.warning("Para análise por pontos, por favor, configure um 'Campo de Estimativa' para este projeto nas Configurações.")
+        st.warning("Para análise por pontos, configure um 'Campo de Estimativa' para este projeto.")
         return pd.DataFrame()
     
     data = []
-    for issue in issues:
+    for issue in valid_issues: # Usa a lista filtrada
         created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
-        completion_date = find_completion_date(issue, estimation_config)
-        # Usa a função get_issue_estimation para obter o valor correto
+        completion_date = find_completion_date(issue, project_config)
         value = get_issue_estimation(issue, estimation_config) if unit == 'points' else 1
         data.append({'created': created_date, 'resolved': completion_date, 'value': value})
         
@@ -503,7 +496,7 @@ def calculate_sprint_goal_success_rate(sprints, threshold, estimation_config):
             
     return (successful_sprints / len(sprints)) * 100 if sprints else 0.0
 
-def prepare_burndown_data_by_count(client, sprint_obj):
+def prepare_burndown_data_by_count(client, sprint_obj, project_config):
     """Prepara os dados para o gráfico de Burndown por CONTAGEM DE ISSUES."""
     try:
         start_date = pd.to_datetime(sprint_obj.startDate).tz_localize(None).normalize()
@@ -520,7 +513,7 @@ def prepare_burndown_data_by_count(client, sprint_obj):
     issues_completed_per_day = {day: 0 for day in date_range}
 
     for issue in issues:
-        completion_date = find_completion_date(issue)
+        completion_date = find_completion_date(issue, project_config)
         if completion_date and start_date <= completion_date <= end_date:
             issues_completed_per_day[completion_date] += 1
 
@@ -538,7 +531,7 @@ def prepare_burndown_data_by_count(client, sprint_obj):
         'Linha Ideal': ideal_line
     }).set_index('Data')
 
-def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config):
+def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config, project_config):
     """Prepara os dados para o gráfico de Burndown por um CAMPO DE ESTIMATIVA."""
     try:
         start_date = pd.to_datetime(sprint_obj.startDate).tz_localize(None).normalize()
@@ -554,7 +547,7 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config):
     points_completed_per_day = {day: 0 for day in date_range}
 
     for issue in issues:
-        completion_date = find_completion_date(issue)
+        completion_date = find_completion_date(issue, project_config)
         if completion_date and start_date <= completion_date <= end_date:
             points = get_issue_estimation(issue, estimation_config)
             points_completed_per_day[completion_date] += points

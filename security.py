@@ -1,6 +1,7 @@
 # security.py
 
 import streamlit as st
+import pandas as pd
 from pymongo import MongoClient
 from cryptography.fernet import Fernet
 from passlib.context import CryptContext
@@ -27,6 +28,11 @@ DEFAULT_DONE_STATES = ['concluído', 'done', 'resolvido', 'closed']
 DEFAULT_COLORS = {
     'status_colors': {'A Fazer': '#808080', 'Em Andamento': '#007bff', 'Concluído': '#28a745'},
     'type_colors': {'Bug': '#d73a49', 'Melhoria': '#28a745', 'Tarefa': '#007bff'}
+}
+
+DEFAULT_PLAYBOOKS = {
+    "Geral (Manifesto)": "### Nosso Manifesto de Produto\nEste playbook é o guia oficial...",
+    "Discovery": "### O Processo de Discovery\nFazer um bom Product Discovery é a etapa mais crucial..."
 }
 
 def load_config(file_path, default_value):
@@ -188,48 +194,59 @@ def save_last_project(email, project_key):
 
 @st.cache_data
 def get_global_configs():
-    """Busca as configs globais do MongoDB ou cria com valores padrão."""
+    """Busca as configs globais do MongoDB, incluindo playbooks."""
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
     
     if configs is None:
         configs = {
             '_id': 'global_settings',
-            'available_standard_fields': AVAILABLE_STANDARD_FIELDS,
-            'status_mapping': { 
-                'initial': DEFAULT_INITIAL_STATES, 
-                'done': DEFAULT_DONE_STATES,
-                'ignored': ['cancelado', 'cancelled']
-            },
-            'custom_fields': [], 
-            'sprint_goal_threshold': 90
-            # As chaves 'status_colors' e 'type_colors' foram removidas
+            'playbooks': DEFAULT_PLAYBOOKS,
+            'admin_emails': ["seu-email-admin@dominio.com"], # Adicione o seu e-mail aqui
+            # ... (outras configurações padrão)
         }
         collection.insert_one(configs)
         return configs
     
-    # Lógica de migração (agora remove as chaves de cores antigas, se existirem)
-    needs_update = False
-    if 'status_colors' in configs or 'type_colors' in configs:
-        configs.pop('status_colors', None)
-        configs.pop('type_colors', None)
-        needs_update = True
-        
-    if needs_update:
+    # Lógica de migração para garantir que a chave 'playbooks' exista
+    if 'playbooks' not in configs:
+        configs['playbooks'] = DEFAULT_PLAYBOOKS
         save_global_configs(configs)
 
     return configs
 
 def save_global_configs(configs_data):
     """Atualiza as configurações globais no MongoDB e limpa o cache."""
-    if '_id' in configs_data:
-        del configs_data['_id']
+    if '_id' in configs_data: del configs_data['_id']
     get_app_configs_collection().update_one(
         {'_id': 'global_settings'}, 
         {'$set': configs_data}, 
         upsert=True
     )
     get_global_configs.clear()
+
+# --- Funções de Gestão de Dados do Product Hub (Simplificadas) ---
+def get_user_product_hub_data(user_email):
+    """Busca os dados do Product Hub de um utilizador (NÃO inclui playbooks)."""
+    user = find_user(user_email)
+    if not user: return {}
+    hub_data = user.get('product_hub_data', {})
+    if 'membros' in hub_data and isinstance(hub_data['membros'], list):
+        hub_data['membros'] = pd.DataFrame(hub_data['membros'])
+    else:
+        hub_data['membros'] = pd.DataFrame(columns=["Nome", "Papel"])
+    return hub_data
+
+def save_user_product_hub_data(user_email, hub_data):
+    """Guarda os dados do Product Hub de um utilizador (NÃO inclui playbooks)."""
+    data_to_save = hub_data.copy()
+    if 'membros' in data_to_save and isinstance(data_to_save['membros'], pd.DataFrame):
+        data_to_save['membros'] = data_to_save['membros'].to_dict('records')
+    get_users_collection().update_one(
+        {'email': user_email},
+        {'$set': {'product_hub_data': data_to_save}},
+        upsert=True
+    )
 
 def save_user_standard_fields(email, standard_fields_list):
     """Guarda a lista de campos padrão selecionados por um utilizador."""
@@ -488,3 +505,38 @@ def get_user_figma_token(user_email):
     except InvalidToken:
         st.error("O seu token do Figma parece estar corrompido. Por favor, guarde-o novamente.")
         return None
+    
+# --- NOVAS FUNÇÕES PARA GESTÃO DE DADOS DO PRODUCT HUB ---
+
+def get_user_product_hub_data(user_email):
+    """
+    Busca os dados do Product Hub de um utilizador (membros, avaliações, etc.).
+    Se não existirem, retorna uma estrutura vazia.
+    """
+    user = find_user(user_email)
+    hub_data = user.get('product_hub_data', {})
+    
+    # Converte os dados dos membros de volta para um DataFrame do pandas
+    if 'membros' in hub_data and isinstance(hub_data['membros'], list):
+        hub_data['membros'] = pd.DataFrame(hub_data['membros'])
+    else:
+        hub_data['membros'] = pd.DataFrame(columns=["Nome", "Papel"])
+        
+    return hub_data
+
+def save_user_product_hub_data(user_email, hub_data):
+    """
+    Guarda os dados do Product Hub de um utilizador.
+    Converte o DataFrame de membros para um formato compatível com JSON/BSON.
+    """
+    # Cria uma cópia para não alterar o objeto original na sessão
+    data_to_save = hub_data.copy()
+    
+    if 'membros' in data_to_save and isinstance(data_to_save['membros'], pd.DataFrame):
+        data_to_save['membros'] = data_to_save['membros'].to_dict('records')
+        
+    get_users_collection().update_one(
+        {'email': user_email},
+        {'$set': {'product_hub_data': data_to_save}},
+        upsert=True
+    )

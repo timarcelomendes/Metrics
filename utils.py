@@ -257,6 +257,7 @@ def render_chart(chart_config, df):
     except Exception as e:
         st.error(f"Erro ao gerar a visualização '{chart_config.get('title', 'Desconhecido')}': {e}")
 
+# ===== CLASSE DE PDF E FUNÇÕES DE GERAÇÃO DE DOCUMENTOS =====
 class PDF(FPDF):
     def header(self):
         try:
@@ -265,7 +266,7 @@ class PDF(FPDF):
         except Exception as e:
             print(f"Não foi possível carregar o logo: {e}")
         self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'Ordem de Serviço (OS)', 0, 0, 'C')
+        self.cell(0, 10, 'Documento Gerado pelo Gauge Product Hub', 0, 0, 'C')
         self.ln(20)
 
     def footer(self):
@@ -274,92 +275,143 @@ class PDF(FPDF):
         self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
 
 def clean_text(text):
-    """Remove caracteres de formatação Markdown."""
-    return text.replace('**', '').replace('*', '')
+    """Garante que o texto seja uma string e o codifica corretamente para o PDF."""
+    if text is None:
+        return ""
+    return str(text).encode('latin-1', 'replace').decode('latin-1')
 
 def create_os_pdf(os_data):
-    """Gera um documento PDF a partir dos dados da Ordem de Serviço."""
+    """Gera um documento PDF a partir dos dados da Ordem de Serviço, incluindo todos os tipos de campos personalizados."""
     pdf = PDF()
     pdf.add_page()
-    pdf.set_font('Arial', '', 12)
-    
-    # --- Seção de Cabeçalho ---
-    pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 10, '1. Detalhes Gerais', 0, 1, 'L')
-    pdf.set_font('Arial', '', 11)
-    
-    pdf.cell(0, 8, f"Cliente: {os_data.get('cliente', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"Setor Demandante: {os_data.get('setor_demandante', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"Responsável Demandante: {os_data.get('responsavel_demandante', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"E-mail do Demandante: {os_data.get('email_demandante', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"Líder do Projeto (Gauge): {os_data.get('lider_projeto_gauge', 'N/A')}", 0, 1)
-    pdf.ln(5)
-
-    # --- Seção de Prazos e Datas ---
-    pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 10, '2. Prazos e Datas', 0, 1, 'L')
-    pdf.set_font('Arial', '', 11)
-    
-    pdf.cell(0, 8, f"Data de Emissão: {os_data.get('data_emissao', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"Previsão de Início: {os_data.get('previsao_inicio', 'N/A')}", 0, 1)
-    pdf.cell(0, 8, f"Previsão de Conclusão: {os_data.get('previsao_conclusao', 'N/A')}", 0, 1)
-    pdf.ln(5)
-
-    # --- Seção de Detalhes do Projeto ---
-    pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 10, '3. Detalhes do Projeto', 0, 1, 'L')
-    pdf.set_font('Arial', 'B', 11)
-    
-    pdf.cell(0, 8, "Justificativa & Objetivo:", 0, 1)
-    pdf.set_font('Arial', '', 11)
-    pdf.multi_cell(0, 5, clean_text(os_data.get('justificativa_objetivo', 'N/A')))
-    pdf.ln(3)
-    
-    pdf.set_font('Arial', 'B', 11)
-    pdf.cell(0, 8, "Escopo Técnico:", 0, 1)
-    pdf.set_font('Arial', '', 11)
-    pdf.multi_cell(0, 5, clean_text(os_data.get('escopo_tecnico', 'N/A')))
-    pdf.ln(3)
-
-    pdf.set_font('Arial', 'B', 11)
-    pdf.cell(0, 8, "Premissas:", 0, 1)
-    pdf.set_font('Arial', '', 11)
-    pdf.multi_cell(0, 5, clean_text(os_data.get('premissas', 'N/A')))
-    pdf.ln(5)
-
-    # --- Seção Financeira ---
-    pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 10, '4. Financeiro e Alocação', 0, 1, 'L')
-    pdf.set_font('Arial', 'B', 11)
-    
-    pdf.cell(0, 8, "Alocação:", 0, 1)
-    pdf.set_font('Arial', '', 11)
-    pdf.multi_cell(0, 5, clean_text(os_data.get('alocacao', 'N/A')))
-    pdf.ln(3)
-    
-    pdf.cell(0, 8, f"Orçamento: {os_data.get('orcamento', 'N/A')}", 0, 1)
-    pdf.ln(3)
-    
-    pdf.set_font('Arial', 'B', 11)
-    pdf.cell(0, 8, "Condições de Pagamento:", 0, 1)
-    pdf.set_font('Arial', '', 11)
-    pdf.multi_cell(0, 5, clean_text(os_data.get('pagamento', 'N/A')))
-    pdf.ln(10)
-
-    # --- Seção de Assinaturas ---
-    pdf.set_font('Arial', 'B', 14)
-    pdf.cell(0, 10, '5. Assinaturas', 0, 1, 'L')
-    pdf.set_font('Arial', '', 11)
-    pdf.ln(15)
-    
-    pdf.cell(0, 8, "___________________________________________", 0, 1, 'C')
-    pdf.cell(0, 8, f"{os_data.get('assinante1', 'N/A')}", 0, 1, 'C')
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, f"Ordem de Serviço: {clean_text(os_data.get('layout_name', 'N/A'))}", 0, 1, 'C')
     pdf.ln(10)
     
-    pdf.cell(0, 8, "___________________________________________", 0, 1, 'C')
-    pdf.cell(0, 8, f"{os_data.get('assinante2', 'N/A')}", 0, 1, 'C')
+    # --- Campos Personalizados ---
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 10, 'Detalhes da Ordem de Serviço', 0, 1, 'L')
+    pdf.ln(2)
 
-    # --- Retorna no formato `bytes` correto ---
+    for field_data in os_data.get('custom_fields_layout', []):
+        field_name = field_data.get('field_name')
+        field_type = field_data.get('field_type')
+        value = os_data.get('custom_fields', {}).get(field_name)
+
+        if value is None or (isinstance(value, list) and not value) or (isinstance(value, pd.DataFrame) and value.empty):
+            continue
+
+        # --- INÍCIO DA CORREÇÃO ---
+
+        # Layout de duas colunas para campos simples (Texto Curto, Data, etc.)
+        if field_type not in ["Tabela", "Imagem", "Texto Longo"]:
+            # Guarda a posição Y inicial para alinhar o valor
+            y_before = pdf.get_y()
+            
+            # Define a fonte para o nome do campo (label) em negrito
+            pdf.set_font('Arial', 'B', 11)
+            pdf.multi_cell(50, 8, clean_text(f"{field_name}:"), 0, 'L')
+            
+            # Guarda a posição Y depois de escrever o nome do campo (pode ter quebrado a linha)
+            y_after_label = pdf.get_y()
+            
+            # Reposiciona o cursor à direita do nome do campo, na linha inicial
+            pdf.set_xy(pdf.l_margin + 50, y_before)
+            
+            # Define a fonte para o valor
+            pdf.set_font('Arial', '', 11)
+            
+            # Prepara a string do valor
+            if isinstance(value, list): value_str = ", ".join(map(str, value))
+            elif isinstance(value, bool): value_str = "Sim" if value else "Não"
+            else: value_str = str(value)
+            
+            # Escreve o valor no espaço restante da página (140mm)
+            pdf.multi_cell(140, 8, clean_text(value_str), 0, 'L')
+            y_after_value = pdf.get_y()
+            
+            # Move o cursor para baixo, alinhado pela célula mais alta (seja o nome ou o valor)
+            pdf.set_y(max(y_after_label, y_after_value))
+
+        # Layout de largura total para campos complexos ou longos
+        else:
+            pdf.set_font('Arial', 'B', 11)
+            pdf.multi_cell(190, 8, clean_text(f"{field_name}:"))
+            pdf.set_font('Arial', '', 11)
+
+            if field_type == "Tabela":
+                if isinstance(value, list) and value:
+                    df_table = pd.DataFrame(value)
+                    if not df_table.empty:
+                        pdf.ln(2)
+                        pdf.set_font('Arial', 'B', 10)
+                        num_cols = len(df_table.columns)
+                        col_width = 190 / num_cols if num_cols > 0 else 190
+                        for col in df_table.columns:
+                            pdf.cell(col_width, 7, clean_text(str(col)), 1, 0, 'C')
+                        pdf.ln()
+                        
+                        pdf.set_font('Arial', '', 10)
+                        for index, row in df_table.iterrows():
+                            y_before_row = pdf.get_y(); x_before_row = pdf.get_x(); max_y = y_before_row
+                            for i, col in enumerate(df_table.columns):
+                                pdf.set_xy(x_before_row + (i * col_width), y_before_row)
+                                pdf.multi_cell(col_width, 7, clean_text(str(row[col])), 1, 'L')
+                                if pdf.get_y() > max_y: max_y = pdf.get_y()
+                            pdf.set_y(max_y)
+                else:
+                    pdf.multi_cell(190, 5, "Nenhum dado na tabela.")
+            
+            elif field_type == "Imagem":
+                if value:
+                    try:
+                        with open("temp_image.png", "wb") as f: f.write(value)
+                        pdf.image("temp_image.png", w=100)
+                    except Exception as e:
+                        pdf.multi_cell(190, 5, f"[Erro ao renderizar imagem: {e}]")
+            
+            else: # Tratamento para "Texto Longo"
+                value_str = str(value)
+                pdf.multi_cell(190, 5, clean_text(value_str))
+        
+        pdf.ln(5) # Aumenta o espaçamento entre os campos
+
+    # --- FIM DA CORREÇÃO ---
+        
+    # --- Tabela de Itens do Catálogo ---
+    if os_data.get('items'):
+        # ... (o resto da função permanece igual)
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, 'Itens do Catálogo Inclusos', 0, 1, 'L')
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(160, 8, 'Item', 1, 0, 'C')
+        pdf.cell(30, 8, 'Valor', 1, 1, 'C')
+        
+        pdf.set_font('Arial', '', 10)
+        for item in os_data['items']:
+            y_before = pdf.get_y()
+            pdf.multi_cell(160, 8, clean_text(item.get('Item', '')), 1, 'L')
+            y_after_item = pdf.get_y()
+            pdf.set_xy(170, y_before)
+            pdf.multi_cell(30, 8, clean_text(str(item.get('Valor', ''))), 1, 'C')
+            y_after_valor = pdf.get_y()
+            pdf.set_y(max(y_after_item, y_after_valor))
+            
+    # --- Seção de Assinaturas Dinâmicas ---
+    if os_data.get('assinantes'):
+        pdf.ln(10)
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, 'Assinaturas', 0, 1, 'L')
+        pdf.ln(15)
+        
+        for assinante in os_data['assinantes']:
+            if assinante.get('Nome') and assinante.get('Cargo'):
+                pdf.cell(0, 8, "___________________________________________", 0, 1, 'C')
+                pdf.cell(0, 8, clean_text(f"{assinante['Nome']}"), 0, 1, 'C')
+                pdf.cell(0, 8, clean_text(f"({assinante['Cargo']})"), 0, 1, 'C')
+                pdf.ln(10)
+
     return bytes(pdf.output())
 
 # --- FUNÇÃO AUXILIAR PARA CÁLCULO DE KPI ---
@@ -862,42 +914,53 @@ def get_field_value(issue, field_config):
 
 def send_email_with_attachment(to_address, subject, body, attachment_bytes, attachment_filename):
     """
-    Função central para enviar e-mails com anexo, com base no provedor configurado.
-    Agora suporta SendGrid e SMTP.
+    Função central para enviar e-mails com anexo, com base no provedor
+    configurado pelo utilizador na sua conta.
     """
-    user_email_configs = st.session_state.get('smtp_configs')
-    if not user_email_configs:
-        return False, "Nenhuma configuração de e-mail encontrada. Por favor, configure o envio de e-mails."
+    # Busca as configurações da memória da sessão, que foram carregadas no login
+    smtp_configs = st.session_state.get('smtp_configs')
+    if not smtp_configs or not smtp_configs.get('provider'):
+        return False, "Nenhuma configuração de e-mail encontrada na sua conta."
 
-    provider = user_email_configs['provider']
+    provider = smtp_configs['provider']
     
     if provider == 'SendGrid':
         try:
-            sg = sendgrid.SendGridAPIClient(user_email_configs['api_key'])
-            from_email = user_email_configs['from_email']
-            mail = Mail(from_email, to_address, subject)
-            attachment_encoded = base64.b64encode(attachment_bytes).decode()
-            attached_file = Attachment(
-                FileContent(attachment_encoded),
+            # Usa a chave de API desencriptada
+            api_key = decrypt_token(smtp_configs['api_key_encrypted'])
+            sg = sendgrid.SendGridAPIClient(api_key)
+            
+            from_email = smtp_configs['from_email']
+            message = Mail(from_email=from_email, to_emails=to_address, subject=subject, html_content=body)
+            
+            encoded_file = base64.b64encode(attachment_bytes).decode()
+            attachedFile = Attachment(
+                FileContent(encoded_file),
                 FileName(attachment_filename),
                 FileType('application/pdf'),
                 Disposition('attachment')
             )
-            mail.attachment = attached_file
-            response = sg.send(mail)
-            if response.status_code == 202:
-                return True, "E-mail enviado com sucesso!"
-            return False, f"Falha ao enviar e-mail: Status {response.status_code}"
+            message.attachment = attachedFile
+            
+            response = sg.send(message)
+            if response.status_code in [200, 202]:
+                return True, "E-mail enviado com sucesso via SendGrid!"
+            else:
+                return False, f"Falha ao enviar e-mail via SendGrid: Status {response.status_code}"
         except Exception as e:
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
     elif provider == 'Gmail (SMTP)':
         try:
+            # Usa a senha de aplicação desencriptada
+            app_password = decrypt_token(smtp_configs['app_password_encrypted'])
+            from_email = smtp_configs['from_email']
+            
             smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-            smtp_server.login(user_email_configs['from_email'], user_email_configs['app_password'])
+            smtp_server.login(from_email, app_password)
             
             msg = MIMEMultipart()
-            msg['From'] = user_email_configs['from_email']
+            msg['From'] = from_email
             msg['To'] = to_address
             msg['Subject'] = subject
             msg.attach(MIMEText(body, 'plain'))
@@ -906,9 +969,9 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes, atta
             attachment.add_header('Content-Disposition', 'attachment', filename=attachment_filename)
             msg.attach(attachment)
 
-            smtp_server.sendmail(user_email_configs['from_email'], to_address, msg.as_string())
+            smtp_server.sendmail(from_email, to_address, msg.as_string())
             smtp_server.quit()
-            return True, "E-mail enviado com sucesso!"
+            return True, "E-mail enviado com sucesso via Gmail!"
         except Exception as e:
             return False, f"Ocorreu um erro ao enviar e-mail via SMTP: {e}"
     
@@ -1318,9 +1381,9 @@ def get_ai_contract_analysis(pdf_bytes):
     except Exception as e:
         return {"error": f"Ocorreu um erro ao analisar o contrato: {e}"}
 
-def get_ai_os_from_context_and_contract(user_context, contract_text):
+def get_ai_os_from_context_and_contract(user_context, contract_text=None):
     """
-    Usa a IA para analisar o contexto do utilizador e o texto de um contrato
+    Usa a IA para analisar o contexto do utilizador e, opcionalmente, o texto de um contrato
     para preencher os campos de uma Ordem de Serviço em formato JSON.
     """
     user_data = find_user(st.session_state['email'])
@@ -1330,44 +1393,45 @@ def get_ai_os_from_context_and_contract(user_context, contract_text):
     if not model_client:
         return {"error": "Análise indisponível. Verifique a configuração da sua chave de IA."}
 
-    prompt = f"""
-    Aja como um Gerente de Projetos sênior. A sua tarefa é criar uma Ordem de Serviço (OS) com base no contexto fornecido pelo utilizador e complementá-la com os detalhes encontrados no documento do contrato em anexo. Retorne o resultado num formato JSON.
+    # --- PROMPT DINÂMICO ---
+    prompt_base = f"""
+    Aja como um Gerente de Projetos sênior. A sua tarefa é criar uma Ordem de Serviço (OS) com base no contexto fornecido pelo utilizador e, se disponível, complementá-la com os detalhes encontrados no documento do contrato em anexo. Retorne o resultado num formato JSON.
 
-    **Contexto da OS (Fornecido pelo Utilizador):**
+    **Contexto da OS (Fonte Principal de Informação):**
     {user_context}
+    """
 
-    **Texto Completo do Contrato (Use para encontrar os detalhes):**
+    prompt_contrato = f"""
+    **Texto do Contrato (Use para encontrar detalhes objetivos como nomes, datas, valores):**
     {contract_text[:8000]} # Limita o tamanho do prompt
+    """ if contract_text else ""
+
+    prompt_final = f"""
+    {prompt_base}
+    {prompt_contrato}
 
     **Regras para a Extração e Geração:**
-    1.  Use o "Contexto da OS" para preencher os campos subjetivos como 'Justificativa & Objetivo' e 'Escopo Técnico'.
-    2.  Use o "Texto Completo do Contrato" para encontrar e extrair os valores para os outros campos (nomes, datas, orçamento, etc.).
+    1.  Use o "Contexto da OS" como a principal fonte de verdade, especialmente para campos subjetivos como 'Justificativa & Objetivo' e 'Escopo Técnico'.
+    2.  Use o "Texto do Contrato", se fornecido, para encontrar e extrair os valores para os outros campos.
     3.  Se um campo não for encontrado em nenhuma das fontes, retorne uma string vazia "".
 
     **Estrutura de Saída (Responda APENAS com o JSON):**
     {{
-        "setor_demandante": "",
-        "responsavel_demandante": "",
-        "email_demandante": "",
-        "lider_projeto_gauge": "",
-        "data_emissao": "DD/MM/AAAA",
-        "previsao_inicio": "DD/MM/AAAA",
-        "previsao_conclusao": "DD/MM/AAAA",
-        "justificativa_objetivo": "",
-        "escopo_tecnico": "",
-        "premissas": "",
-        "orcamento": "",
-        "pagamento": ""
+        "setor_demandante": "", "responsavel_demandante": "", "email_demandante": "",
+        "lider_projeto_gauge": "", "data_emissao": "DD/MM/AAAA", "previsao_inicio": "DD/MM/AAAA",
+        "previsao_conclusao": "DD/MM/AAAA", "justificativa_objetivo": "", "escopo_tecnico": "",
+        "premissas": "", "orcamento": "", "pagamento": ""
     }}
     """
+    
     try:
         if provider == "Google Gemini":
-            response = model_client.generate_content(prompt)
+            response = model_client.generate_content(prompt_final)
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
         else: # OpenAI
             response = model_client.chat.completions.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": prompt_final}],
                 response_format={"type": "json_object"}
             )
             cleaned_response = response.choices[0].message.content
@@ -1418,3 +1482,53 @@ def get_ai_user_story_from_text(user_context):
         return json.loads(cleaned_response)
     except Exception as e:
         return {"error": f"Ocorreu um erro ao gerar a história de usuário: {e}"}
+    
+def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
+    """
+    Usa a IA para analisar um dicionário com todos os dados de uma issue do Jira
+    e preencher os campos de uma Ordem de Serviço em formato JSON.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        return {"error": "Análise indisponível. Verifique a configuração da sua chave de IA."}
+
+    # Prepara a lista de campos da OS para o prompt
+    field_names = [field['field_name'] for field in layout_fields]
+    json_structure_example = {field_name: "" for field_name in field_names}
+
+    # Converte o dicionário de dados da issue para uma string formatada
+    issue_context = "\n".join([f"- {key}: {value}" for key, value in issue_data_dict.items() if value])
+
+    prompt = f"""
+    Aja como um Gerente de Projetos sênior. A sua tarefa é criar uma Ordem de Serviço (OS) com base nos dados completos de uma tarefa do Jira. Retorne o resultado num formato JSON.
+
+    **Dados Completos da Tarefa do Jira:**
+    {issue_context}
+
+    **Regras para a Extração e Geração:**
+    1.  Analise TODOS os dados da tarefa para preencher os campos do JSON da forma mais precisa possível. Use campos como 'Responsável', 'Relator', 'Labels' e campos personalizados para inferir informações.
+    2.  Para campos como "Justificativa & Objetivo" ou "Escopo Técnico", resuma a informação relevante do campo 'Descrição' e do 'Resumo' da tarefa.
+    3.  Se a informação para um campo específico não for encontrada em nenhum dos dados da tarefa, retorne uma string vazia "".
+
+    **Estrutura de Saída (Responda APENAS com o JSON. Siga esta estrutura):**
+    {json.dumps(json_structure_example, indent=2)}
+    """
+    
+    try:
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            cleaned_response = response.choices[0].message.content
+        
+        return json.loads(cleaned_response)
+    except Exception as e:
+        return {"error": f"Ocorreu um erro ao analisar a issue do Jira: {e}"}

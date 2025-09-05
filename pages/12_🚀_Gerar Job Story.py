@@ -6,7 +6,7 @@ import json
 import base64
 import re
 from jira import JIRAError
-from security import decrypt_token
+from security import *
 from jira_connector import get_project_issue_types
 from utils import get_ai_user_story_from_figma, get_ai_user_story_from_text
 from pathlib import Path
@@ -106,6 +106,15 @@ st.markdown("---")
 
 # --- MODO 1: FIGMA PARA JIRA ---
 if creation_mode == "Analisar Elemento do Figma":
+    
+    # --- VERIFICAÇÃO DE SEGURANÇA APRIMORADA ---
+    user_figma_token = get_user_figma_token(st.session_state['email'])
+    if not user_figma_token:
+        st.warning("O seu Token de Acesso Pessoal do Figma não está configurado.", icon="🔑")
+        st.info("Para usar esta funcionalidade, por favor, adicione o seu token na página 'Minha Conta'.")
+        st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Token Agora", icon="🔑")
+        st.stop()
+
     st.header("1. Cole o Link do Elemento do Figma")
     figma_url_input = st.text_input("URL do Elemento no Figma*", help="No Figma, selecione o elemento (tela, componente, etc.) e copie o URL do navegador.")
 
@@ -119,7 +128,8 @@ if creation_mode == "Analisar Elemento do Figma":
             else:
                 with st.spinner("A buscar no Figma..."):
                     try:
-                        figma_headers = {'X-Figma-Token': st.secrets['FIGMA_ACCESS_TOKEN']}
+                        # --- USA O TOKEN DO UTILIZADOR ---
+                        figma_headers = {'X-Figma-Token': user_figma_token}
                         
                         node_details_url = f"https://api.figma.com/v1/files/{file_key}/nodes?ids={url_node_id}"
                         response_details = requests.get(node_details_url, headers=figma_headers)

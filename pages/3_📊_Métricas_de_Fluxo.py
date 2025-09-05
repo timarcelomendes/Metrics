@@ -239,75 +239,60 @@ with tab_kanban:
 
 with tab_scrum:
     st.subheader("Análise de Performance de Sprints")
-    
-    project_config = get_project_config(st.session_state.project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
-    has_estimation_field = 'id' in estimation_config and estimation_config['id']
-    if not estimation_config.get('id'):
-        st.warning("Nenhum campo de estimativa configurado para este projeto. As métricas de Scrum podem não ser precisas.", icon="⚠️")
-        st.page_link("pages/7_⚙️_Configurações.py", label="Configurar Campo de Estimativa", icon="⚙️")
-    st.info("Para uma análise Scrum precisa, selecione um período na barra lateral que corresponda a uma ou mais Sprints concluídas.")
-    all_sprints_in_view = get_sprints_in_range(st.session_state.jira_client, st.session_state.project_key, start_date, end_date)
-    active_sprints = [s for s in all_sprints_in_view if s.state == 'active']
+    
+    # --- INÍCIO DA CORREÇÃO ---
+    # A variável é definida aqui, usando a função correta
+    all_sprints_in_view = get_sprints_in_range(st.session_state.jira_client, project_key, start_date, end_date)
     closed_sprints_in_period = [s for s in all_sprints_in_view if s.state == 'closed']
-    if active_sprints:
-        st.markdown("#### Sprint(s) em Andamento")
-        for sprint in active_sprints:
-            with st.expander(f"🏃 **{sprint.name}** (Ativa)", expanded=True):
-                sprint_issues = get_sprint_issues(st.session_state.jira_client, sprint.id)
-                if sprint_issues:
-                    # Exibe KPIs apenas se houver campo de estimativa
-                    if has_estimation_field:
-                        velocity_so_far = calculate_velocity(sprint_issues, estimation_config)
-                        predictability_so_far = calculate_predictability(sprint_issues, estimation_config)
-                        kpi1, kpi2 = st.columns(2)
-                        kpi1.metric("🚀 Pontos Concluídos (até agora)", f"{velocity_so_far:.1f} pts")
-                        kpi2.metric("🎯 Progresso do Comprometido", f"{predictability_so_far:.1f}%")
-                    
-                    st.markdown("**Progresso do Burndown**")
-                    # --- LÓGICA DE DECISÃO PARA O BURNDOWN ---
-                    if has_estimation_field:
-                        burndown_df = prepare_burndown_data_by_estimation(st.session_state.jira_client, sprint, estimation_config)
-                        y_axis_label = "Pontos Restantes"
-                    else:
-                        burndown_df = prepare_burndown_data_by_count(st.session_state.jira_client, sprint)
-                        y_axis_label = "Issues Restantes"
-                    
-                    if not burndown_df.empty:
-                        real_column = [col for col in burndown_df.columns if '(Real)' in col][0]
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Linha Ideal'], name='Ideal', mode='lines', line=dict(dash='dash', color='gray')))
-                        fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df[real_column], name='Real', mode='lines+markers', line=dict(color='blue')))
-                        fig.update_layout(title=None, template="plotly_white", yaxis_title=y_axis_label, xaxis_title="Data", height=300)
-                        st.plotly_chart(fig, use_container_width=True, key=f"burndown_active_{sprint.id}")
-                    else:
-                        st.warning("Não foi possível gerar o gráfico de Burndown para esta sprint.")
-        st.divider()
-    st.markdown("#### Análise de Sprints Concluídas")
-    if not closed_sprints_in_period:
-        st.info("Nenhuma sprint concluída foi encontrada no período de datas selecionado.")
+    # --- FIM DA CORREÇÃO ---
+
+    if not all_sprints_in_view:
+        st.warning("Nenhuma sprint (ativa ou concluída) foi encontrada no período de datas selecionado.")
     else:
-        threshold = st.session_state.get('global_configs', {}).get('sprint_goal_threshold', 90)
-        success_rate = calculate_sprint_goal_success_rate(closed_sprints_in_period, threshold, estimation_config)
-        st.metric(f"🎯 Taxa de Sucesso de Objetivos (Meta > {threshold}%)", f"{success_rate:.1f}%", help="Percentagem de sprints no período que atingiram a meta de previsibilidade.")
-        st.divider()
-        st.markdown("**Análise Detalhada por Sprint**")
-        sprint_names = [s.name for s in closed_sprints_in_period]
-        selected_sprint_name = st.selectbox("Selecione uma Sprint para ver os detalhes:", options=[""] + sprint_names, format_func=lambda x: "Selecione uma sprint..." if x == "" else x)
-        if selected_sprint_name:
-            sprint_obj = next((s for s in closed_sprints_in_period if s.name == selected_sprint_name), None)
-            if sprint_obj:
-                sprint_issues = get_sprint_issues(st.session_state.jira_client, sprint_obj.id)
-                if sprint_issues:
-                    velocity = calculate_velocity(sprint_issues, estimation_config); throughput_sprint = calculate_throughput(sprint_issues); predictability = calculate_predictability(sprint_issues, estimation_config); sprint_defects = calculate_sprint_defects(sprint_issues)
-                    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                    kpi1.metric("🚀 Velocidade", f"{velocity} pts"); kpi2.metric("✅ Throughput", f"{throughput_sprint} issues")
-                    kpi3.metric("🎯 Previsibilidade", f"{predictability:.1f}%"); kpi4.metric("🐞 Defeitos Concluídos", f"{sprint_defects} bugs")
-                    st.subheader("Gráfico de Burndown da Sprint")
-                    burndown_df = prepare_burndown_data(st.session_state.jira_client, sprint_obj, estimation_config)
+        st.markdown("#### Análise de Sprints Concluídas no Período")
+        if not closed_sprints_in_period:
+            st.info("Nenhuma sprint concluída foi encontrada no período de datas selecionado.")
+        else:
+            # Lógica para taxa de sucesso
+            threshold = st.session_state.get('global_configs', {}).get('sprint_goal_threshold', 90)
+            success_rate = calculate_sprint_goal_success_rate(closed_sprints_in_period, threshold, estimation_config)
+            st.metric(f"🎯 Taxa de Sucesso de Objetivos (Meta > {threshold}%)", f"{success_rate:.1f}%")
+            st.divider()
+
+            # Lógica para selecionar uma sprint específica e ver o burndown
+            st.markdown("**Análise Detalhada por Sprint**")
+            sprint_names = [s.name for s in closed_sprints_in_period]
+            selected_sprint_name = st.selectbox("Selecione uma Sprint concluída para ver os detalhes:", options=[""] + sprint_names, format_func=lambda x: "Selecione..." if x == "" else x)
+
+            if selected_sprint_name:
+                sprint = next((s for s in closed_sprints_in_period if s.name == selected_sprint_name), None)
+                if sprint:
+                    unit_burndown = st.selectbox(
+                        "Calcular Burndown por:",
+                        options=["Contagem de Issues", "Campo de Estimativa"],
+                        key=f"burndown_unit_{sprint.id}"
+                    )
+                    
+                    burndown_df = pd.DataFrame()
+                    y_axis_label = ""
+
+                    if unit_burndown == "Contagem de Issues":
+                        burndown_df = prepare_burndown_data_by_count(st.session_state.jira_client, sprint, project_config)
+                        y_axis_label = "Issues Restantes"
+                    else: # Campo de Estimativa
+                        if not estimation_config or not estimation_config.get('id'):
+                            st.warning("Para ver o Burndown por estimativa, configure um 'Campo de Estimativa' para este projeto.")
+                        else:
+                            burndown_df = prepare_burndown_data_by_estimation(st.session_state.jira_client, sprint, estimation_config, project_config)
+                            y_axis_label = f"{estimation_config.get('name', 'Pontos')} Restantes"
+
                     if not burndown_df.empty:
-                        fig = go.Figure(); fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Linha Ideal'], name='Ideal', mode='lines', line=dict(dash='dash', color='gray'))); fig.add_trace(go.Scatter(x=burndown_df.index, y=burndown_df['Pontos Restantes (Real)'], name='Real', mode='lines+markers', line=dict(color='blue')))
-                        fig.update_layout(title=None, template="plotly_white", yaxis_title="Pontos Restantes", xaxis_title="Data"); st.plotly_chart(fig, use_container_width=True, key=f"burndown_closed_{sprint_obj.id}")
+                        fig = px.line(burndown_df, x=burndown_df.index, y=burndown_df.columns, labels={"value": y_axis_label, "variable": "Legenda"})
+                        fig.update_layout(template="plotly_white", title=f"Burndown da Sprint: {selected_sprint_name}")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Não há dados suficientes para gerar o gráfico de Burndown.")
 
 with tab_performance:
     st.subheader("Análise de Acurácia e Performance da Equipe")

@@ -45,19 +45,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Define o logo que aparecerá no topo da sidebar (apenas para utilizadores logados)
-with st.sidebar:
-    project_root = Path(__file__).parent
-    logo_path = project_root / "images" / "gauge-logo.svg"
-    try:
-        st.logo(str(logo_path), size="large")
-    except FileNotFoundError:
-        st.write("Gauge Metrics")
-    
-    if st.session_state.get("email"):
-        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    else:
-        st.info("⚠️ Usuário não conectado!")
+st.title (":blue[Gauge Products Hub] :signal_strength:")
 
 # --- LÓGICA DA PÁGINA (sem alterações) ---
 if 'email' in st.session_state:
@@ -70,18 +58,21 @@ if 'email' in st.session_state:
         st.rerun()
 else:
     # --- Layout da Página de Login ---
-    col1, col2 = st.columns([1, 1.3], gap="large")
+    col1, col2 = st.columns([1, 0.9], gap="large")
 
     with col1:
-        st.subheader("Decisões Guiadas por Dados, :orange[Sem Complicações.]")
+        st.badge("Decisões Guiadas por Dados, Sem Complicações.")
         st.markdown(
             """
-            Transforme os dados do seu Jira em insights acionáveis. Com o **Gauge Metrics**, você pode:
-            - 📊 Criar dashboards personalizados com um clique.
-            - 📈 Prever datas de entrega com base na performance real da sua equipe.
-            - 🔬 Analisar o fluxo de trabalho para identificar e remover gargalos.
+            O **Gauge Product Hub** é o seu copiloto estratégico, a transformar os dados operacionais do Jira em **insights** de alto nível. **Com ele, você está a poucos cliques de:**
+
+            📊 Traduzir dados em narrativas: Crie dashboards que contam a história do progresso do seu projeto para qualquer audiência.
             
-            **Faça login ou registre-se para começar!**
+            📈 Substituir "achismos" por previsões: Entenda a capacidade real da sua equipa e preveja quando as suas iniciativas serão concluídas.
+            
+            🔬 Construir um sistema de entrega mais eficiente: Use a análise de fluxo para identificar oportunidades de melhoria contínua.
+
+            Faça login ou registre-se para liderar com clareza.
             """
         )
 
@@ -124,7 +115,7 @@ else:
                             st.session_state['global_configs'] = get_app_configs()
                             st.session_state['global_configs'] = get_global_configs()
                             st.session_state['smtp_configs'] = get_smtp_configs()
-                            
+
                             st.success("Login bem-sucedido! A carregar...")
                             st.switch_page("pages/2_🏠_Meu_Dashboard.py")
                         else:
