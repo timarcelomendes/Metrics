@@ -1,4 +1,4 @@
-# pages/2_📊_Métricas_de_Fluxo.py
+# pages/3_📊_Métricas_de_Fluxo.py
 
 import streamlit as st
 import pandas as pd
@@ -28,19 +28,15 @@ st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
-# --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
     
     if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
         st.stop()
     else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
         st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
@@ -51,8 +47,8 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(logo_path, size="large")
-    except FileNotFoundError:
+        st.logo(str(logo_path), size="large")
+    except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics")
 
     if st.session_state.get("email"):
@@ -74,7 +70,6 @@ with st.sidebar:
         st.session_state.project_key = projects[selected_project_name]
         st.session_state.project_name = selected_project_name
         
-        # --- FILTRO DE PERÍODO AGORA NA SIDEBAR ---
         st.subheader("2. Período de Análise")
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=30)
@@ -89,7 +84,7 @@ with st.sidebar:
                 df_loaded = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
                 st.session_state.dynamic_df = df_loaded
                 st.rerun()
-  
+ 
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
@@ -98,17 +93,17 @@ with st.sidebar:
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 df = st.session_state.get('dynamic_df')
 if df is None or df.empty:
-    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Carregar / Atualizar Dados' para começar.")
+    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Analisar / Atualizar Dados' para começar.")
     st.stop()
 
 # --- Lógica de construção de listas de colunas dinâmicas ---
 project_key = st.session_state.get('project_key')
-global_configs = st.session_state.get('global_configs', {}); 
-user_data = find_user(st.session_state['email']); 
+global_configs = get_global_configs()
+user_data = find_user(st.session_state['email'])
 project_config = get_project_config(project_key) or {}
-user_enabled_standard = user_data.get('standard_fields', []); 
+user_enabled_standard = user_data.get('standard_fields', [])
 user_enabled_custom = user_data.get('enabled_custom_fields', [])
-all_available_standard = global_configs.get('available_standard_fields', {}); 
+all_available_standard = global_configs.get('available_standard_fields', {})
 all_available_custom = global_configs.get('custom_fields', [])
 estimation_config = project_config.get('estimation_field', {})
 master_field_list = []
@@ -120,11 +115,12 @@ for field_name in user_enabled_standard:
 if estimation_config and estimation_config.get('name') not in [f['name'] for f in master_field_list]:
     est_type = 'Numérico' if estimation_config.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': estimation_config['name'], 'type': est_type})
-base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']; 
+base_numeric_cols = ['Lead Time (dias)', 'Cycle Time (dias)']
 base_date_cols = ['Data de Criação', 'Data de Conclusão']
 numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_field_list if f['type'] in ['Numérico', 'Horas']])))
 date_cols = sorted(list(set(base_date_cols + [f['name'] for f in master_field_list if f['type'] == 'Data'])))
 categorical_cols = sorted(list(set([f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto']])))
+sla_policies = global_configs.get('sla_policies', [])
 
 # --- Painel de Filtros ---
 with st.expander("Filtros da Análise", expanded=True):
@@ -180,15 +176,47 @@ filtered_issues = [issue for issue in all_raw_issues if issue.key in filtered_is
 st.caption(f"A exibir métricas para {len(filtered_issues)} de {len(all_raw_issues)} issues, com base nos filtros aplicados.")
 st.divider()
 
-# --- CÁLCULO CENTRALIZADO DE MÉTRICAS (COM A CORREÇÃO) ---
+# --- CÁLCULO CENTRALIZADO DE MÉTRICAS ---
+start_date, end_date = st.session_state.start_date_fluxo, st.session_state.end_date_fluxo
+status_mapping = project_config.get('status_mapping', {})
+done_statuses = status_mapping.get('done', [])
+in_progress_statuses = status_mapping.get('in_progress', [])
+
+if not done_statuses:
+    st.warning("Nenhum 'status final' está configurado para este projeto. A aplicação não consegue identificar itens concluídos. "
+               "Por favor, vá para 'Configurações' -> 'Configurações por Projeto' para definir os status que representam a conclusão de uma tarefa.",
+               icon="⚠️")
+
 completed_issues_in_period = [i for i in filtered_issues if (cd := find_completion_date(i, project_config)) and start_date <= cd.date() <= end_date]
-df_times = pd.DataFrame([{'Lead Time (dias)': r['Lead Time (dias)'], 'Cycle Time (dias)': r['Cycle Time (dias)']} for i, r in filtered_df.iterrows() if r['Issue'] in [i.key for i in completed_issues_in_period]])
-wip_issues = [i for i in filtered_issues if i.fields.status.statusCategory.name.lower() == 'in progress']
+completed_issue_keys = [i.key for i in completed_issues_in_period]
+df_completed = filtered_df[filtered_df['Issue'].isin(completed_issue_keys)]
+
+# --- CÁLCULO CORRIGIDO E EXPLÍCITO DOS TEMPOS ---
+times_data = []
+for issue in completed_issues_in_period:
+    completion_date = find_completion_date(issue, project_config)
+    if completion_date:
+        lead_time = (completion_date - pd.to_datetime(issue.fields.created).tz_localize(None)).total_seconds() / (24 * 3600)
+        cycle_time = calculate_cycle_time(issue, completion_date, project_config)
+
+        times_data.append({
+            'Lead Time (dias)': lead_time,
+            'Cycle Time (dias)': cycle_time
+        })
+
+df_times = pd.DataFrame(times_data)
+if not df_times.empty:
+    # Remove quaisquer linhas onde o Cycle Time não pôde ser calculado (None)
+    df_times.dropna(subset=['Cycle Time (dias)'], inplace=True)
+
+wip_issues = [i for i in filtered_issues if i.fields.status.name.lower() in [s.lower() for s in in_progress_statuses]]
 throughput = len(completed_issues_in_period)
 lead_time_avg = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0
 cycle_time_avg = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0
-sla_metrics = calculate_sla_metrics(filtered_issues)
 aging_df = get_aging_wip(filtered_issues)
+sla_metrics = {}
+if sla_policies:
+    sla_metrics = calculate_sla_metrics_for_issues(filtered_issues, global_configs)
 
 # --- Abas de Exibição ---
 tab_comum, tab_kanban, tab_scrum, tab_performance = st.tabs(["Métricas de Fluxo Comuns", "Análise Kanban", "Análise Scrum", "Análise de Performance"])
@@ -206,19 +234,20 @@ with tab_comum:
     st.caption("Mostra a evolução dos itens em cada etapa ao longo do tempo.")
     cfd_df, _ = prepare_cfd_data(all_raw_issues, start_date, end_date)
     if not cfd_df.empty:
-        status_order = ['Criado'] + [s for s in cfd_df.columns if s != 'Criado' and s not in DEFAULT_DONE_STATES] + [s for s in cfd_df.columns if s in DEFAULT_DONE_STATES]
+        done_statuses_cfd = [s.lower() for s in done_statuses]
+        status_order = ['Created'] + [s for s in cfd_df.columns if s != 'Created' and s.lower() not in done_statuses_cfd] + [s for s in cfd_df.columns if s.lower() in done_statuses_cfd]
         cfd_df_ordered = cfd_df[[s for s in status_order if s in cfd_df.columns]]
         st.area_chart(cfd_df_ordered)
     else: st.info("Não há dados suficientes para gerar o CFD.")
 
 with tab_kanban:
-    st.subheader("Métricas de Eficiência e Atendimento")
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("% de chamados atendidos dentro do SLA", sla_metrics['met_sla_pct'])
-    kpi2.metric("% de chamados com SLA violado", sla_metrics['violated_sla_pct'])
-    kpi3.metric("Tempo médio para primeiro atendimento", sla_metrics['avg_time_to_response'])
-    
-    st.divider()
+    if sla_metrics:
+        st.subheader("Métricas de Eficiência e Atendimento")
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi1.metric("% de chamados atendidos dentro do SLA", f"{sla_metrics.get('sla_resolution_met_pct', 0):.1f}%")
+        kpi2.metric("% de chamados com SLA violado", f"{sla_metrics.get('sla_resolution_violated_pct', 0):.1f}%")
+        kpi3.metric("Tempo médio para primeiro atendimento", f"{sla_metrics.get('avg_first_response_hours', 0):.1f} horas")
+        st.divider()
     
     col1, col2 = st.columns(2)
     with col1:
@@ -227,25 +256,32 @@ with tab_kanban:
         st.dataframe(aging_df.head(10), use_container_width=True, hide_index=True)
     with col2:
         st.markdown("**Eficiência do Fluxo (Estimativa)**")
-        avg_flow_efficiency = np.mean([eff for i in completed_issues_in_period if (eff := calculate_flow_efficiency(i)) is not None])
+        avg_flow_efficiency = np.mean([eff for i in completed_issues_in_period if (eff := calculate_flow_efficiency(i, project_config)) is not None])
         st.metric("Eficiência Média", f"{avg_flow_efficiency:.1f}%" if pd.notna(avg_flow_efficiency) else "Incalculável", help="Percentagem de tempo em que as tarefas estão ativamente a ser trabalhadas vs. em espera.")
         
         st.markdown("**Service Level Expectation (SLE)**")
         sle_days = st.slider("Definir SLE (em dias)", 1, 90, 15)
-        if not df_times.empty:
+        
+        sle_percentage = 0.0
+        total_items_for_sle = len(df_times)
+
+        if throughput > 0 and total_items_for_sle > 0:
             completed_within_sle = df_times[df_times['Cycle Time (dias)'] <= sle_days].shape[0]
-            sle_percentage = (completed_within_sle / throughput) * 100 if throughput > 0 else 0
-            st.metric(f"Conclusão em até {sle_days} dias", f"{sle_percentage:.1f}%", help=f"Percentagem de itens concluídos dentro do prazo definido.")
+            sle_percentage = (completed_within_sle / total_items_for_sle) * 100
+        
+        st.metric(f"Conclusão em até {sle_days} dias", f"{sle_percentage:.1f}%", help=f"Percentagem de itens concluídos dentro do prazo definido.")
+        
+        if throughput == 0:
+            st.caption("SLE é 0% porque não há itens concluídos no período selecionado.")
+        elif total_items_for_sle == 0:
+            st.caption("SLE é 0% porque não foi possível calcular o Cycle Time dos itens concluídos (verifique a configuração de status 'Em Andamento').")
 
 with tab_scrum:
     st.subheader("Análise de Performance de Sprints")
     estimation_config = project_config.get('estimation_field', {})
     
-    # --- INÍCIO DA CORREÇÃO ---
-    # A variável é definida aqui, usando a função correta
     all_sprints_in_view = get_sprints_in_range(st.session_state.jira_client, project_key, start_date, end_date)
     closed_sprints_in_period = [s for s in all_sprints_in_view if s.state == 'closed']
-    # --- FIM DA CORREÇÃO ---
 
     if not all_sprints_in_view:
         st.warning("Nenhuma sprint (ativa ou concluída) foi encontrada no período de datas selecionado.")
@@ -254,13 +290,11 @@ with tab_scrum:
         if not closed_sprints_in_period:
             st.info("Nenhuma sprint concluída foi encontrada no período de datas selecionado.")
         else:
-            # Lógica para taxa de sucesso
             threshold = st.session_state.get('global_configs', {}).get('sprint_goal_threshold', 90)
             success_rate = calculate_sprint_goal_success_rate(closed_sprints_in_period, threshold, estimation_config)
             st.metric(f"🎯 Taxa de Sucesso de Objetivos (Meta > {threshold}%)", f"{success_rate:.1f}%")
             st.divider()
 
-            # Lógica para selecionar uma sprint específica e ver o burndown
             st.markdown("**Análise Detalhada por Sprint**")
             sprint_names = [s.name for s in closed_sprints_in_period]
             selected_sprint_name = st.selectbox("Selecione uma Sprint concluída para ver os detalhes:", options=[""] + sprint_names, format_func=lambda x: "Selecione..." if x == "" else x)

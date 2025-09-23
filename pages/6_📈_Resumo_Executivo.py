@@ -1,4 +1,4 @@
-# pages/8_📈_Resumo_Executivo.py
+# pages/6_📈_Resumo_Executivo.py
 
 import streamlit as st
 import pandas as pd
@@ -7,13 +7,13 @@ from datetime import datetime
 from jira_connector import *
 from metrics_calculator import *
 from security import *
-from config import *
 from pathlib import Path
 from utils import *
+from security import get_global_configs, get_project_config, save_project_config # <--- CORREÇÃO APLICADA AQUI
 
 st.set_page_config(page_title="Resumo Executivo", page_icon="📈", layout="wide")
 
-# --- CSS e Funções Auxiliares (sem alterações) ---
+# --- CSS e Funções Auxiliares ---
 st.markdown("""
 <style>
 .rag-pill {
@@ -24,8 +24,32 @@ st.markdown("""
 .rag-amber { background-color: #ffc107; color: #333;}
 .rag-red { background-color: #dc3545; }
 .rag-grey { background-color: #6c757d; }
+
+.metric-container {
+    background-color: #F8F9FA; border: 1px solid #E0E0E0;
+    border-radius: 0.5rem; padding: 1rem; text-align: center;
+}
+.metric-label {
+    font-size: 0.9rem; color: #555; margin-bottom: 0.5rem;
+}
+.metric-value {
+    font-size: 1.5rem; font-weight: 600; line-height: 1.2;
+}
+.metric-value-blue { color: #007bff; }
+.metric-value-red { color: #dc3545; }
+.metric-value-green { color: #28a745; }
+.metric-value-amber { color: #fd7e14; } /* Laranja/Âmbar */
 </style>
 """, unsafe_allow_html=True)
+
+def display_custom_metric(label, value, color_class):
+    """Exibe uma métrica personalizada com um valor colorido."""
+    st.markdown(f"""
+    <div class="metric-container">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value {color_class}">{value}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def display_rag_status(status_text):
     """Exibe um selo colorido para o status RAG."""
@@ -34,16 +58,22 @@ def display_rag_status(status_text):
     color_class = color_map.get(emoji, "grey")
     st.markdown(f'<div style="text-align: right;"><span class="rag-pill rag-{color_class}">{status_text}</span></div>', unsafe_allow_html=True)
 
-# --- Bloco de Autenticação e Conexão (sem alterações) ---
+# --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
-# --- BARRA LATERAL (sem alterações) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
-    # ... (código da sua barra lateral, que já estava funcional)
-    pass
+    project_root = Path(__file__).parent.parent
+    logo_path = project_root / "images" / "gauge-logo.svg"
+    try:
+        st.logo(str(logo_path))
+    except:
+        st.write("Gauge Metrics") 
+    st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
+    st.divider()
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 st.header("📈 Resumo Executivo do Portfólio", divider='rainbow')
@@ -86,7 +116,7 @@ kpi_data = client_summary_data.get('kpis', {})
 
 st.divider()
 
-# ===== NOVA ESTRUTURA DE ABAS =====
+# ===== ESTRUTURA DE ABAS =====
 tab_view, tab_edit = st.tabs(["📊 Análise do Projeto/Cliente", "📝 Editar Perfil e KPIs"])
 
 with tab_view:
@@ -101,14 +131,34 @@ with tab_view:
         p_kpi4.metric("Data de Fim Prevista", pd.to_datetime(profile_data.get('end_date')).strftime('%d/%m/%Y') if profile_data.get('end_date') else 'N/A')
 
         st.markdown("**Dimensão Financeira**")
-        f_kpi1, f_kpi2, f_kpi3, f_kpi4 = st.columns(4)
+        f_kpi1, f_kpi2, f_kpi3 = st.columns(3)
         receita_total = kpi_data.get('mrr', 0.0) + kpi_data.get('receita_nao_recorrente', 0.0)
-        total_geral = receita_total - kpi_data.get('total_despesas', 0.0)
-        f_kpi1.metric("Receita Recorrente (MRR)", f"R$ {kpi_data.get('mrr', 0.0):,.2f}")
-        f_kpi2.metric("Receitas Não Recorrentes", f"R$ {kpi_data.get('receita_nao_recorrente', 0.0):,.2f}")
-        f_kpi3.metric("Total de Despesas", f"R$ {kpi_data.get('total_despesas', 0.0):,.2f}")
-        f_kpi4.metric("Resultado (Receita - Despesa)", f"R$ {total_geral:,.2f}")
+        total_despesas = kpi_data.get('total_despesas', 0.0)
+        resultado_geral = receita_total - total_despesas
+        margem_contribuicao = (resultado_geral / receita_total * 100) if receita_total > 0 else 0.0
 
+        global_configs = get_global_configs()
+        target_margin = global_configs.get('target_contribution_margin', 25.0)
+
+        margin_color_class = "metric-value-red"
+        if margem_contribuicao >= target_margin:
+            margin_color_class = "metric-value-green"
+        elif margem_contribuicao >= 0:
+            margin_color_class = "metric-value-amber"
+
+        with f_kpi1:
+            display_custom_metric("Receita Recorrente (MRR)", f"R$ {kpi_data.get('mrr', 0.0):,.2f}", "metric-value-blue")
+        with f_kpi2:
+            display_custom_metric("Receitas Não Recorrentes", f"R$ {kpi_data.get('receita_nao_recorrente', 0.0):,.2f}", "metric-value-blue")
+        with f_kpi3:
+            display_custom_metric("Total de Despesas", f"R$ {total_despesas:,.2f}", "metric-value-red")
+        
+        f_kpi4, f_kpi5 = st.columns(2)
+        with f_kpi4:
+            display_custom_metric("Resultado (Receita - Despesa)", f"R$ {resultado_geral:,.2f}", "metric-value-green")
+        with f_kpi5:
+            display_custom_metric("Margem de Contribuição", f"{margem_contribuicao:.1f}%", margin_color_class)
+        
         st.markdown("**Dimensão Operacional**")
         o_kpi1, o_kpi2, o_kpi3, o_kpi4 = st.columns(4)
         o_kpi1.metric("% Concluído", f"{auto_metrics.get('completion_pct', 0):.0f}%")
@@ -142,8 +192,7 @@ with tab_edit:
         receita_nao_recorrente = c2.number_input("Receitas Não Recorrentes", min_value=0.0, value=kpi_data.get('receita_nao_recorrente', 0.0), format="%.2f")
         total_despesas = c3.number_input("Total de Despesas", min_value=0.0, value=kpi_data.get('total_despesas', 0.0), format="%.2f")
         
-        margem = c1.number_input("Margem de Contribuição (%)", min_value=0.0, value=kpi_data.get('margem', 0.0), format="%.1f")
-        nps = c2.number_input("NPS (Net Promoter Score)", min_value=-100, max_value=100, value=kpi_data.get('nps', 0))
+        nps = c1.number_input("NPS (Net Promoter Score)", min_value=-100, max_value=100, value=kpi_data.get('nps', 0))
 
         if st.form_submit_button("Salvar Perfil e KPIs", use_container_width=True):
             if 'client_summaries' not in project_config:
@@ -159,7 +208,6 @@ with tab_edit:
                     'mrr': mrr, 
                     'receita_nao_recorrente': receita_nao_recorrente,
                     'total_despesas': total_despesas,
-                    'margem': margem, 
                     'nps': nps
                 }
             }

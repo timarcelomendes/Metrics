@@ -81,7 +81,7 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(logo_path, size="large")
+        st.logo(str(logo_path), size="large")
     except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
 
@@ -136,17 +136,13 @@ tabs_layout = active_dashboard_config.get('tabs', {"Geral": []})
 project_config = get_project_config(current_project_key) or {}
 default_cols = project_config.get('dashboard_columns', 2)
 active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
-
-# --- INÍCIO DA CORREÇÃO ---
-# A variável all_charts é definida ANTES de ser usada.
 all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
-# --- FIM DA CORREÇÃO ---
 
 
-# --- CABEÇALHO E CONTROLES (VERSÃO MINIMALISTA FINAL) ---
+# --- CABEÇALHO E CONTROLES ---
 st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', '')}")
 
-cols = st.columns([3, 1.5, 1.5, 1.5])
+cols = st.columns([2.5, 1.5, 1.5, 1.5, 1.5]) # Adicionada uma coluna para o botão de IA
 
 with cols[0]:
     dashboard_names = {db['name']: db['id'] for db_id, db in available_dashboards.items()}
@@ -175,10 +171,25 @@ with cols[2]:
     organize_mode = st.toggle("Organizar", help="Ative para gerir dashboards e abas.")
 
 with cols[3]:
-    st.button("➕ Gráfico", use_container_width=True, type="primary", on_click=lambda: st.switch_page("pages/5_🏗️_Construir Gráficos.py"))
+    if st.button("🤖 Análise AI", help="Gerar análise do dashboard com IA", use_container_width=True):
+        with st.spinner("A Gauge AI está a analisar os dados de todos os gráficos..."):
+            summaries = [summarize_chart_data(c, df) for c in all_charts]
+            provider = user_data.get('ai_provider_preference', 'Google Gemini')
+            insights = get_ai_insights(st.session_state.project_name, summaries, provider)
+            st.session_state.ai_dashboard_insights = insights
+
+with cols[4]:
+    if st.button("➕ Gráfico", use_container_width=True, type="primary"):
+        st.switch_page("pages/5_🏗️_Construir Gráficos.py")
 
 st.divider()
 
+if 'ai_dashboard_insights' in st.session_state and st.session_state.ai_dashboard_insights:
+    with st.expander("🤖 Análise da Gauge AI para o Dashboard", expanded=True):
+        st.markdown(st.session_state.ai_dashboard_insights)
+        if st.button("Fechar Análise", key="close_ai_insights"):
+            del st.session_state.ai_dashboard_insights
+            st.rerun()
 
 # ===== FILTROS GLOBAIS =====
 with st.expander("Filtros do Dashboard (afetam todas as visualizações)", expanded=False):

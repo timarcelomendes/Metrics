@@ -11,6 +11,8 @@ from jira_connector import get_projects, get_issue_as_dict
 from utils import create_os_pdf, get_ai_os_from_jira_issue
 from pathlib import Path
 import uuid
+import json
+import copy
 
 st.set_page_config(page_title="Valoração Comercial", page_icon="💰", layout="wide")
 
@@ -56,19 +58,15 @@ project_config = get_project_config(project_key) or {}
 valuation_config = project_config.get('commercial_valuation', {})
 os_layouts = project_config.get('os_layouts', {})
 
-# Inicializa o estado de edição e os dados preenchidos pela IA
 if 'editing_field_key' not in st.session_state:
     st.session_state.editing_field_key = None
 if 'ai_prefilled_data' not in st.session_state:
     st.session_state.ai_prefilled_data = {}
 
-
-# --- ESTRUTURA DE ABAS UNIFICADA ---
+# --- ESTRUTURA DE ABAS ---
 tab_config, tab_os = st.tabs(["⚙️ Configurações (Catálogo e Layouts)", "📄 Gerar OS"])
 
-
 with tab_config:
-    # --- O CÓDIGO DESTA ABA PERMANECE INALTERADO ---
     st.subheader(f"Configurações para o Projeto: {selected_project_name}")
     
     with st.container(border=True):
@@ -76,7 +74,6 @@ with tab_config:
         with st.expander("⬇️ Importar Catálogo de Serviços (CSV)"):
             import_source = st.radio("Selecione a fonte de importação:", ["Carregar Ficheiro CSV", "Via Link do SharePoint", "Via Link do Google Planilhas"], horizontal=True)
             
-            df_imported = None
             if import_source == "Carregar Ficheiro CSV":
                 uploaded_file = st.file_uploader("Selecione o seu ficheiro CSV local:", type="csv")
                 if st.button("Processar Ficheiro"):
@@ -84,10 +81,10 @@ with tab_config:
                         with st.spinner("A processar o seu catálogo..."):
                             try:
                                 try:
-                                    df_imported = pd.read_csv(uploaded_file, encoding='utf-8', skiprows=1)
+                                    df_imported = pd.read_csv(uploaded_file, encoding='utf-8', header=1)
                                 except UnicodeDecodeError:
                                     uploaded_file.seek(0)
-                                    df_imported = pd.read_csv(uploaded_file, encoding='latin-1', skiprows=1)
+                                    df_imported = pd.read_csv(uploaded_file, encoding='latin-1', header=1)
                                 st.session_state.df_for_mapping = df_imported
                                 st.rerun()
                             except Exception as e:
@@ -106,7 +103,7 @@ with tab_config:
                                 response = requests.get(direct_download_url)
                                 response.raise_for_status()
                                 csv_data = StringIO(response.content.decode('utf-8-sig'))
-                                df_imported = pd.read_csv(csv_data, skiprows=1)
+                                df_imported = pd.read_csv(csv_data, header=1)
                                 st.session_state.df_for_mapping = df_imported
                                 st.rerun()
                             except Exception as e:
@@ -121,7 +118,7 @@ with tab_config:
                         with st.spinner("A descarregar e a processar a sua planilha..."):
                             try:
                                 csv_export_url = g_sheet_url.replace('/edit?usp=sharing', '/export?format=csv')
-                                df_imported = pd.read_csv(csv_export_url, skiprows=1)
+                                df_imported = pd.read_csv(csv_export_url, header=1)
                                 st.session_state.df_for_mapping = df_imported
                                 st.rerun()
                             except Exception as e:
@@ -178,7 +175,7 @@ with tab_config:
     
     with st.container(border=True):
         st.markdown("#### Construtor de Layouts de Ordem de Serviço")
-        st.info("Crie modelos para as suas Ordens de Serviço, com os campos personalizados de que precisa para cada cenário.")
+        st.info("Crie modelos para as suas Ordens de Serviço.")
         
         with st.expander("➕ Criar Novo Layout de OS"):
             with st.form("new_layout_form", clear_on_submit=True):
@@ -196,82 +193,154 @@ with tab_config:
         if not os_layouts:
             st.warning("Nenhum layout de OS foi criado ainda.")
         else:
-            selected_layout_to_edit = st.selectbox("Selecione um layout para editar:", options=list(os_layouts.keys()))
+            layout_cols = st.columns([3, 1])
+            with layout_cols[0]:
+                selected_layout_to_edit = st.selectbox("Selecione um layout para editar:", options=list(os_layouts.keys()), label_visibility="collapsed")
+            with layout_cols[1]:
+                if st.button("❌ Excluir Layout", use_container_width=True, type="secondary", help=f"Apagar permanentemente o layout '{selected_layout_to_edit}'"):
+                    if selected_layout_to_edit in os_layouts:
+                        del os_layouts[selected_layout_to_edit]
+                        project_config['os_layouts'] = os_layouts
+                        save_project_config(project_key, project_config)
+                        st.success(f"Layout '{selected_layout_to_edit}' excluído com sucesso!")
+                        st.rerun()
             
-            if selected_layout_to_edit:
+            if selected_layout_to_edit and selected_layout_to_edit in os_layouts:
                 st.markdown(f"**Editando os campos do layout:** `{selected_layout_to_edit}`")
                 
-                for i, field in enumerate(os_layouts[selected_layout_to_edit]):
+                current_layout_fields = os_layouts.get(selected_layout_to_edit, [])
+                field_types_options = ["Texto Curto", "Texto Longo", "Data", "Toggle (Sim/Não)", "Seleção Única", "Seleção Múltipla", "Tabela", "Número", "Imagem", "Valor Calculado"]
+                for i, field in enumerate(current_layout_fields):
                     field_key = f"{selected_layout_to_edit}_{i}"
-
                     with st.container(border=True):
-                        # Se este campo está a ser editado, mostra o formulário de edição
                         if st.session_state.editing_field_key == field_key:
                             with st.form(f"edit_field_form_{field_key}"):
                                 st.markdown("**Editando Campo**")
                                 edited_name = st.text_input("Nome do Campo*", value=field['field_name'])
-                                edited_type = st.selectbox("Tipo de Campo*", options=["Texto Curto", "Texto Longo", "Data", "Toggle (Sim/Não)", "Seleção Única", "Seleção Múltipla", "Tabela", "Número", "Imagem"], index=["Texto Curto", "Texto Longo", "Data", "Toggle (Sim/Não)", "Seleção Única", "Seleção Múltipla", "Tabela", "Número", "Imagem"].index(field['field_type']))
+                                edited_type = st.selectbox("Tipo de Campo*", options=field_types_options, index=field_types_options.index(field['field_type']))
+                                
+                                # --- INÍCIO DA ALTERAÇÃO 1: OPÇÕES PARA CAMPO NUMÉRICO (EDITAR) ---
+                                edited_num_type = field.get('number_type', 'Inteiro')
+                                edited_precision = field.get('precision', 2)
+                                if edited_type == "Número":
+                                    edited_num_type = st.radio("Formato do Número", ["Inteiro", "Decimal"], key=f"edit_num_type_{field_key}", horizontal=True, index=["Inteiro", "Decimal"].index(edited_num_type))
+                                    if edited_num_type == "Decimal":
+                                        edited_precision = st.number_input("Casas Decimais", min_value=1, max_value=4, value=edited_precision, step=1, key=f"edit_precision_{field_key}")
+                                # --- FIM DA ALTERAÇÃO 1 ---
                                 
                                 allow_images = False
                                 if edited_type == "Texto Longo":
                                     allow_images = st.checkbox("Permitir upload de imagens", value=field.get('allow_images', False))
                                 
-                                edited_options = st.text_area("Opções (para seleção ou colunas de tabela)", value=field.get('options', ''))
+                                edited_options = ""
+                                if edited_type in ["Seleção Única", "Seleção Múltipla", "Tabela"]:
+                                    edited_options = st.text_area("Opções (para seleção ou colunas de tabela)", value=field.get('options', ''))
                                 
                                 c1, c2 = st.columns(2)
                                 if c1.form_submit_button("Salvar Alterações", use_container_width=True, type="primary"):
                                     if edited_name:
-                                        updated_field = { "field_name": edited_name, "field_type": edited_type, "options": edited_options }
-                                        if edited_type == "Texto Longo":
-                                            updated_field["allow_images"] = allow_images
-                                        os_layouts[selected_layout_to_edit][i] = updated_field
-                                        project_config['os_layouts'] = os_layouts
-                                        save_project_config(project_key, project_config)
-                                        st.session_state.editing_field_key = None
-                                        st.success("Campo atualizado com sucesso!")
-                                        st.rerun()
+                                        existing_field_names = [f['field_name'] for idx, f in enumerate(os_layouts[selected_layout_to_edit]) if idx != i]
+                                        if edited_name in existing_field_names:
+                                            st.error(f"O nome de campo '{edited_name}' já está em uso neste layout. Por favor, escolha outro nome.")
+                                        else:
+                                            updated_field = { "field_name": edited_name, "field_type": edited_type, "options": edited_options }
+                                            if edited_type == "Texto Longo":
+                                                updated_field["allow_images"] = allow_images
+                                            
+                                            # --- INÍCIO DA ALTERAÇÃO 2: SALVAR OPÇÕES NUMÉRICAS (EDITAR) ---
+                                            if edited_type == "Número":
+                                                updated_field['number_type'] = edited_num_type
+                                                if edited_num_type == "Decimal":
+                                                    updated_field['precision'] = edited_precision
+                                            # --- FIM DA ALTERAÇÃO 2 ---
+                                            
+                                            os_layouts[selected_layout_to_edit][i] = updated_field
+                                            project_config['os_layouts'] = os_layouts
+                                            save_project_config(project_key, project_config)
+                                            st.session_state.editing_field_key = None
+                                            st.success("Campo atualizado com sucesso!")
+                                            st.rerun()
                                 if c2.form_submit_button("Cancelar", use_container_width=True):
                                     st.session_state.editing_field_key = None
                                     st.rerun()
-                        # Caso contrário, mostra o campo normal com os botões
                         else:
-                            col1, col2, col3 = st.columns([4, 1, 1])
+                            col1, col_up, col_down, col_edit, col_remove = st.columns([4, 1, 1, 1, 1])
                             field_display = f"Campo: {field['field_name']} (Tipo: {field['field_type']})"
                             if field.get('field_type') == 'Texto Longo' and field.get('allow_images'):
                                 field_display += " 🖼️"
                             col1.text(field_display)
 
-                            if col2.button("✏️ Editar", key=f"edit_btn_{field_key}", use_container_width=True):
+                            if i > 0:
+                                if col_up.button("⬆️", key=f"up_btn_{field_key}", use_container_width=True, help="Mover para cima"):
+                                    current_layout_fields[i], current_layout_fields[i-1] = current_layout_fields[i-1], current_layout_fields[i]
+                                    project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
+                                    save_project_config(project_key, project_config)
+                                    st.rerun()
+                            else:
+                                col_up.write("")
+
+                            if i < len(current_layout_fields) - 1:
+                                if col_down.button("⬇️", key=f"down_btn_{field_key}", use_container_width=True, help="Mover para baixo"):
+                                    current_layout_fields[i], current_layout_fields[i+1] = current_layout_fields[i+1], current_layout_fields[i]
+                                    project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
+                                    save_project_config(project_key, project_config)
+                                    st.rerun()
+                            else:
+                                col_down.write("")
+
+                            if col_edit.button("✏️ Editar", key=f"edit_btn_{field_key}", use_container_width=True):
                                 st.session_state.editing_field_key = field_key
                                 st.rerun()
-                            if col3.button("❌ Remover", key=f"del_btn_{field_key}", use_container_width=True):
-                                os_layouts[selected_layout_to_edit].pop(i)
-                                project_config['os_layouts'] = os_layouts
+                            if col_remove.button("❌ Remover", key=f"del_btn_{field_key}", use_container_width=True):
+                                current_layout_fields.pop(i)
+                                project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
                                 save_project_config(project_key, project_config)
                                 st.rerun()
 
                 with st.form(f"add_field_form_{selected_layout_to_edit}"):
                     st.markdown("**Adicionar Novo Campo**")
                     field_name = st.text_input("Nome do Campo*")
-                    field_type = st.selectbox("Tipo de Campo*", options=["Texto Curto", "Texto Longo", "Data", "Toggle (Sim/Não)", "Seleção Única", "Seleção Múltipla", "Tabela", "Número", "Imagem"])
+                    field_type = st.selectbox("Tipo de Campo*", options=field_types_options)
+                    
+                    # --- INÍCIO DA ALTERAÇÃO 3: OPÇÕES PARA CAMPO NUMÉRICO (ADICIONAR) ---
+                    number_type = "Inteiro"
+                    precision = 2
+                    if field_type == "Número":
+                        number_type = st.radio("Formato do Número", ["Inteiro", "Decimal"], key="add_num_type", horizontal=True)
+                        if number_type == "Decimal":
+                            precision = st.number_input("Casas Decimais", min_value=1, max_value=4, value=2, step=1, key="add_precision")
+                    # --- FIM DA ALTERAÇÃO 3 ---
                     
                     allow_images_new = False
                     if field_type == "Texto Longo":
                         allow_images_new = st.checkbox("Permitir upload de imagens")
                     
-                    options_str = st.text_area("Opções (para seleção ou colunas de tabela, separadas por vírgula)")
+                    options_str = ""
+                    if field_type in ["Seleção Única", "Seleção Múltipla", "Tabela"]:
+                        options_str = st.text_area("Opções (para seleção ou colunas de tabela, separadas por vírgula)")
                     
                     if st.form_submit_button("Adicionar Campo ao Layout"):
                         if field_name:
-                            new_field = { "field_name": field_name, "field_type": field_type, "options": options_str }
-                            if field_type == "Texto Longo":
-                                new_field["allow_images"] = allow_images_new
-                            os_layouts[selected_layout_to_edit].append(new_field)
-                            project_config['os_layouts'] = os_layouts
-                            save_project_config(project_key, project_config)
-                            st.success(f"Campo '{field_name}' adicionado ao layout!")
-                            st.rerun()
-
+                            existing_field_names = [f['field_name'] for f in os_layouts[selected_layout_to_edit]]
+                            if field_name in existing_field_names:
+                                st.warning(f"O campo '{field_name}' já existe neste layout. Por favor, escolha um nome diferente.")
+                            else:
+                                new_field = { "field_name": field_name, "field_type": field_type, "options": options_str }
+                                if field_type == "Texto Longo":
+                                    new_field["allow_images"] = allow_images_new
+                                
+                                # --- INÍCIO DA ALTERAÇÃO 4: SALVAR OPÇÕES NUMÉRICAS (ADICIONAR) ---
+                                if field_type == "Número":
+                                    new_field['number_type'] = number_type
+                                    if number_type == "Decimal":
+                                        new_field['precision'] = precision
+                                # --- FIM DA ALTERAÇÃO 4 ---
+                                
+                                os_layouts[selected_layout_to_edit].append(new_field)
+                                project_config['os_layouts'] = os_layouts
+                                save_project_config(project_key, project_config)
+                                st.success(f"Campo '{field_name}' adicionado ao layout!")
+                                st.rerun()
 with tab_os:
     st.subheader("Gerador de Ordem de Serviço")
     
@@ -279,13 +348,11 @@ with tab_os:
         st.warning("Nenhum layout de OS foi criado. Por favor, crie um na aba de 'Configurações' primeiro.")
     else:
         selected_layout_name = st.selectbox("Selecione o Layout da OS:", options=list(os_layouts.keys()), 
-                                            # Limpa os dados preenchidos ao mudar de layout
                                             on_change=lambda: st.session_state.update(ai_prefilled_data={}))
         
         if selected_layout_name:
             layout_to_render = os_layouts.get(selected_layout_name, [])
             
-            # --- INÍCIO DA NOVA SEÇÃO DE IA ---
             with st.expander("🤖 Preencher com IA a partir do Jira"):
                 c1, c2 = st.columns([3, 1])
                 jira_issue_key = c1.text_input("Insira a chave da Issue do Jira (ex: PROJ-123)")
@@ -293,10 +360,7 @@ with tab_os:
                     if jira_issue_key:
                         with st.spinner(f"A buscar todos os dados da issue {jira_issue_key} e a analisar com a IA..."):
                             try:
-                                # Chama a nova função que retorna um dicionário
                                 issue_data_dict = get_issue_as_dict(st.session_state.jira_client, jira_issue_key)
-                                
-                                # Passa o dicionário completo para a IA
                                 ai_result = get_ai_os_from_jira_issue(issue_data_dict, layout_to_render)
                                 
                                 if "error" in ai_result:
@@ -309,83 +373,109 @@ with tab_os:
                                 st.error(f"Não foi possível encontrar ou processar a issue {jira_issue_key}: {e}")
                     else:
                         st.warning("Por favor, insira uma chave de issue.")
-            # --- FIM DA NOVA SEÇÃO DE IA ---
 
             with st.form("os_form"):
                 st.markdown(f"**Preencha os dados para a OS:** `{selected_layout_name}`")
                 
                 custom_field_data = {}
-                for field in layout_to_render:
+                for i, field in enumerate(layout_to_render):
                     field_name = field.get('field_name')
                     field_type = field.get('field_type')
                     if not field_name or not field_type: continue
-
-                    # Pega o valor preenchido pela IA, se existir
+                    
+                    if field_type == "Valor Calculado":
+                        continue
+                    
+                    widget_key = f"{field_name}_{i}"
                     ai_value = st.session_state.ai_prefilled_data.get(field_name, '')
 
                     if field_type == "Texto Curto":
-                        custom_field_data[field_name] = st.text_input(field_name, value=ai_value)
+                        custom_field_data[field_name] = st.text_input(field_name, value=ai_value, key=widget_key)
                     elif field_type == "Texto Longo":
-                        text_area = st.text_area(f"{field_name} (suporta Markdown)", value=ai_value)
+                        text_area = st.text_area(f"{field_name} (suporta Markdown)", value=ai_value, key=f"text_{widget_key}")
                         images_uploader = None
                         if field.get('allow_images', False):
-                            images_uploader = st.file_uploader(f"Adicionar imagens para '{field_name}'", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=f"img_uploader_{field_name}")
+                            images_uploader = st.file_uploader(f"Adicionar imagens para '{field_name}'", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=f"img_uploader_{widget_key}")
                         custom_field_data[field_name] = {"text": text_area, "images": images_uploader}
                     elif field_type == "Data":
-                        custom_field_data[field_name] = st.date_input(field_name, value=None)
+                        custom_field_data[field_name] = st.date_input(field_name, value=None, key=widget_key)
                     elif field_type == "Toggle (Sim/Não)":
-                        custom_field_data[field_name] = st.toggle(field_name, value=bool(ai_value))
+                        custom_field_data[field_name] = st.toggle(field_name, value=bool(ai_value), key=widget_key)
                     elif field_type == "Seleção Única":
                         options = [opt.strip() for opt in field.get('options', '').split(',')]
-                        custom_field_data[field_name] = st.radio(field_name, options=options, index=options.index(ai_value) if ai_value in options else 0)
+                        custom_field_data[field_name] = st.radio(field_name, options=options, index=options.index(ai_value) if ai_value in options else 0, key=widget_key)
                     elif field_type == "Seleção Múltipla":
                         options = [opt.strip() for opt in field.get('options', '').split(',')]
-                        custom_field_data[field_name] = st.multiselect(field_name, options=options, default=[v for v in ai_value if v in options] if isinstance(ai_value, list) else [])
+                        default_values = [v for v in ai_value if v in options] if isinstance(ai_value, list) else []
+                        custom_field_data[field_name] = st.multiselect(field_name, options=options, default=default_values, key=widget_key)
                     elif field_type == "Tabela":
                         cols = [col.strip() for col in field.get('options', 'Coluna 1').split(',')]
                         df_val = pd.DataFrame(ai_value) if isinstance(ai_value, list) and ai_value else pd.DataFrame([{}], columns=cols)
-                        custom_field_data[field_name] = st.data_editor(df_val, num_rows="dynamic", use_container_width=True)
+                        custom_field_data[field_name] = st.data_editor(df_val, num_rows="dynamic", use_container_width=True, key=widget_key)
+                    # --- INÍCIO DA ALTERAÇÃO 5: RENDERIZAR CAMPO NUMÉRICO COM FORMATO ---
                     elif field_type == "Número":
-                        num_val = float(ai_value) if ai_value else None
-                        custom_field_data[field_name] = st.number_input(field_name, value=num_val)
+                        num_type = field.get('number_type', 'Inteiro')
+                        num_val = None
+                        try:
+                            if ai_value and str(ai_value).strip():
+                                num_val = float(ai_value)
+                        except (ValueError, TypeError):
+                            num_val = None
+
+                        if num_type == 'Inteiro':
+                            default_int = int(num_val) if num_val is not None else 0
+                            custom_field_data[field_name] = st.number_input(field_name, value=default_int, step=1, format="%d", key=widget_key)
+                        else: # Decimal
+                            precision = field.get('precision', 2)
+                            step = 1 / (10 ** precision)
+                            default_float = num_val if num_val is not None else 0.0
+                            custom_field_data[field_name] = st.number_input(field_name, value=default_float, step=step, format=f"%.{precision}f", key=widget_key)
+                    # --- FIM DA ALTERAÇÃO 5 ---
                     elif field_type == "Imagem":
-                        custom_field_data[field_name] = st.file_uploader(f"{field_name} (máx. 5)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+                        custom_field_data[field_name] = st.file_uploader(f"{field_name} (máx. 5)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=widget_key)
                 
                 st.divider()
                 st.markdown("**Itens do Catálogo (Opcional)**")
                 catalog = valuation_config.get('service_catalog', [])
                 currency_name = valuation_config.get('currency_name', 'UPs')
                 item_options = {f"{item['Item']} ({item['Valor']} {currency_name})": item for item in catalog}
-                selected_items_desc = st.multiselect("Selecione os itens do catálogo para a OS:", options=item_options.keys())
+                selected_items_desc = st.multiselect("Selecione os itens do catálogo para a OS:", options=item_options.keys(), key="catalog_items_multiselect")
                 
                 st.divider()
                 st.markdown("**Assinaturas**")
                 
-                assinantes_df = st.data_editor(pd.DataFrame([{"Nome": "", "Cargo": ""}]), num_rows="dynamic", use_container_width=True, column_config={"Nome": st.column_config.TextColumn("Nome*", required=True), "Cargo": st.column_config.TextColumn("Cargo*", required=True)})
+                assinantes_df = st.data_editor(pd.DataFrame([{"Nome": "", "Cargo": ""}]), num_rows="dynamic", use_container_width=True, key="assinantes_editor", column_config={"Nome": st.column_config.TextColumn("Nome*", required=True), "Cargo": st.column_config.TextColumn("Cargo*", required=True)})
                 
                 preview_button = st.form_submit_button("Pré-visualizar OS", use_container_width=True)
 
             if preview_button:
-                # Limpa os dados da IA depois de submeter o formulário para não interferir com a próxima OS
                 st.session_state.ai_prefilled_data = {}
-                
                 selected_items_data = [item_options[desc] for desc in selected_items_desc]
                 assinantes_validos = pd.DataFrame(assinantes_df).dropna(how='all').to_dict('records')
+                
+                total_catalog_value = sum(float(item.get('Valor', 0)) for item in selected_items_data)
+                conversion_rate = valuation_config.get('conversion_rate', 1.0)
+                final_brl_value = total_catalog_value * conversion_rate
+                currency_name = valuation_config.get('currency_name', 'UPs')
+                
+                for field in layout_to_render:
+                    if field.get('field_type') == 'Valor Calculado':
+                        custom_field_data[field['field_name']] = f"R$ {final_brl_value:,.2f}"
                 
                 for field in layout_to_render:
                     field_name = field.get('field_name'); field_type = field.get('field_type')
                     if field_type == "Texto Longo":
-                        text_longo_data = custom_field_data[field_name]
+                        text_longo_data = custom_field_data.get(field_name, {"text": "", "images": None})
                         if text_longo_data.get("images"): text_longo_data["images"] = [file.getvalue() for file in text_longo_data["images"]]
                         else: text_longo_data["images"] = []
                         custom_field_data[field_name] = text_longo_data
-                    elif field_type == "Imagem" and custom_field_data[field_name] is not None:
+                    elif field_type == "Imagem" and custom_field_data.get(field_name) is not None:
                         uploaded_files = custom_field_data[field_name]
                         if len(uploaded_files) > 5:
                             st.warning(f"Apenas as primeiras 5 imagens do campo '{field_name}' serão processadas."); uploaded_files = uploaded_files[:5]
                         custom_field_data[field_name] = [file.getvalue() for file in uploaded_files]
                     elif field_type == "Tabela":
-                        custom_field_data[field_name] = pd.DataFrame(custom_field_data[field_name]).to_dict('records')
+                        custom_field_data[field_name] = pd.DataFrame(custom_field_data.get(field_name)).to_dict('records')
 
                 st.session_state.os_preview_data = {
                     'layout_name': selected_layout_name, 'custom_fields': custom_field_data,
@@ -394,7 +484,6 @@ with tab_os:
                 }
 
     if 'os_preview_data' in st.session_state:
-        # --- O CÓDIGO DESTA SEÇÃO PERMANECE INALTERADO ---
         st.divider()
         st.subheader("🔍 Pré-visualização da OS")
         
@@ -407,18 +496,27 @@ with tab_os:
                 field_name = field_data['field_name']; field_type = field_data['field_type']
                 value = preview_data['custom_fields'].get(field_name)
                 
-                if value is not None:
-                    if field_type == "Texto Longo":
-                        st.markdown(f"**{field_name}:**")
-                        if value.get("text"): st.markdown(value["text"], help="Este campo suporta formatação Markdown.")
+                if value is not None and value != '' and (not isinstance(value, list) or len(value) > 0):
+                    st.markdown(f"**{field_name}:**")
+                    if field_type == "Tabela":
+                        st.dataframe(pd.DataFrame(value))
+                    elif field_type == "Imagem" and isinstance(value, list):
+                        for img_bytes in value:
+                            st.image(img_bytes)
+                    elif field_type == "Texto Longo" and isinstance(value, dict):
+                        if value.get("text"):
+                            st.markdown(value["text"], help="Este campo suporta formatação Markdown.")
                         if value.get("images"):
-                            for img_bytes in value["images"]: st.image(img_bytes)
-                    elif field_type == "Tabela":
-                        st.markdown(f"**{field_name}:**"); st.dataframe(pd.DataFrame(value))
-                    elif field_type == "Imagem" and value:
-                        st.markdown(f"**{field_name}:**")
-                        for img_bytes in value: st.image(img_bytes)
-                    else: st.markdown(f"**{field_name}:** {value}")
+                            for img_bytes in value["images"]:
+                                st.image(img_bytes)
+                    elif field_type == "Toggle (Sim/Não)":
+                        st.markdown("Sim" if value else "Não")
+                    else:
+                        if isinstance(value, list):
+                            display_value = ", ".join(map(str, value))
+                            st.markdown(display_value)
+                        else:
+                            st.markdown(str(value))
             
             if preview_data.get('items'):
                 st.markdown("**Itens do Catálogo:**"); st.dataframe(pd.DataFrame(preview_data['items'])[["Item", "Valor"]])
@@ -427,7 +525,9 @@ with tab_os:
 
         if st.button("Confirmar e Gerar PDF", type="primary", use_container_width=True):
             with st.spinner("A gerar o PDF..."):
-                pdf_bytes = create_os_pdf(preview_data)
+                pdf_data = copy.deepcopy(preview_data)
+                
+                pdf_bytes = create_os_pdf(pdf_data)
                 st.session_state.generated_os_pdf = pdf_bytes
                 st.session_state.generated_os_data = preview_data
                 st.success("Minuta da OS gerada com sucesso!")

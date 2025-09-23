@@ -12,33 +12,20 @@ from security import get_project_config
 # --- Funções Auxiliares de Data ---
 def find_completion_date(issue, project_config):
     """
-    Encontra a data de conclusão, usando o campo personalizado se estiver
-    configurado, ou o histórico de status como fallback.
+    Encontra a data de conclusão de uma issue com base nos status
+    configurados para o projeto.
     """
-    date_mappings = project_config.get('date_mappings', {})
-    completion_field_id = date_mappings.get('completion_date_field_id')
-
-    if completion_field_id and hasattr(issue.fields, completion_field_id):
-        completion_date = getattr(issue.fields, completion_field_id)
-        if completion_date:
-            return pd.to_datetime(completion_date).tz_localize(None)
-
-    global_configs = st.session_state.get('global_configs', {})
-    done_states = global_configs.get('status_mapping', {}).get('done', DEFAULT_DONE_STATES)
-    
-    try:
-        if hasattr(issue.changelog, 'histories'):
-            for history in reversed(issue.changelog.histories):
-                for item in history.items:
-                    if item.field == 'status' and item.toString.lower() in [s.lower() for s in done_states]:
-                        return pd.to_datetime(history.created).tz_localize(None)
-        
-        if issue.fields.status.name.lower() in [s.lower() for s in done_states] and issue.fields.resolutiondate:
-            return pd.to_datetime(issue.fields.resolutiondate).tz_localize(None)
-        
+    status_mapping = project_config.get('status_mapping', {})
+    done_statuses = [s.lower() for s in status_mapping.get('done', [])] 
+    if not done_statuses or not hasattr(issue.changelog, 'histories'):
         return None
-    except Exception:
-        return None
+
+    for history in reversed(issue.changelog.histories):
+        for item in history.items:
+            if item.field == 'status' and item.toString.lower() in done_statuses:
+                completion_date = pd.to_datetime(history.created).tz_localize(None)
+                return completion_date
+    return None
 
 def find_start_date(issue):
     """Encontra a data de início do ciclo de trabalho."""
@@ -55,33 +42,46 @@ def find_start_date(issue):
         return created_date
     return None
 
-def calculate_lead_time(issue, completion_date=None):
-    """Calcula o Lead Time (Criação até Conclusão) em dias."""
-    if completion_date is None:
-        return None
-    creation_date = pd.to_datetime(issue.fields.created).tz_localize(None)
-    return (completion_date - creation_date).days
+def calculate_lead_time(issue, completion_date):
+    """Calcula o Lead Time em dias."""
+    if completion_date:
+        creation_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+        return (completion_date - creation_date).days
+    return None
 
-def calculate_cycle_time(issue, completion_date=None):
-    """Calcula o Cycle Time (Início do Trabalho até Conclusão) em dias."""
-    if completion_date is None:
+def calculate_cycle_time(issue, completion_date, project_config):
+    """
+    Calcula o Cycle Time em dias. Procura o primeiro status de 'Em Andamento'.
+    Se não encontrar, usa a data de criação como fallback para evitar resultados
+    inconsistentes como zero.
+    """
+    if not completion_date:
         return None
-        
-    initial_states = st.session_state.get('global_configs', {}).get('status_mapping', {}).get('initial', DEFAULT_INITIAL_STATES)
+
+    status_mapping = project_config.get('status_mapping', {})
+    in_progress_statuses = [s.lower() for s in status_mapping.get('in_progress', [])]
     
-    start_date = None
-    if hasattr(issue.changelog, 'histories'):
+    first_start_date = None
+    
+    # Tenta encontrar a data de início real se os status estiverem configurados
+    if in_progress_statuses and hasattr(issue.changelog, 'histories'):
+        start_dates = []
         for history in issue.changelog.histories:
             for item in history.items:
-                if item.field == 'status' and item.fromString.lower() in [s.lower() for s in initial_states]:
-                    start_date = pd.to_datetime(history.created).tz_localize(None)
-                    break
-            if start_date:
-                break
-    
-    if start_date:
-        return (completion_date - start_date).days
-    return None
+                if item.field == 'status' and item.toString.lower() in in_progress_statuses:
+                    start_dates.append(pd.to_datetime(history.created).tz_localize(None))
+        
+        if start_dates:
+            first_start_date = min(start_dates)
+
+    # Fallback: Se não encontrou uma data de início, usa a data de criação.
+    # Isso torna o Cycle Time igual ao Lead Time para o item, o que é mais lógico que 0.
+    if first_start_date is None:
+        first_start_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+
+    # Calcula a diferença e garante que o resultado nunca seja negativo.
+    time_delta = completion_date - first_start_date
+    return max(0, time_delta.total_seconds() / (24 * 3600))
 
 def calculate_throughput(issues, project_config):
     return len([i for i in issues if find_completion_date(i, project_config) is not None])
@@ -115,20 +115,16 @@ def filter_ignored_issues(raw_issues_list):
     ]
 
 def get_issue_estimation(issue, estimation_config):
-    """Retorna o valor da estimativa de uma issue, convertendo de segundos para horas se necessário."""
-    if not estimation_config or not estimation_config.get('id'):
-        return 0.0
-        
-    field_id = estimation_config['id']
-    source = estimation_config.get('source')
+    """
+    Retorna a estimativa de uma issue com base na configuração do projeto.
+    """
+    if not estimation_config:
+        return None
     
-    value = getattr(issue.fields, field_id, 0) or 0
-    
-    # Converte de segundos para horas se for um campo de tempo padrão do Jira
-    if source == 'standard_time':
-        return float(value) / 3600
-    
-    return float(value)
+    field_id = estimation_config.get('id')
+    if hasattr(issue.fields, field_id) and getattr(issue.fields, field_id) is not None:
+        return getattr(issue.fields, field_id)
+    return 0
 
 def calculate_predictability(sprint_issues, estimation_config, project_config):
     if not sprint_issues or not estimation_config.get('id'): return 0.0
@@ -162,7 +158,6 @@ def generate_sprint_health_summary(issues, predictability, project_config):
         else: insights.append(f"✅ **Fluxo de Trabalho Estável:** O tempo de conclusão das tarefas foi consistente.")
     return insights
 
-# ############### FUNÇÃO CORRIGIDA ###############
 def prepare_burndown_data(client, sprint_obj, estimation_config, project_config):
     """
     Prepara os dados para o gráfico de Burndown de uma sprint.
@@ -223,7 +218,6 @@ def prepare_cfd_data(issues, start_date, end_date):
     transitions = []
 
     for issue in issues:
-        # --- CORREÇÃO AQUI: Remove o fuso horário ---
         created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
         transitions.append({'date': created_date, 'status': 'Criado', 'change': 1})
         all_statuses.add('Criado')
@@ -232,7 +226,6 @@ def prepare_cfd_data(issues, start_date, end_date):
             for history in issue.changelog.histories:
                 for item in history.items:
                     if item.field == 'status':
-                        # --- CORREÇÃO AQUI: Remove o fuso horário ---
                         transition_date = pd.to_datetime(history.created).tz_localize(None).normalize()
                         transitions.append({'date': transition_date, 'status': item.fromString, 'change': -1})
                         transitions.append({'date': transition_date, 'status': item.toString, 'change': 1})
@@ -374,19 +367,24 @@ def calculate_time_in_status(issue, target_status):
         return 0 # Retorna 0 se houver erro ou o histórico for complexo
     return total_time.total_seconds() / 86400 # em dias
 
-def calculate_flow_efficiency(issue):
-    """Calcula a Eficiência de Fluxo (simplificado)."""
-    cycle_time = calculate_cycle_time(issue)
-    if cycle_time is None or cycle_time == 0:
+def calculate_flow_efficiency(issue, project_config):
+    """
+    Calcula a eficiência do fluxo (tempo em andamento vs. tempo total do ciclo).
+    Esta é uma estimativa simplificada.
+    """
+    completion_date = find_completion_date(issue, project_config)
+    cycle_time_days = calculate_cycle_time(issue, completion_date, project_config)
+
+    if not cycle_time_days or cycle_time_days <= 0:
         return None
-    
-    # Supondo que status de espera são 'blocked', 'waiting for approval', etc.
-    # Esta é uma simplificação. Uma implementação real precisaria de um mapeamento de status de "espera".
-    waiting_statuses = ['blocked', 'impedimento'] 
-    waiting_time = calculate_time_in_status(issue, waiting_statuses)
-    
-    active_time = cycle_time - waiting_time
-    return (active_time / cycle_time) * 100 if cycle_time > 0 else 0
+
+    time_spent_seconds = issue.fields.timespent or 0
+    touch_time_days = time_spent_seconds / 3600 / 8 # Converte para dias de 8h
+
+    if touch_time_days > cycle_time_days:
+        return 100.0
+
+    return (touch_time_days / cycle_time_days) * 100
 
 def get_aging_wip(issues):
     """
@@ -412,8 +410,7 @@ def get_aging_wip(issues):
     today = datetime.now().date()
 
     for issue in wip_issues:
-        # --- Lógica de Cálculo de Idade Corrigida ---
-        last_status_change_date = pd.to_datetime(issue.fields.created).date() # Padrão
+        last_status_change_date = pd.to_datetime(issue.fields.created).date()
         if hasattr(issue.changelog, 'histories'):
             for history in reversed(issue.changelog.histories):
                 for item in history.items:
@@ -433,14 +430,6 @@ def get_aging_wip(issues):
 
     df = pd.DataFrame(wip_data)
     return df.sort_values(by='Dias no Status', ascending=False)
-
-def calculate_flow_efficiency(issue):
-    """Calcula a eficiência do fluxo (tempo em atividade vs. tempo total)."""
-    cycle_time = calculate_cycle_time(issue)
-    if cycle_time is None or cycle_time == 0:
-        return None
-    # Esta é uma implementação simplificada.
-    return 25.0 # Placeholder
 
 def calculate_velocity(sprint_issues, estimation_config):
     if not sprint_issues or not estimation_config.get('id'): return 0
@@ -565,40 +554,56 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config, p
         'Linha Ideal': ideal_line
     }).set_index('Data')
 
-def calculate_executive_summary_metrics(project_issues, project_config):
-    """Calcula todas as métricas, agora com a lógica de fuso horário corrigida."""
-    if not project_issues:
-        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0, 'schedule_adherence': 0}
+def calculate_executive_summary_metrics(issues, project_config):
+    """
+    Calcula um conjunto de métricas chave para o Resumo Executivo.
+    """
+    if not issues:
+        return {
+            'completion_pct': 0,
+            'deliveries_month': 0,
+            'schedule_adherence': 0,
+            'avg_deadline_diff': 0
+        }
 
-    total_issues = len(project_issues)
-    completed_issues_list = [i for i in project_issues if find_completion_date(i, project_config) is not None]
+    total_issues = len(issues)
+    completed_issues = 0
+    deliveries_last_30_days = 0
     
-    completion_pct = (len(completed_issues_list) / total_issues) * 100 if total_issues > 0 else 0
-
-    current_month = datetime.now().month; current_year = datetime.now().year
-    deliveries_month = len([
-        i for i in completed_issues_list 
-        if (cd := find_completion_date(i, project_config)) and cd.month == current_month and cd.year == current_year
-    ])
-
-    date_mappings = project_config.get('date_mappings', {}); due_date_field_id = date_mappings.get('due_date_field_id')
-    
+    issues_with_deadline = 0
+    issues_on_time = 0
     deadline_diffs = []
-    if due_date_field_id:
-        for i in completed_issues_list:
-            if hasattr(i.fields, due_date_field_id) and getattr(i.fields, due_date_field_id):
-                due_date = pd.to_datetime(getattr(i.fields, due_date_field_id)).tz_localize(None).normalize()
-                completion_date = find_completion_date(i, project_config)
-                if completion_date:
-                    deadline_diffs.append((completion_date.normalize() - due_date).days)
-    
-    avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
-    
-    schedule_adherence = calculate_schedule_adherence(project_issues, project_config)
+
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+
+    for issue in issues:
+        completion_date = find_completion_date(issue, project_config)
+        
+        if completion_date:
+            completed_issues += 1
+            if completion_date.date() >= thirty_days_ago.date():
+                deliveries_last_30_days += 1
+            
+            if hasattr(issue.fields, 'duedate') and issue.fields.duedate:
+                due_date = pd.to_datetime(issue.fields.duedate).date()
+                actual_completion_date = completion_date.date()
+                
+                issues_with_deadline += 1
+                diff = (actual_completion_date - due_date).days
+                deadline_diffs.append(diff)
+                
+                if diff <= 0:
+                    issues_on_time += 1
+
+    completion_pct = (completed_issues / total_issues * 100) if total_issues > 0 else 0
+    schedule_adherence = (issues_on_time / issues_with_deadline * 100) if issues_with_deadline > 0 else 0
+    avg_deadline_diff = sum(deadline_diffs) / len(deadline_diffs) if deadline_diffs else 0
     
     return {
-        'completion_pct': completion_pct, 'deliveries_month': deliveries_month,
-        'avg_deadline_diff': avg_deadline_diff, 'schedule_adherence': schedule_adherence
+        'completion_pct': completion_pct,
+        'deliveries_month': deliveries_last_30_days,
+        'schedule_adherence': schedule_adherence,
+        'avg_deadline_diff': avg_deadline_diff
     }
 
 def calculate_throughput_trend(project_issues, num_weeks=4):
@@ -698,30 +703,44 @@ def calculate_sla_metrics(issues):
 
 def calculate_estimation_accuracy(completed_issues, estimation_config):
     """
-    Calcula a soma do estimado vs. realizado para uma lista de issues concluídas.
+    Calcula a soma do estimado vs. realizado para uma lista de issues concluídas,
+    convertendo corretamente os valores de segundos para horas.
     """
-    total_estimated = 0
-    total_actual = 0
+    total_estimated_hours = 0
+    total_actual_hours = 0
 
     if not completed_issues:
         return {'total_estimated': 0, 'total_actual': 0, 'accuracy_ratio': 100}
 
+    # Verifica se a estimativa é baseada em tempo (campo padrão do Jira) ou pontos.
+    is_time_based_estimation = estimation_config.get('source') == 'standard_time'
+
     for issue in completed_issues:
         estimated_value = get_issue_estimation(issue, estimation_config) or 0
         
+        # O campo 'timespent' do Jira sempre vem em segundos.
         time_spent_seconds = issue.fields.timespent if hasattr(issue.fields, 'timespent') and issue.fields.timespent is not None else 0
-        actual_value = time_spent_seconds / 3600 # Converte para horas
-
-        # Apenas considera issues que tinham uma estimativa
+        
         if estimated_value > 0:
-            total_estimated += estimated_value
-            total_actual += actual_value
-    
-    accuracy_ratio = (total_actual / total_estimated) * 100 if total_estimated > 0 else 100
+            # Converte o tempo gasto para horas.
+            actual_hours = time_spent_seconds / 3600
+            total_actual_hours += actual_hours
+
+            # Se a estimativa for em tempo, ela também vem em segundos. Converte para horas.
+            if is_time_based_estimation:
+                estimated_hours = estimated_value / 3600
+                total_estimated_hours += estimated_hours
+            else:
+                # Se for em pontos, mantém o valor como está.
+                total_estimated_hours += estimated_value
+
+    # Calcula a acurácia. A comparação só faz sentido se ambos forem horas.
+    # Se a estimativa for em pontos, a acurácia pode não ser diretamente comparável em %.
+    accuracy_ratio = (total_actual_hours / total_estimated_hours) * 100 if total_estimated_hours > 0 else 100
 
     return {
-        'total_estimated': total_estimated,
-        'total_actual': total_actual,
+        'total_estimated': total_estimated_hours,
+        'total_actual': total_actual_hours,
         'accuracy_ratio': accuracy_ratio
     }
 
@@ -790,4 +809,94 @@ def calculate_executive_summary_metrics(project_issues, project_config):
         'completion_pct': completion_pct, 'deliveries_month': deliveries_month,
         'avg_deadline_diff': avg_deadline_diff, 'schedule_adherence': schedule_adherence,
         'total_issues': total_issues, 'completed_issues': len(completed_issues_list)
+    }
+
+def get_applicable_sla_policy(issue, policies):
+    """Encontra a primeira política de SLA que se aplica a uma issue."""
+    issue_type_name = issue.fields.issuetype.name.lower()
+    priority_name = issue.fields.priority.name.lower() if issue.fields.priority else ""
+
+    for policy in policies:
+        policy_issue_types = [t.lower() for t in policy['issue_types']]
+        policy_priorities = [p.lower() for p in policy['priorities']]
+
+        types_match = not policy_issue_types or issue_type_name in policy_issue_types
+        priorities_match = not policy_priorities or priority_name in policy_priorities
+
+        if types_match and priorities_match:
+            return policy
+    return None
+
+def calculate_business_hours(start_time, end_time):
+    """Calcula as horas úteis entre duas datas (simplificado, 8h/dia, seg-sex)."""
+    if not start_time or not end_time:
+        return 0
+    
+    if isinstance(start_time, str): start_time = pd.to_datetime(start_time)
+    if isinstance(end_time, str): end_time = pd.to_datetime(end_time)
+
+    start_time = start_time.tz_localize(None)
+    end_time = end_time.tz_localize(None)
+
+    business_days = np.busday_count(start_time.date(), end_time.date())
+    
+    return business_days * 8
+
+def calculate_sla_metrics_for_issues(issues, global_configs):
+    """Calcula as métricas de SLA para uma lista de issues."""
+    policies = global_configs.get('sla_policies', [])
+    if not policies:
+        return {}
+
+    total_sla_issues = 0
+    violated_resolution_sla = 0
+    met_resolution_sla = 0
+    first_response_times = []
+
+    for issue in issues:
+        policy = get_applicable_sla_policy(issue, policies)
+        if not policy:
+            continue
+            
+        total_sla_issues += 1
+        
+        start_time, stop_time, first_response_time = None, None, None
+        
+        # Garante que os status da política estão em minúsculas para comparação
+        start_statuses = [s.lower() for s in policy['start_statuses']]
+        stop_statuses = [s.lower() for s in policy['stop_statuses']]
+        
+        for history in issue.changelog.histories:
+            history_time = pd.to_datetime(history.created).tz_localize(None)
+            for item in history.items:
+                if item.field == 'status':
+                    status_name = item.toString.lower()
+                    if status_name in start_statuses and not start_time:
+                        start_time = history_time
+                    if status_name in stop_statuses:
+                        stop_time = history_time
+
+            if not first_response_time and hasattr(issue.fields, 'comment') and issue.fields.comment.comments:
+                for comment in issue.fields.comment.comments:
+                    comment_author = comment.author.displayName
+                    issue_creator = issue.fields.creator.displayName
+                    if comment_author != issue_creator:
+                        first_response_time = pd.to_datetime(comment.created).tz_localize(None)
+                        break
+
+        if start_time and stop_time:
+            resolution_hours = calculate_business_hours(start_time, stop_time)
+            if resolution_hours > policy['resolution_hours']:
+                violated_resolution_sla += 1
+            else:
+                met_resolution_sla += 1
+        
+        if start_time and first_response_time and first_response_time > start_time:
+            response_hours = calculate_business_hours(start_time, first_response_time)
+            first_response_times.append(response_hours)
+
+    return {
+        'sla_resolution_met_pct': (met_resolution_sla / total_sla_issues * 100) if total_sla_issues > 0 else 0,
+        'sla_resolution_violated_pct': (violated_resolution_sla / total_sla_issues * 100) if total_sla_issues > 0 else 0,
+        'avg_first_response_hours': sum(first_response_times) / len(first_response_times) if first_response_times else 0,
     }

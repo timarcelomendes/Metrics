@@ -41,17 +41,13 @@ if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
-    
     if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
         st.stop()
     else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
         st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
@@ -62,10 +58,8 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            logo_path, 
-            size="large")
-    except FileNotFoundError:
+        st.logo(logo_path, size="large")
+    except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
 
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
@@ -73,7 +67,7 @@ with st.sidebar:
     
     projects = st.session_state.get('projects', {}); project_names = list(projects.keys())
     last_project_key = find_user(st.session_state['email']).get('last_project_key')
-    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and projects else None
+    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and projects else 0
     
     selected_project_name = st.selectbox("1. Selecione o Projeto", options=project_names, index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
@@ -133,10 +127,11 @@ issues = st.session_state.scope_issues
 unit_param = st.session_state.unit_param
 trend_weeks = st.session_state.trend_weeks
 project_key = st.session_state.project_key
-estimation_config = (get_project_config(project_key) or {}).get('estimation_field', {})
+project_config = get_project_config(project_key) or {}
+estimation_config = project_config.get('estimation_field', {})
 scope_name_for_title = st.session_state.scope_name_for_title
 
-burnup_df = prepare_project_burnup_data(issues, unit_param, estimation_config)
+burnup_df = prepare_project_burnup_data(issues, unit_param, estimation_config, project_config)
 
 if burnup_df is None or burnup_df.empty:
     st.error(f"Não foi possível gerar a análise. Foram encontradas {len(issues)} issues, mas pode não haver dados suficientes (ex: issues concluídas) no escopo selecionado."); st.stop()
@@ -170,7 +165,6 @@ with tab1:
         if st.button("Gerar Resumo com IA", use_container_width=True):
             with st.spinner("Gauge AI está a analisar o seu forecast..."):
                 forecast_date_str = forecast_date.strftime('%d/%m/%Y') if forecast_date else "Incalculável"
-                
                 ai_summary = get_ai_forecast_analysis(
                     project_name=st.session_state.get('project_name', 'este projeto'),
                     scope_total=f"{total_scope:.0f} {unit_display}",
@@ -188,47 +182,54 @@ with tab2:
     st.subheader("Qual a vazão necessária para atingir uma data?")
     st.caption("Use esta ferramenta para simular cenários e entender a viabilidade de uma data de entrega.")
     
-    with st.container(border=True):
+    with st.form("planning_form"):
+        st.markdown("**1. Defina os Parâmetros da Simulação**")
         c1, c2 = st.columns(2)
-        target_date = c1.date_input("Data de Entrega Desejada", value=datetime.now() + timedelta(days=90))
-        team_size = c2.number_input("Tamanho da Equipa Atual", min_value=1, value=5)
-    
-    remaining_work = total_scope - total_completed
-    if target_date > datetime.now().date() and remaining_work > 0:
-        remaining_weeks = (target_date - datetime.now().date()).days / 7
-        required_throughput = remaining_work / remaining_weeks if remaining_weeks > 0 else float('inf')
-    else:
-        remaining_weeks = 0; required_throughput = 0
-    
-    projection_base = st.radio("Base para projeção da equipe:", ["Velocidade Média (Histórico Total)", f"Tendência ({trend_weeks} semanas)"], horizontal=True)
-    base_velocity = avg_velocity if projection_base == "Velocidade Média (Histórico Total)" else trend_velocity
-    productivity_per_person = base_velocity / team_size if team_size > 0 else 0
-    people_needed = required_throughput / productivity_per_person if productivity_per_person > 0 else float('inf')
+        
+        target_date = c1.date_input("Data de Entrega Desejada", value=None)
+        team_size = c2.number_input("Tamanho da Equipe Atual", min_value=1, value=None, placeholder="Nº de pessoas")
+        
+        projection_base = st.radio("Base para projeção da equipe:", ["Velocidade Média (Histórico Total)", f"Tendência ({trend_weeks} semanas)"], horizontal=True)
+        
+        submitted = st.form_submit_button("Simular Cenário", use_container_width=True, type="primary")
 
-    st.subheader("Análise do Cenário")
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("🏁 Trabalho Restante", f"{remaining_work:.1f} {unit_display}")
-    kpi2.metric("🗓️ Semanas Restantes", f"{remaining_weeks:.1f} semanas")
-    kpi3.metric(label="⚡ Vazão Necessária", value=f"{required_throughput:.1f} {unit_display}/sem", delta=f"{(required_throughput - trend_velocity):.1f} vs. tendência")
+    if submitted:
+        # Validação para garantir que os campos foram preenchidos
+        if not target_date or not team_size:
+            st.warning("Por favor, preencha a 'Data de Entrega Desejada' e o 'Tamanho da Equipe Atual' para simular.")
+        else:
+            remaining_work = total_scope - total_completed
+            if target_date > datetime.now().date() and remaining_work > 0:
+                remaining_weeks = (target_date - datetime.now().date()).days / 7
+                required_throughput = remaining_work / remaining_weeks if remaining_weeks > 0 else float('inf')
+                
+                base_velocity = avg_velocity if projection_base == "Velocidade Média (Histórico Total)" else trend_velocity
+                productivity_per_person = base_velocity / team_size if team_size > 0 else 0
+                people_needed = required_throughput / productivity_per_person if productivity_per_person > 0 else float('inf')
 
-    st.subheader("Análise da Equipa")
-    kpi_team1, kpi_team2 = st.columns(2)
-    kpi_team1.metric(f"Produtividade ({projection_base})", f"{productivity_per_person:.1f} {unit_display}/pessoa/semana")
-    kpi_team2.metric(label="👩‍💻 Pessoas Necessárias", value=f"{people_needed:.0f} pessoas", delta=f"{(people_needed - team_size):.0f} vs. equipa atual", delta_color="inverse" if people_needed > team_size else "normal")
-    
-    with st.expander("🤖 Análise de Viabilidade com IA"):
-        if st.button("Analisar Cenário com IA", use_container_width=True):
-            with st.spinner("A IA está a analisar o seu plano..."):
-                ai_planning_summary = get_ai_planning_analysis(
-                    project_name=st.session_state.get('project_name', 'este projeto'),
-                    remaining_work=f"{remaining_work:.0f} {unit_display}",
-                    remaining_weeks=remaining_weeks,
-                    required_throughput=required_throughput,
-                    trend_velocity=trend_velocity,
-                    people_needed=f"{np.ceil(people_needed):.0f}",
-                    current_team_size=f"{team_size}"
-                )
-                st.session_state.ai_planning_summary = ai_planning_summary
-            
-            if 'ai_planning_summary' in st.session_state:
-                st.markdown(st.session_state.ai_planning_summary)
+                st.divider()
+                st.subheader("2. Análise do Cenário")
+                kpi1, kpi2, kpi3 = st.columns(3)
+                kpi1.metric("🏁 Trabalho Restante", f"{remaining_work:.1f} {unit_display}")
+                kpi2.metric("🗓️ Semanas Restantes", f"{remaining_weeks:.1f} semanas")
+                kpi3.metric(label="⚡ Vazão Necessária", value=f"{required_throughput:.1f} {unit_display}/sem", delta=f"{(required_throughput - trend_velocity):.1f} vs. tendência")
+
+                st.subheader("3. Análise da Equipe")
+                kpi_team1, kpi_team2 = st.columns(2)
+                kpi_team1.metric(f"Produtividade ({projection_base})", f"{productivity_per_person:.1f} {unit_display}/pessoa/semana")
+                kpi_team2.metric(label="👩‍💻 Pessoas Necessárias", value=f"{np.ceil(people_needed):.0f} pessoas", delta=f"{(np.ceil(people_needed) - team_size):.0f} vs. equipe atual", delta_color="inverse" if np.ceil(people_needed) > team_size else "normal")
+                
+                with st.expander("🤖 Análise de Viabilidade com IA"):
+                    with st.spinner("A IA está a analisar o seu plano..."):
+                        ai_planning_summary = get_ai_planning_analysis(
+                            project_name=st.session_state.get('project_name', 'este projeto'),
+                            remaining_work=f"{remaining_work:.0f} {unit_display}",
+                            remaining_weeks=remaining_weeks,
+                            required_throughput=required_throughput,
+                            trend_velocity=trend_velocity,
+                            people_needed=f"{np.ceil(people_needed):.0f}",
+                            current_team_size=f"{team_size}"
+                        )
+                        st.markdown(ai_planning_summary)
+            else:
+                st.error("A data de entrega desejada deve ser no futuro ou ainda há trabalho restante.")

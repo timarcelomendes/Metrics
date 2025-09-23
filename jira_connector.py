@@ -352,3 +352,30 @@ def get_issue_as_dict(jira_client, issue_key):
     except Exception as e:
         print(f"Erro ao buscar ou processar a issue '{issue_key}': {e}")
         raise e
+
+@lru_cache(maxsize=1)
+def get_statuses(jira_client):
+    """Busca todos os status disponíveis na instância do Jira."""
+    try:
+        return jira_client.statuses()
+    except Exception as e:
+        print(f"Erro ao buscar todos os status: {e}")
+        return []
+
+@lru_cache(maxsize=1)
+def get_issue_types(jira_client):
+    """Busca todos os tipos de issue disponíveis na instância do Jira."""
+    try:
+        return jira_client.issue_types()
+    except Exception as e:
+        print(f"Erro ao buscar todos os tipos de issue: {e}")
+        return []
+
+@lru_cache(maxsize=1)
+def get_priorities(jira_client):
+    """Busca todas as prioridades disponíveis na instância do Jira."""
+    try:
+        return jira_client.priorities()
+    except Exception as e:
+        print(f"Erro ao buscar todas as prioridades: {e}")
+        return []

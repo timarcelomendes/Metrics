@@ -4,7 +4,7 @@ import streamlit as st
 from security import *
 from pathlib import Path
 import pandas as pd
-from security import *
+from security import get_global_configs, save_global_configs # <--- CORREÇÃO APLICADA AQUI
 
 st.set_page_config(page_title="Administração", page_icon="👑", layout="wide")
 st.header("👑 Painel de Administração", divider='rainbow')
@@ -35,7 +35,6 @@ if st.session_state['email'] not in ADMIN_EMAILS:
 
 # --- Se chegou até aqui, o utilizador é um admin. ---
 configs = get_global_configs()
-# Carrega as configurações globais
 global_configs = get_global_configs()
 
 # --- BARRA LATERAL ---
@@ -43,8 +42,8 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(logo_path, size="large")
-    except FileNotFoundError:
+        st.logo(str(logo_path), size="large")
+    except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
     
     if st.session_state.get("email"):
@@ -57,7 +56,7 @@ with st.sidebar:
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- Interface Principal com Abas ---
-tab1, tab2, tab3, tab4 = st.tabs(["👨‍💻Domínios Permitidos", "🙎Gerir Utilizadores", "📝 Gerir Playbooks", "💎 Gerir Competências"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["👨‍💻Domínios Permitidos", "🙎Gerir Utilizadores", "📝 Gerir Playbooks", "💎 Gerir Competências", "🎯 Metas de KPIs"])
 
 with tab1:
     st.subheader("Domínios com Permissão de Registro")
@@ -72,8 +71,10 @@ with tab1:
             if col2.button("Remover", key=f"del_{domain}", use_container_width=True):
                 allowed_domains.remove(domain)
                 configs['allowed_domains'] = allowed_domains
-                save_global_configs(configs); get_global_configs.clear()
-                st.session_state['global_configs'] = get_global_configs()
+                save_global_configs(configs)
+                # Adicionado para garantir que o cache (se houver) é limpo
+                if 'global_configs' in st.session_state:
+                    del st.session_state['global_configs']
                 st.rerun()
 
         with st.form("new_domain_form", clear_on_submit=True):
@@ -82,8 +83,9 @@ with tab1:
                 if new_domain and new_domain not in allowed_domains:
                     allowed_domains.append(new_domain)
                     configs['allowed_domains'] = allowed_domains
-                    save_global_configs(configs); get_global_configs.clear()
-                    st.session_state['global_configs'] = get_global_configs()
+                    save_global_configs(configs)
+                    if 'global_configs' in st.session_state:
+                        del st.session_state['global_configs']
                     st.rerun()
                 elif not new_domain:
                     st.warning("Por favor, insira um domínio.")
@@ -190,7 +192,7 @@ with tab4:
             hard_skills_df,
             num_rows="dynamic",
             use_container_width=True,
-            column_order=("Pilar", "Competência", "Descrição"), # Define a ordem das colunas
+            column_order=("Pilar", "Competência", "Descrição"),
             column_config={
                 "Pilar": st.column_config.TextColumn("Pilar Estratégico*", required=True),
                 "Competência": st.column_config.TextColumn("Competência*", required=True),
@@ -206,7 +208,7 @@ with tab4:
             soft_skills_df,
             num_rows="dynamic",
             use_container_width=True,
-            column_order=("Pilar", "Competência", "Descrição"), # Define a ordem das colunas
+            column_order=("Pilar", "Competência", "Descrição"),
             column_config={
                 "Pilar": st.column_config.TextColumn("Pilar Estratégico*", required=True),
                 "Competência": st.column_config.TextColumn("Competência*", required=True),
@@ -223,3 +225,23 @@ with tab4:
         
         save_global_configs(global_configs)
         st.success("Framework de competências salvo com sucesso!")
+
+with tab5:
+    st.subheader("Metas de KPIs Globais")
+    st.info("Estas metas são usadas em toda a aplicação para colorir indicadores e destacar performance.")
+
+    with st.form("kpi_targets_form"):
+        target_margin = st.number_input(
+            "Meta da Margem de Contribuição (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=global_configs.get('target_contribution_margin', 25.0),
+            format="%.1f",
+            help="A Margem de Contribuição no Resumo Executivo ficará verde se atingir ou superar este valor."
+        )
+
+        if st.form_submit_button("Salvar Metas", use_container_width=True):
+            global_configs['target_contribution_margin'] = target_margin
+            save_global_configs(global_configs)
+            st.success("Metas salvas com sucesso!")
+            st.rerun()
