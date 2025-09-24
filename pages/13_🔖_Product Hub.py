@@ -174,7 +174,6 @@ def load_data():
     Carrega todos os dados necessários para o Hub, forçando a releitura
     das configurações globais para garantir que os dados estejam sempre atualizados.
     """
-    # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
     # 1. Limpa o cache para garantir a leitura dos dados mais recentes do disco/DB.
     #    (Esta chamada depende de @st.cache_data na função get_global_configs em security.py)
     try:
@@ -191,7 +190,6 @@ def load_data():
     
     loaded_playbooks = global_configs.get('playbooks')
     st.session_state.playbooks = loaded_playbooks if loaded_playbooks else DEFAULT_PLAYBOOKS
-    # --- FIM DA CORREÇÃO DEFINITIVA ---
 
     # O resto da sua lógica de carregamento de dados do utilizador permanece igual.
     user_hub_data = get_user_product_hub_data(st.session_state['email'])
@@ -218,7 +216,9 @@ def load_data():
     sync_evaluations_with_framework()
 
 # A chamada a load_data() deve estar fora de qualquer verificação de 'hub_data_loaded'
-load_data()
+# e ser chamada após a verificação de login
+if 'email' in st.session_state:
+    load_data()
 
 # --- Interface Principal ---
 st.markdown("<h1 style='text-align: center; color: #262730;'>🚀 Gauge Product Hub</h1>", unsafe_allow_html=True)

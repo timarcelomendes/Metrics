@@ -104,49 +104,79 @@ with tab_perfil:
                             st.info("Um e-mail de notificação foi enviado.")
                         else:
                             st.error(f"A senha foi alterada, mas falhou o envio do e-mail de notificação: {message}")
-                            
+
 with tab_campos:
     st.subheader("Preferências de Campos para Análise")
     st.caption("Ative os campos que você deseja que apareçam como opções nas páginas de análise. As alterações são guardadas para o seu perfil.")
 
-    # --- ABAS INTERNAS PARA ORGANIZAÇÃO ---
-    tab_std, tab_custom = st.tabs(["🗂️ Campos Padrão", "✨ Campos Personalizados"])
+    # Define as variáveis num escopo mais alto, acessível ao botão "Salvar"
+    available_custom_fields = global_configs.get('custom_fields', [])
+    user_selected_custom = user_data.get('enabled_custom_fields', [])
+    id_to_name_map = {field['id']: field['name'] for field in available_custom_fields}
     
     toggles_std = {}
     toggles_custom = {}
 
+    # --- ABAS INTERNAS PARA ORGANIZAÇÃO ---
+    tab_std, tab_custom = st.tabs(["🗂️ Campos Padrão", "✨ Campos Personalizados"])
+    
     with tab_std:
         available_standard_fields = global_configs.get('available_standard_fields', {})
         user_selected_standard = user_data.get('standard_fields', [])
         
         if not available_standard_fields:
             st.info("Nenhum campo padrão foi configurado pelo administrador.")
-            st.page_link("pages/7_⚙️_Configurações.py", label="Configurar Campos Globais", icon="⚙️")
         else:
+            search_term_std = st.text_input("Filtrar campos padrão:", placeholder="Digite para pesquisar...", key="search_std")
+            
+            filtered_standard_fields = {
+                name: details for name, details in available_standard_fields.items()
+                if search_term_std.lower() in name.lower()
+            }
+            
             st.markdown("**Ative os campos padrão que deseja usar:**")
-            for name in sorted(available_standard_fields.keys()):
+            for name in sorted(filtered_standard_fields.keys()):
                 toggles_std[name] = st.toggle(name, value=(name in user_selected_standard), key=f"toggle_std_{name}")
 
     with tab_custom:
-        available_custom_fields = global_configs.get('custom_fields', [])
-        user_selected_custom = user_data.get('enabled_custom_fields', [])
-
         if not available_custom_fields:
             st.info("Nenhum campo personalizado foi configurado pelo administrador.")
         else:
+            search_term_custom = st.text_input("Filtrar campos personalizados:", placeholder="Digite para pesquisar...", key="search_custom")
+
+            filtered_custom_fields = [
+                field for field in available_custom_fields
+                if search_term_custom.lower() in field.get('name', '').lower()
+            ]
+
             st.markdown("**Ative os campos personalizados que deseja usar:**")
-            for field in sorted(available_custom_fields, key=lambda x: x['name']):
+            
+            for field in sorted(filtered_custom_fields, key=lambda x: x['name']):
+                field_id = field['id']
                 name = field['name']
-                toggles_custom[name] = st.toggle(name, value=(name in user_selected_custom), key=f"toggle_custom_{name}")
+                toggles_custom[field_id] = st.toggle(
+                    name, 
+                    value=(name in user_selected_custom), 
+                    key=f"toggle_custom_{field_id}"
+                )
     
     st.divider()
-    if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary"):
+    if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary", key="save_field_prefs_button"):
+        # Lógica para campos padrão
         new_selection_std = [name for name, is_on in toggles_std.items() if is_on]
-        save_user_standard_fields(email, new_selection_std)
+        unchanged_std = [name for name in user_selected_standard if name not in toggles_std]
+        save_user_standard_fields(email, new_selection_std + unchanged_std)
         
-        if toggles_custom: # Só tenta salvar se a seção foi renderizada
-            new_selection_custom = [name for name, is_on in toggles_custom.items() if is_on]
-            save_user_custom_fields(email, new_selection_custom)
+        # Lógica para campos personalizados
+        if toggles_custom:
+            new_selection_custom_ids = [field_id for field_id, is_on in toggles_custom.items() if is_on]
+            new_selection_custom_names = [id_to_name_map[fid] for fid in new_selection_custom_ids]
+            
+            unchanged_custom_names = [
+                name for name in user_selected_custom 
+                if name not in [id_to_name_map.get(fid) for fid in toggles_custom.keys()]
+            ]
+            save_user_custom_fields(email, new_selection_custom_names + unchanged_custom_names)
 
         st.success("Suas preferências de campos foram guardadas!")
         st.rerun()

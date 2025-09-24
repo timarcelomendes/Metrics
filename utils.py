@@ -24,7 +24,9 @@ from jira_connector import *
 from security import *
 from metrics_calculator import *
 import fitz
+import sendgrid 
 import io
+import base64
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -1555,3 +1557,11 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
         return json.loads(cleaned_response)
     except Exception as e:
         return {"error": f"Ocorreu um erro ao analisar a issue do Jira: {e}"}
+    
+def load_local_css(file_path):
+    """Lê um arquivo CSS e o injeta na aplicação Streamlit."""
+    try:
+        with open(file_path) as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.error(f"Arquivo CSS não encontrado: {file_path}")

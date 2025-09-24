@@ -1,0 +1,14 @@
+/* A propriedade mais importante:
+    Isto força o container que envolve as colunas a usar flexbox
+    e a esticar todos os seus filhos (as colunas) para a mesma altura.
+*/
+div[data-testid="stHorizontalBlock"] {
+    align-items: stretch;
+}
+
+/* Garante que o container com a borda, dentro de cada coluna,
+    ocupe toda a altura que a sua coluna agora tem.
+*/
+div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
+    height: 100%;
+}

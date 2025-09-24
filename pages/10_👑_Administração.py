@@ -4,7 +4,6 @@ import streamlit as st
 from security import *
 from pathlib import Path
 import pandas as pd
-from security import save_global_smtp_configs, get_global_smtp_configs, validate_smtp_connection, encrypt_token
 
 st.set_page_config(page_title="Administração", page_icon="👑", layout="wide")
 st.header("👑 Painel de Administração", divider='rainbow')
@@ -27,6 +26,7 @@ if st.session_state['email'] not in ADMIN_EMAILS:
     st.stop()
 
 # --- Se chegou até aqui, o utilizador é um admin. ---
+# Carrega as configurações globais numa única variável para consistência
 configs = get_global_configs()
 
 # --- BARRA LATERAL ---
@@ -69,7 +69,6 @@ with tab1:
                 allowed_domains.remove(domain)
                 configs['allowed_domains'] = allowed_domains
                 save_global_configs(configs)
-                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
 
         with st.form("new_domain_form", clear_on_submit=True):
@@ -79,13 +78,10 @@ with tab1:
                     allowed_domains.append(new_domain)
                     configs['allowed_domains'] = allowed_domains
                     save_global_configs(configs)
-                    get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                     st.rerun()
 
 with tab2:
     st.subheader("Utilizadores Registados no Sistema")
-
-    # Bloco para exibir a senha temporária após o reset
     if 'temp_password_info' in st.session_state:
         user_email = st.session_state.temp_password_info['email']
         temp_pass = st.session_state.temp_password_info['password']
@@ -107,13 +103,10 @@ with tab2:
                 col1.text(user['email'])
                 
                 with col2:
-                    # Lógica do botão para resetar e mostrar a senha
                     if st.button("Resetar Senha", key=f"reset_pass_{user['_id']}", use_container_width=True):
                         temp_password = generate_temporary_password()
                         hashed_password = get_password_hash(temp_password)
                         update_user_password(user['email'], hashed_password)
-                        
-                        # Guarda a senha na memória da sessão para ser exibida no topo
                         st.session_state.temp_password_info = {'email': user['email'], 'password': temp_password}
                         st.rerun()
 
@@ -133,9 +126,8 @@ with tab3:
             new_theme_content = st.text_area("Conteúdo (suporta Markdown)*", height=300)
             if st.form_submit_button("Adicionar Tema", type="primary"):
                 if new_theme_name and new_theme_content:
-                    configs['playbooks'][new_theme_name] = new_theme_content
+                    configs.setdefault('playbooks', {})[new_theme_name] = new_theme_content
                     save_global_configs(configs)
-                    get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                     st.rerun()
     
     st.divider()
@@ -148,35 +140,50 @@ with tab3:
             if c1.button("Salvar Alterações", use_container_width=True, key=f"save_{theme_to_edit}"):
                 configs['playbooks'][theme_to_edit] = edited_content
                 save_global_configs(configs)
-                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
             if c2.button("❌ Remover Tema", use_container_width=True, type="secondary", key=f"del_{theme_to_edit}"):
                 del configs['playbooks'][theme_to_edit]
                 save_global_configs(configs)
-                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
 
 with tab4:
     st.header("Framework de Competências")
+    st.info("Defina os pilares, competências e descrições que serão usados na plataforma.")
+
+    # Garante que a estrutura base exista em 'configs'
+    if 'competency_framework' not in configs:
+        configs['competency_framework'] = {'hard_skills': [], 'soft_skills': []}
+
     framework_data = configs.get('competency_framework', {})
     
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("🛠️ Hard Skills")
-        edited_hard_skills = st.data_editor(pd.DataFrame(framework_data.get('hard_skills', [])), num_rows="dynamic")
+        edited_hard_skills = st.data_editor(
+            pd.DataFrame(framework_data.get('hard_skills', [])),
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={"Pilar": "Pilar*", "Competência": "Competência*", "Descrição": "Descrição"}
+        )
     with col2:
         st.subheader("🧠 Soft Skills")
-        edited_soft_skills = st.data_editor(pd.DataFrame(framework_data.get('soft_skills', [])), num_rows="dynamic")
+        edited_soft_skills = st.data_editor(
+            pd.DataFrame(framework_data.get('soft_skills', [])),
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={"Pilar": "Pilar*", "Competência": "Competência*", "Descrição": "Descrição"}
+        )
         
     if st.button("Salvar Framework de Competências", type="primary", use_container_width=True):
-        configs['competency_framework'] = {
-            'hard_skills': edited_hard_skills.to_dict('records'),
-            'soft_skills': edited_soft_skills.to_dict('records')
-        }
+        # --- INÍCIO DA CORREÇÃO ---
+        # Modifica e salva a variável 'configs' de forma consistente
+        configs['competency_framework']['hard_skills'] = edited_hard_skills.to_dict('records')
+        configs['competency_framework']['soft_skills'] = edited_soft_skills.to_dict('records')
+        
         save_global_configs(configs)
-        get_global_configs.clear() # <<-- CORREÇÃO APLICADA
-        st.success("Framework salvo!")
+        st.success("Framework de competências salvo com sucesso!")
         st.rerun()
+        # --- FIM DA CORREÇÃO ---
 
 with tab5:
     st.subheader("Metas de KPIs Globais")
@@ -185,8 +192,6 @@ with tab5:
         if st.form_submit_button("Salvar Metas", use_container_width=True):
             configs['target_contribution_margin'] = target_margin
             save_global_configs(configs)
-            get_global_configs.clear() # <<-- CORREÇÃO APLICADA
-            st.success("Metas salvas!")
             st.rerun()
 
 with tab6:

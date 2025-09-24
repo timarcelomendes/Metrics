@@ -379,3 +379,16 @@ def get_priorities(jira_client):
     except Exception as e:
         print(f"Erro ao buscar todas as prioridades: {e}")
         return []
+    
+def get_all_jira_fields(client):
+    """
+    Busca todos os campos (padrão e personalizados) disponíveis na instância do Jira.
+    Retorna uma lista de dicionários, cada um representando um campo.
+    """
+    try:
+        fields = client.fields()
+        # O retorno já é uma lista de dicionários com 'id', 'name', e 'custom'
+        return fields
+    except Exception as e:
+        print(f"Erro ao buscar os campos do Jira: {e}")
+        return []
