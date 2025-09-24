@@ -5,8 +5,8 @@ import os
 from security import *
 from pathlib import Path
 from jira_connector import *
-from utils import send_notification_email
-from config import load_app_config 
+from utils import send_email_with_attachment
+from security import get_global_smtp_configs
 
 st.set_page_config(page_title="Gauge Metrics - Login", 
                    page_icon="🔑", 
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.title (":blue[Gauge Products Hub] :signal_strength:")
 
-# --- LÓGICA DA PÁGINA (sem alterações) ---
+# --- LÓGICA DA PÁGINA ---
 if 'email' in st.session_state:
     st.header(f"Bem-vindo de volta!", divider='rainbow')
     st.markdown(f"Você já está logado como **{st.session_state['email']}**.")
@@ -77,7 +77,6 @@ else:
         )
 
     with col2:
-        # --- USA UM CONTAINER NATIVO PARA O CARTÃO ---
         with st.container(border=True):
             col1, col2, col3 = st.tabs(["**Entrar**", "**Registrar-se**", "**Recuperar Senha**"])
 
@@ -94,7 +93,10 @@ else:
                             st.session_state['email'] = user['email']
                             st.session_state['user_data'] = user
                             
-                            # --- LÓGICA DE AUTO-ATIVAÇÃO ---
+                            # Inicia o temporizador de inatividade da sessão
+                            st.session_state['last_activity_time'] = datetime.now()
+                            
+                            # --- LÓGICA DE AUTO-ATIVAÇÃO DA CONEXÃO JIRA ---
                             last_conn_id = user.get('last_active_connection_id')
                             if last_conn_id:
                                 with st.spinner("A reconectar à sua última sessão Jira..."):
@@ -107,14 +109,11 @@ else:
                                             st.session_state.jira_client = client
                                             st.session_state.projects = get_projects(client)
                             
-                            st.session_state['global_configs'] = get_global_configs()
-                            if user.get('last_project_key'):
-                                st.session_state['last_project_key'] = user.get('last_project_key')
-                            
-                            # Lê o config.toml e guarda na memória da sessão
-                            st.session_state['global_configs'] = get_app_configs()
+                            # Carrega as configurações globais e do utilizador na sessão
                             st.session_state['global_configs'] = get_global_configs()
                             st.session_state['smtp_configs'] = get_smtp_configs()
+                            if user.get('last_project_key'):
+                                st.session_state['last_project_key'] = user.get('last_project_key')
 
                             st.success("Login bem-sucedido! A carregar...")
                             st.switch_page("pages/2_🏠_Meu_Dashboard.py")
@@ -155,38 +154,39 @@ else:
                             <p>Atenciosamente,<br>A Equipe Gauge Metrics</p>
                         </body></html>
                         """
-                        send_notification_email(new_email, welcome_subject, welcome_html)
-                                        # --- NOVA MENSAGEM INFORMATIVA ---
+                        send_email_with_attachment(new_email, welcome_subject, welcome_html)
 
+with col3:
+    st.markdown("##### Recuperação de Senha")
+    st.info("Por favor, insira o seu e-mail. Se estiver registrado, enviaremos uma senha temporária para si.")
+    with st.form("recover_form"):
+        recover_email = st.text_input("Email", placeholder="email@exemplo.com")
+        if st.form_submit_button("Enviar E-mail de Recuperação", use_container_width=True, type="primary"):
+            if recover_email:
+                user = find_user(recover_email)
+                if user:
+                    with st.spinner("A processar o seu pedido..."):
+                        # Usa a nova função para carregar as configs globais
+                        email_configs = get_global_smtp_configs()
 
-            with col3:
-                st.markdown("##### Recuperação de Senha")
-                st.info("Por favor, insira o seu e-mail. Se estiver registrado, enviaremos uma senha temporária para si.")
-                with st.form("recover_form"):
-                    recover_email = st.text_input("Email", placeholder="email@exemplo.com")
-                    if st.form_submit_button("Enviar E-mail de Recuperação", use_container_width=True, type="primary"):
-                        if recover_email:
-                            user = find_user(recover_email)
-                            if user:
-                                with st.spinner("A processar o seu pedido..."):
-                                    # Gera e guarda a nova senha, e obtém a versão em texto
-                                    temp_password = reset_user_password_with_temporary(recover_email)
-                                    
-                                    # Envia o e-mail com a senha temporária
-                                    subject = "Recuperação de Senha - Gauge Metrics"
-                                    body_html = f"""
-                                    <html><body>
-                                        <h2>Recuperação de Senha</h2>
-                                        <p>Olá,</p>
-                                        <p>Você solicitou a recuperação da sua senha. Use a senha temporária abaixo para fazer login:</p>
-                                        <p style="font-size: 1.2em; font-weight: bold; color: #1c4e80;">{temp_password}</p>
-                                        <p><b>Importante:</b> Após o login, vá à sua página 'Minha Conta' e altere esta senha para uma da sua preferência.</p>
-                                        <p>Se não foi você que fez esta solicitação, por favor, ignore este e-mail.</p>
-                                    </body></html>
-                                    """
-                                    send_notification_email(recover_email, subject, body_html)
-                            
-                            # Mostra sempre uma mensagem de sucesso para não confirmar se um e-mail existe ou não
-                            st.success("Pedido de recuperação enviado! Se o seu e-mail estiver na nossa base de dados, você receberá as instruções em breve.")
+                        if not email_configs:
+                            st.error("Erro crítico: As configurações de envio de e-mail não foram encontradas. Por favor, contacte um administrador.")
                         else:
-                            st.warning("Por favor, insira um e-mail.")
+                            st.session_state['smtp_configs'] = email_configs
+                            # O resto da lógica permanece igual...
+                            temp_password = generate_temporary_password()
+                            subject = "Recuperação de Senha - Gauge Metrics"
+                            body_html = f"<html><body><p>Sua senha temporária é: <b>{temp_password}</b></p></body></html>"
+
+                            success, message = send_email_with_attachment(recover_email, subject, body_html)
+
+                            if success:
+                                hashed_password = get_password_hash(temp_password)
+                                update_user_password(recover_email, hashed_password)
+                                st.success("E-mail de recuperação enviado com sucesso!")
+                            else:
+                                st.error(f"Falha ao enviar o e-mail: {message}. A sua senha não foi alterada.")
+                else:
+                    st.success("Se o seu e-mail estiver na nossa base, receberá as instruções.")
+            else:
+                st.warning("Por favor, insira um e-mail.")

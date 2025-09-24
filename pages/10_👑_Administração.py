@@ -1,10 +1,10 @@
-# pages/9_👑_Administração.py
+# pages/10_👑_Administração.py
 
 import streamlit as st
 from security import *
 from pathlib import Path
 import pandas as pd
-from security import get_global_configs, save_global_configs # <--- CORREÇÃO APLICADA AQUI
+from security import save_global_smtp_configs, get_global_smtp_configs, validate_smtp_connection, encrypt_token
 
 st.set_page_config(page_title="Administração", page_icon="👑", layout="wide")
 st.header("👑 Painel de Administração", divider='rainbow')
@@ -24,18 +24,10 @@ except Exception as e:
 
 if st.session_state['email'] not in ADMIN_EMAILS:
     st.error("🚫 Acesso Negado. Esta página é reservada para administradores.");
-    
-    # --- PAINEL DE DIAGNÓSTICO ---
-    with st.expander("🔍 Ajuda de Diagnóstico"):
-        st.write("O seu e-mail de login não foi encontrado na lista de administradores.")
-        st.write(f"**Seu E-mail:** `{st.session_state['email']}`")
-        st.write(f"**Lista de Admins que a Aplicação Conseguiu Ler:** `{ADMIN_EMAILS}`")
-        st.info("Se a lista acima estiver vazia ou incorreta, verifique se o seu ficheiro `.streamlit/secrets.toml` está correto e **reinicie completamente o servidor do Streamlit** (`Ctrl+C` no terminal e `streamlit run ...` de novo).")
     st.stop()
 
 # --- Se chegou até aqui, o utilizador é um admin. ---
 configs = get_global_configs()
-global_configs = get_global_configs()
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -56,12 +48,17 @@ with st.sidebar:
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- Interface Principal com Abas ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["👨‍💻Domínios Permitidos", "🙎Gerir Utilizadores", "📝 Gerir Playbooks", "💎 Gerir Competências", "🎯 Metas de KPIs"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🌐 Domínios", 
+    "👥 Utilizadores", 
+    "📖 Playbooks", 
+    "💎 Competências", 
+    "🎯 Metas", 
+    "📧 Configurar E-mail"
+])
 
 with tab1:
     st.subheader("Domínios com Permissão de Registro")
-    st.caption("Apenas utilizadores com emails destes domínios poderão criar uma conta na aplicação.")
-    
     with st.container(border=True):
         allowed_domains = configs.get('allowed_domains', [])
         
@@ -72,9 +69,7 @@ with tab1:
                 allowed_domains.remove(domain)
                 configs['allowed_domains'] = allowed_domains
                 save_global_configs(configs)
-                # Adicionado para garantir que o cache (se houver) é limpo
-                if 'global_configs' in st.session_state:
-                    del st.session_state['global_configs']
+                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
 
         with st.form("new_domain_form", clear_on_submit=True):
@@ -84,17 +79,13 @@ with tab1:
                     allowed_domains.append(new_domain)
                     configs['allowed_domains'] = allowed_domains
                     save_global_configs(configs)
-                    if 'global_configs' in st.session_state:
-                        del st.session_state['global_configs']
+                    get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                     st.rerun()
-                elif not new_domain:
-                    st.warning("Por favor, insira um domínio.")
-                else:
-                    st.warning(f"O domínio '{new_domain}' já existe na lista.")
 
 with tab2:
     st.subheader("Utilizadores Registados no Sistema")
 
+    # Bloco para exibir a senha temporária após o reset
     if 'temp_password_info' in st.session_state:
         user_email = st.session_state.temp_password_info['email']
         temp_pass = st.session_state.temp_password_info['password']
@@ -116,11 +107,13 @@ with tab2:
                 col1.text(user['email'])
                 
                 with col2:
+                    # Lógica do botão para resetar e mostrar a senha
                     if st.button("Resetar Senha", key=f"reset_pass_{user['_id']}", use_container_width=True):
                         temp_password = generate_temporary_password()
                         hashed_password = get_password_hash(temp_password)
                         update_user_password(user['email'], hashed_password)
                         
+                        # Guarda a senha na memória da sessão para ser exibida no topo
                         st.session_state.temp_password_info = {'email': user['email'], 'password': temp_password}
                         st.rerun()
 
@@ -132,8 +125,6 @@ with tab2:
 
 with tab3:
     st.header("Gestão de Conteúdo dos Playbooks")
-    st.info("Adicione, edite ou remova os temas do Playbook. As alterações serão visíveis para todos os utilizadores.")
-    
     playbooks = configs.get('playbooks', {})
 
     with st.expander("➕ Adicionar Novo Tema de Playbook"):
@@ -144,104 +135,105 @@ with tab3:
                 if new_theme_name and new_theme_content:
                     configs['playbooks'][new_theme_name] = new_theme_content
                     save_global_configs(configs)
+                    get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                     st.rerun()
-
+    
     st.divider()
     st.subheader("Editar ou Remover Tema Existente")
-    
-    if not playbooks:
-        st.warning("Nenhum playbook encontrado. Adicione o primeiro tema acima.")
-    else:
+    if playbooks:
         theme_to_edit = st.selectbox("Selecione um tema para gerir:", options=list(playbooks.keys()))
-        
         if theme_to_edit:
-            edited_content = st.text_area(
-                f"Conteúdo do tema '{theme_to_edit}':",
-                value=playbooks.get(theme_to_edit, ""),
-                height=400,
-                key=f"editor_{theme_to_edit}"
-            )
-            
+            edited_content = st.text_area("Conteúdo:", value=playbooks.get(theme_to_edit, ""), height=400)
             c1, c2 = st.columns(2)
-            if c1.button("Salvar Alterações", use_container_width=True):
+            if c1.button("Salvar Alterações", use_container_width=True, key=f"save_{theme_to_edit}"):
                 configs['playbooks'][theme_to_edit] = edited_content
                 save_global_configs(configs)
+                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
-            
-            if c2.button("❌ Remover Tema", use_container_width=True, type="secondary", disabled=(len(playbooks) <= 1)):
+            if c2.button("❌ Remover Tema", use_container_width=True, type="secondary", key=f"del_{theme_to_edit}"):
                 del configs['playbooks'][theme_to_edit]
                 save_global_configs(configs)
+                get_global_configs.clear() # <<-- CORREÇÃO APLICADA
                 st.rerun()
 
 with tab4:
     st.header("Framework de Competências")
-    st.info("Defina os pilares, competências e descrições que serão usados na plataforma.")
-
-    if 'competency_framework' not in global_configs:
-        global_configs['competency_framework'] = {
-            'hard_skills': [{"Pilar": "Desenvolvimento", "Competência": "Exemplo Técnico", "Descrição": "Descreva o que se espera."}],
-            'soft_skills': [{"Pilar": "Comunicação", "Competência": "Exemplo Comportamental", "Descrição": "Descreva o que se espera."}]
-        }
-
+    framework_data = configs.get('competency_framework', {})
+    
     col1, col2 = st.columns(2)
-
     with col1:
         st.subheader("🛠️ Hard Skills")
-        hard_skills_df = pd.DataFrame(global_configs['competency_framework'].get('hard_skills', []))
-        edited_hard_skills = st.data_editor(
-            hard_skills_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_order=("Pilar", "Competência", "Descrição"),
-            column_config={
-                "Pilar": st.column_config.TextColumn("Pilar Estratégico*", required=True),
-                "Competência": st.column_config.TextColumn("Competência*", required=True),
-                "Descrição": st.column_config.TextColumn("Descrição", width="large")
-            },
-            key="hard_skills_editor"
-        )
-
+        edited_hard_skills = st.data_editor(pd.DataFrame(framework_data.get('hard_skills', [])), num_rows="dynamic")
     with col2:
         st.subheader("🧠 Soft Skills")
-        soft_skills_df = pd.DataFrame(global_configs['competency_framework'].get('soft_skills', []))
-        edited_soft_skills = st.data_editor(
-            soft_skills_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_order=("Pilar", "Competência", "Descrição"),
-            column_config={
-                "Pilar": st.column_config.TextColumn("Pilar Estratégico*", required=True),
-                "Competência": st.column_config.TextColumn("Competência*", required=True),
-                "Descrição": st.column_config.TextColumn("Descrição", width="large")
-            },
-            key="soft_skills_editor"
-        )
+        edited_soft_skills = st.data_editor(pd.DataFrame(framework_data.get('soft_skills', [])), num_rows="dynamic")
         
-    st.divider()
-
     if st.button("Salvar Framework de Competências", type="primary", use_container_width=True):
-        global_configs['competency_framework']['hard_skills'] = edited_hard_skills.to_dict('records')
-        global_configs['competency_framework']['soft_skills'] = edited_soft_skills.to_dict('records')
-        
-        save_global_configs(global_configs)
-        st.success("Framework de competências salvo com sucesso!")
+        configs['competency_framework'] = {
+            'hard_skills': edited_hard_skills.to_dict('records'),
+            'soft_skills': edited_soft_skills.to_dict('records')
+        }
+        save_global_configs(configs)
+        get_global_configs.clear() # <<-- CORREÇÃO APLICADA
+        st.success("Framework salvo!")
+        st.rerun()
 
 with tab5:
     st.subheader("Metas de KPIs Globais")
-    st.info("Estas metas são usadas em toda a aplicação para colorir indicadores e destacar performance.")
-
     with st.form("kpi_targets_form"):
-        target_margin = st.number_input(
-            "Meta da Margem de Contribuição (%)",
-            min_value=0.0,
-            max_value=100.0,
-            value=global_configs.get('target_contribution_margin', 25.0),
-            format="%.1f",
-            help="A Margem de Contribuição no Resumo Executivo ficará verde se atingir ou superar este valor."
-        )
-
+        target_margin = st.number_input("Meta da Margem de Contribuição (%)", value=configs.get('target_contribution_margin', 25.0))
         if st.form_submit_button("Salvar Metas", use_container_width=True):
-            global_configs['target_contribution_margin'] = target_margin
-            save_global_configs(global_configs)
-            st.success("Metas salvas com sucesso!")
+            configs['target_contribution_margin'] = target_margin
+            save_global_configs(configs)
+            get_global_configs.clear() # <<-- CORREÇÃO APLICADA
+            st.success("Metas salvas!")
             st.rerun()
+
+with tab6:
+    st.subheader("Configuração Global de Envio de E-mail")
+    st.info("Estas credenciais serão usadas por toda a aplicação para enviar e-mails (ex: recuperação de senha).")
+
+    current_smtp_configs = get_global_smtp_configs() or {}
+    current_provider = current_smtp_configs.get('provider', 'SendGrid')
+
+    provider_options = ["SendGrid", "Gmail (SMTP)"]
+    provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
+    email_provider = st.radio(
+        "Selecione o provedor de e-mail do sistema:",
+        provider_options,
+        horizontal=True,
+        index=provider_index
+    )
+
+    with st.form("global_smtp_config_form"):
+        from_email = ""
+        credential = ""
+
+        if email_provider == 'SendGrid':
+            if current_smtp_configs.get('api_key_encrypted'):
+                st.success("Uma chave de API do SendGrid já está configurada.", icon="✅")
+
+            from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', ''))
+            credential = st.text_input("SendGrid API Key", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
+
+        # Adicione aqui a lógica para o Gmail (SMTP) se necessário
+
+        if st.form_submit_button("Validar e Salvar Credenciais Globais", use_container_width=True, type="primary"):
+            if from_email and credential:
+                with st.spinner("A validar as suas credenciais..."):
+                    is_valid, message = validate_smtp_connection(email_provider, from_email, credential)
+
+                if is_valid:
+                    encrypted_credential = encrypt_token(credential)
+                    configs_to_save = {
+                        'provider': 'SendGrid', 
+                        'from_email': from_email, 
+                        'api_key_encrypted': encrypted_credential
+                    }
+                    save_global_smtp_configs(configs_to_save)
+                    st.success(message + " As credenciais globais foram salvas com sucesso!")
+                    st.rerun()
+                else:
+                    st.error(message)
+            else:
+                st.error("Por favor, preencha todos os campos para validar e salvar.")

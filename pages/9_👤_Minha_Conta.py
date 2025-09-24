@@ -4,7 +4,7 @@ import streamlit as st
 import os
 from pathlib import Path
 from security import *
-from utils import send_notification_email
+from utils import send_email_with_attachment, validate_smtp_connection
 
 st.set_page_config(page_title="Minha Conta", page_icon="👤", layout="wide")
 
@@ -69,7 +69,7 @@ with tab_perfil:
     with col2:
         with st.container(border=True):
             st.markdown("**Alterar Senha**")
-            with st.form("change_password_form"):
+            with st.form("change_password_form", clear_on_submit=True):
                 current_password = st.text_input("Senha Atual", type="password")
                 new_password = st.text_input("Nova Senha", type="password")
                 confirm_password = st.text_input("Confirmar Nova Senha", type="password")
@@ -97,7 +97,14 @@ with tab_perfil:
                             <p>Atenciosamente,<br>A Equipe Gauge Metrics</p>
                         </body></html>
                         """
-                        send_notification_email(email, subject, body_html)
+                        success, message = send_email_with_attachment(to_address=email, subject=subject, body=body_html)
+                        
+                        # --- MENSAGEM SIMPLIFICADA AQUI ---
+                        if success:
+                            st.info("Um e-mail de notificação foi enviado.")
+                        else:
+                            st.error(f"A senha foi alterada, mas falhou o envio do e-mail de notificação: {message}")
+                            
 with tab_campos:
     st.subheader("Preferências de Campos para Análise")
     st.caption("Ative os campos que você deseja que apareçam como opções nas páginas de análise. As alterações são guardadas para o seu perfil.")
@@ -231,39 +238,3 @@ with tab_tokens:
                 save_user_figma_token(email, figma_token)
                 st.success("Token do Figma guardado com sucesso!")
                 st.rerun()
-
-    # --- Seção de E-mail ---
-    with st.container(border=True):
-        st.markdown("**Configuração de Envio de E-mail**")
-        current_smtp_configs = get_smtp_configs() or {}
-        current_provider = current_smtp_configs.get('provider', 'SendGrid')
-
-        provider_options = ["SendGrid", "Gmail (SMTP)"]
-        provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
-        email_provider = st.radio(
-            "Selecione o seu provedor:",
-            provider_options,
-            horizontal=True,
-            index=provider_index
-        )
-        
-        with st.form("smtp_config_form"):
-            if email_provider == 'Gmail (SMTP)':
-                from_email = st.text_input("E-mail de Origem (Gmail)", value=current_smtp_configs.get('from_email', '') if current_provider == 'Gmail (SMTP)' else '')
-                app_password = st.text_input("Senha de Aplicação (App Password)", value=current_smtp_configs.get('app_password', '') if current_provider == 'Gmail (SMTP)' else '', type="password")
-                smtp_configs_to_save = {'provider': 'Gmail (SMTP)', 'from_email': from_email, 'app_password': app_password}
-            
-            elif email_provider == 'SendGrid':
-                from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', '') if current_provider == 'SendGrid' else '')
-                sendgrid_api_key = st.text_input("SendGrid API Key", value=current_smtp_configs.get('api_key', '') if current_provider == 'SendGrid' else '', type="password")
-                smtp_configs_to_save = {'provider': 'SendGrid', 'from_email': from_email, 'api_key': sendgrid_api_key}
-            
-            if st.form_submit_button("Salvar Credenciais de E-mail", use_container_width=True, type="primary"):
-                if from_email:
-                    save_smtp_configs(smtp_configs_to_save)
-                    st.success("Configurações de e-mail salvas com sucesso!")
-                    # --- CORREÇÃO AQUI: ATUALIZA A MEMÓRIA DA SESSÃO ---
-                    st.session_state['smtp_configs'] = get_smtp_configs()
-                    st.rerun()
-                else:
-                    st.error("Por favor, preencha o e-mail de origem.")

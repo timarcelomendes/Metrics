@@ -14,25 +14,6 @@ from pathlib import Path
 
 st.set_page_config(page_title="Forecast & Planeamento", page_icon="📈", layout="wide")
 
-# --- CSS para um design mais "clean" ---
-st.markdown("""
-<style>
-[data-testid="stMetricLabel"] {
-    font-size: 0.95em !important;
-}
-[data-testid="stMetricValue"] {
-    font-size: 1.75em !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# --- Funções de Callback ---
-def on_project_change():
-    """Limpa o estado relevante ao trocar de projeto."""
-    keys_to_clear = ['view_to_show', 'burnup_df', 'burnup_figure', 'forecast_date', 'trend_velocity', 'avg_velocity', 'unit_display', 'scope_name_for_title']
-    for key in keys_to_clear:
-        if key in st.session_state: st.session_state.pop(key, None)
-
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 st.header("📈 Forecast & Planeamento de Entregas", divider='rainbow')
 
@@ -52,7 +33,26 @@ if 'jira_client' not in st.session_state:
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
         st.stop()
-        
+
+# --- CSS para um design mais "clean" ---
+st.markdown("""
+<style>
+[data-testid="stMetricLabel"] {
+    font-size: 0.95em !important;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.75em !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Funções de Callback ---
+def on_project_change():
+    """Limpa o estado relevante ao trocar de projeto."""
+    keys_to_clear = ['view_to_show', 'burnup_df', 'burnup_figure', 'forecast_date', 'trend_velocity', 'avg_velocity', 'unit_display', 'scope_name_for_title']
+    for key in keys_to_clear:
+        if key in st.session_state: st.session_state.pop(key, None)
+
 # --- BARRA LATERAL (PADRÃO RESTAURADO) ---
 with st.sidebar:
     project_root = Path(__file__).parent.parent

@@ -16,12 +16,6 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Personalizar Gráficos", page_icon="🏗️", layout="wide")
 
-# --- CSS e Funções Auxiliares ---
-st.markdown("""<style> 
-    button[data-testid="stButton"][kind="primary"] span svg { fill: white; } 
-    [data-testid="stHorizontalBlock"] { align-items: flex-end; }
-</style>""", unsafe_allow_html=True)
-
 def on_project_change():
     """Limpa o estado relevante ao trocar de projeto."""
     keys_to_clear = ['dynamic_df', 'chart_to_edit', 'creator_filters', 'chart_config_ia']
@@ -54,6 +48,12 @@ if 'jira_client' not in st.session_state:
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
         st.stop()
+
+# --- CSS e Funções Auxiliares ---
+st.markdown("""<style> 
+    button[data-testid="stButton"][kind="primary"] span svg { fill: white; } 
+    [data-testid="stHorizontalBlock"] { align-items: flex-end; }
+</style>""", unsafe_allow_html=True)
         
 # --- BARRA LATERAL ---
 with st.sidebar:

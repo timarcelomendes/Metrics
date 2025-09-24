@@ -15,6 +15,9 @@ import os
 import json
 from cryptography.fernet import Fernet, InvalidToken
 from bson.objectid import ObjectId
+import smtplib
+import sendgrid 
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 
 # --- CONSTANTES PADRÃO ---
 AVAILABLE_STANDARD_FIELDS = {
@@ -34,6 +37,36 @@ DEFAULT_PLAYBOOKS = {
     "Geral (Manifesto)": "### Nosso Manifesto de Produto\nEste playbook é o guia oficial...",
     "Discovery": "### O Processo de Discovery\nFazer um bom Product Discovery é a etapa mais crucial..."
 }
+
+from datetime import datetime, timedelta
+import streamlit as st
+
+def check_session_timeout():
+    """
+    Verifica se a sessão do utilizador expirou por inatividade.
+    Retorna True se a sessão expirou, False caso contrário.
+    """
+    if 'last_activity_time' not in st.session_state:
+        # Se não houver registo de atividade, considera a sessão inválida.
+        return True
+
+    # Define o limite de inatividade para 10 minutos
+    timeout_limit = timedelta(minutes=10)
+    
+    # Calcula o tempo decorrido desde a última atividade
+    elapsed_time = datetime.now() - st.session_state['last_activity_time']
+
+    if elapsed_time > timeout_limit:
+        # Se o tempo for excedido, limpa a sessão
+        keys_to_delete = ['email', 'jira_client', 'active_connection', 'projects', 'last_activity_time']
+        for key in keys_to_delete:
+            if key in st.session_state:
+                del st.session_state[key]
+        return True
+    else:
+        # Se a sessão for válida, atualiza o tempo da última atividade
+        st.session_state['last_activity_time'] = datetime.now()
+        return False
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -506,8 +539,6 @@ def get_user_figma_token(user_email):
         st.error("O seu token do Figma parece estar corrompido. Por favor, guarde-o novamente.")
         return None
     
-# --- NOVAS FUNÇÕES PARA GESTÃO DE DADOS DO PRODUCT HUB ---
-
 def get_user_product_hub_data(user_email):
     """
     Busca os dados do Product Hub de um utilizador (membros, avaliações, etc.).
@@ -540,3 +571,62 @@ def save_user_product_hub_data(user_email, hub_data):
         {'$set': {'product_hub_data': data_to_save}},
         upsert=True
     )
+
+def get_global_smtp_configs():
+    """
+    Busca as configurações de SMTP diretamente da base de dados,
+    sem depender de um utilizador logado na sessão.
+    """
+    try:
+        # Assumindo que as configurações de SMTP estão no documento de configurações globais
+        # ou no primeiro utilizador admin encontrado.
+        # Esta lógica pode precisar de ser ajustada dependendo de onde salvou as configs.
+        configs = get_global_configs() # Usa a função que já lê o configs.json
+        return configs.get("smtp_configs")
+    except Exception as e:
+        print(f"Erro ao buscar configurações globais de SMTP: {e}")
+        return None
+    
+def save_global_smtp_configs(smtp_data):
+    """Salva as configurações de SMTP no ficheiro de configurações globais."""
+    configs = get_global_configs()
+    configs['smtp_configs'] = smtp_data
+    save_global_configs(configs)
+    # Limpa o cache para garantir que as alterações sejam vistas por toda a aplicação
+    get_global_configs.clear()
+
+def get_global_smtp_configs():
+    """Lê as configurações de SMTP do ficheiro de configurações globais."""
+    configs = get_global_configs()
+    return configs.get("smtp_configs")
+
+def validate_smtp_connection(provider, from_email, credential):
+    """
+    Tenta estabelecer uma conexão com o provedor de e-mail para validar as credenciais.
+    Retorna (True, "Sucesso") ou (False, "Mensagem de Erro").
+    """
+    if provider == 'SendGrid':
+        try:
+            # Para o SendGrid, a melhor validação é fazer uma chamada simples à API
+            sg = sendgrid.SendGridAPIClient(credential)
+            response = sg.client.user.email.get()
+            if response.status_code == 200:
+                return True, "Credenciais do SendGrid validadas com sucesso!"
+            else:
+                return False, f"Falha na validação do SendGrid. A chave de API pode ser inválida ou não ter permissões. (Status: {response.status_code})"
+        except Exception as e:
+            return False, f"Erro ao conectar ao SendGrid: A chave de API parece ser inválida. ({e})"
+
+    elif provider == 'Gmail (SMTP)':
+        try:
+            # Para o Gmail, a validação é tentar fazer login no servidor SMTP
+            smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+            smtp_server.login(from_email, credential)
+            smtp_server.quit()
+            return True, "Credenciais do Gmail validadas com sucesso!"
+        except smtplib.SMTPAuthenticationError:
+            return False, "Falha na autenticação com o Gmail. Verifique se o e-mail e a senha de aplicação estão corretos."
+        except Exception as e:
+            return False, f"Erro ao conectar ao SMTP do Gmail: {e}"
+            
+    return False, "Provedor desconhecido."

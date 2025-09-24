@@ -15,12 +15,43 @@ from pathlib import Path
 
 st.set_page_config(page_title="Meu Dashboard", page_icon="🏠", layout="wide")
 
-# --- CSS Simplificado ---
+# --- CABEÇALHO E CONTROLES ---   
+# Define um título padrão caso nenhum projeto tenha sido carregado ainda
+st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Bem-vindo')}")
+
+# --- Bloco de Autenticação e Conexão ---
+if 'email' not in st.session_state:
+    st.warning("⚠️ Por favor, faça login para acessar."); 
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); 
+    st.stop()
+
+if check_session_timeout():
+    st.warning("Sua sessão expirou por inatividade. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
+    
+if 'jira_client' not in st.session_state:
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
+    user_connections = get_user_connections(st.session_state['email'])
+    
+    if not user_connections:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
+
 st.markdown("""
 <style>
-/* Remove o espaçamento extra no topo da página */
+/* Adiciona um espaçamento mais seguro no topo da página */
 .block-container {
-    padding-top: 2rem;
+    padding-top: 3rem; /* Aumentado de 2rem para 3rem */
     padding-bottom: 2rem;
 }
 /* Alinha os itens nos controlos do cabeçalho verticalmente ao centro */
@@ -44,7 +75,6 @@ div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
 </style>
 """, unsafe_allow_html=True)
 
-
 def on_project_change():
     """Limpa o estado relevante ao trocar de projeto."""
     if 'dynamic_df' in st.session_state: st.session_state.pop('dynamic_df', None)
@@ -61,20 +91,6 @@ def move_item(items_list, from_index, to_index):
         item = items_list.pop(from_index)
         items_list.insert(to_index, item)
     return items_list
-
-# --- Bloco de Autenticação e Conexão ---
-if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
-    if not user_connections:
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -117,7 +133,7 @@ with st.sidebar:
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
 
-if df is None or not current_project_key:
+if df is None or not st.session_state.get('project_name'):
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar Dashboard' para carregar os dados.")
     st.stop()
 
@@ -137,10 +153,6 @@ project_config = get_project_config(current_project_key) or {}
 default_cols = project_config.get('dashboard_columns', 2)
 active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
 all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
-
-
-# --- CABEÇALHO E CONTROLES ---
-st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', '')}")
 
 cols = st.columns([2.5, 1.5, 1.5, 1.5, 1.5]) # Adicionada uma coluna para o botão de IA
 

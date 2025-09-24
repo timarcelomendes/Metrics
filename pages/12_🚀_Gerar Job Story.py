@@ -67,13 +67,25 @@ def create_jira_issue(jira_domain, jira_email, jira_token, jira_project_key, sto
 
 # --- Configurações da Página e Autenticação ---
 st.set_page_config(page_title="Gerador de Histórias com IA", page_icon="🚀", layout="wide")
-st.title("🚀 Gerador de Histórias com IA")
+st.header("🚀 Gerador de Histórias com IA")
 st.markdown("Crie histórias de usuário a partir de uma tela do Figma ou de uma simples descrição.")
 
+# --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
 if 'jira_client' not in st.session_state:
-    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
+    user_connections = get_user_connections(st.session_state['email'])
+    if not user_connections:
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
 
 with st.sidebar:
     project_root = Path(__file__).parent.parent

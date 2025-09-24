@@ -10,7 +10,6 @@ import uuid
 
 st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
 
-st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items-center; } </style>""", unsafe_allow_html=True)
 st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 
 if 'email' not in st.session_state:
@@ -28,6 +27,8 @@ if 'jira_client' not in st.session_state:
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
         st.stop()
+
+st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items-center; } </style>""", unsafe_allow_html=True)
 
 configs = st.session_state.get('global_configs', get_global_configs())
 projects = st.session_state.get('projects', {})

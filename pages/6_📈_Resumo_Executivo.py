@@ -13,6 +13,30 @@ from security import get_global_configs, get_project_config, save_project_config
 
 st.set_page_config(page_title="Resumo Executivo", page_icon="📈", layout="wide")
 
+# --- LÓGICA PRINCIPAL DA PÁGINA ---
+st.header("📈 Resumo Executivo do Portfólio", divider='rainbow')
+
+# --- Bloco de Autenticação e Conexão ---
+if 'email' not in st.session_state:
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if 'jira_client' not in st.session_state:
+    # Verifica se o utilizador tem alguma conexão guardada na base de dados
+    user_connections = get_user_connections(st.session_state['email'])
+    
+    if not user_connections:
+        # Cenário 1: O utilizador nunca configurou uma conexão
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
+
 # --- CSS e Funções Auxiliares ---
 st.markdown("""
 <style>
@@ -58,12 +82,6 @@ def display_rag_status(status_text):
     color_class = color_map.get(emoji, "grey")
     st.markdown(f'<div style="text-align: right;"><span class="rag-pill rag-{color_class}">{status_text}</span></div>', unsafe_allow_html=True)
 
-# --- Bloco de Autenticação e Conexão ---
-if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-if 'jira_client' not in st.session_state:
-    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/2_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
-
 # --- BARRA LATERAL ---
 with st.sidebar:
     project_root = Path(__file__).parent.parent
@@ -74,9 +92,6 @@ with st.sidebar:
         st.write("Gauge Metrics") 
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.divider()
-
-# --- LÓGICA PRINCIPAL DA PÁGINA ---
-st.header("📈 Resumo Executivo do Portfólio", divider='rainbow')
 
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')

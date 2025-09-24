@@ -61,23 +61,27 @@ else:
                 st.markdown(f"**{conn['connection_name']}**")
                 st.caption(f"URL: {conn['jira_url']}")
             with col2:
+                # Verifica se esta é a conexão atualmente ativa
                 is_active = st.session_state.get('active_connection', {}).get('_id') == conn['_id']
                 
-                if st.button("Ativar", key=f"activate_{conn['_id']}", use_container_width=True, type="primary", disabled=is_active):
-                    with st.spinner("A ativar conexão..."):
+                # Desabilita o botão se a conexão já estiver ativa
+                if st.button("Ativar Conexão", key=f"activate_{conn['_id']}", use_container_width=True, type="primary", disabled=is_active):
+                    with st.spinner("A testar e ativar a conexão..."):
                         token = decrypt_token(conn['encrypted_token'])
                         client = connect_to_jira(conn['jira_url'], conn['jira_email'], token)
                         
-                        # --- LÓGICA CORRIGIDA AQUI ---
                         if client:
                             st.session_state.active_connection = conn
                             st.session_state.jira_client = client
                             st.session_state.projects = get_projects(client)
-                            save_last_active_connection(email, conn['_id'])
-                            st.success(f"Conexão '{conn['connection_name']}' ativada!")
+                            
+                            # Guarda esta conexão como a última ativa para o utilizador
+                            save_last_active_connection(st.session_state['email'], conn['_id'])
+                            
+                            st.success(f"Conexão '{conn['connection_name']}' ativada com sucesso!")
                             st.rerun()
                         else:
-                            st.error("Falha ao ativar. Verifique as credenciais.")
+                            st.error("Falha na conexão. Verifique os detalhes e o token de API.")
             
             with col3:
                 if st.button("Remover", key=f"delete_{conn['_id']}", use_container_width=True):

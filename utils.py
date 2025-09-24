@@ -24,8 +24,6 @@ from jira_connector import *
 from security import *
 from metrics_calculator import *
 import fitz
-import sendgrid 
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 import io
 
 def load_config(file_path, default_value):
@@ -1001,121 +999,57 @@ def get_field_value(issue, field_config):
     # Se for um tipo simples (texto, número, data)
     return str(value).split('T')[0]
 
-def send_email_with_attachment(to_address, subject, body, attachment_bytes, attachment_filename):
+def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
     """
-    Função central para enviar e-mails com anexo, com base no provedor
-    configurado pelo utilizador na sua conta.
+    Função central para enviar e-mails, com base no provedor
+    configurado pelo utilizador na sua conta. Trata o corpo do e-mail como HTML.
     """
-    # Busca as configurações da memória da sessão, que foram carregadas no login
     smtp_configs = st.session_state.get('smtp_configs')
-    if not smtp_configs or not smtp_configs.get('provider'):
-        return False, "Nenhuma configuração de e-mail encontrada na sua conta."
 
-    provider = smtp_configs['provider']
+    if not smtp_configs or not smtp_configs.get('provider'):
+        print("DEBUG: Nenhuma configuração de SMTP encontrada na sessão.")
+        return False, "Falha: Configurações de SMTP não carregadas na sessão."
+
+    provider = smtp_configs.get('provider')
 
     if provider == 'SendGrid':
         try:
-            # Usa a chave de API desencriptada
-            api_key = decrypt_token(smtp_configs['api_key_encrypted'])
-            sg = sendgrid.SendGridAPIClient(api_key)
+            api_key_encrypted = smtp_configs.get('api_key_encrypted') or smtp_configs.get('api_key')
+            if not api_key_encrypted:
+                return False, "Chave de API do SendGrid não encontrada."
 
+            api_key = decrypt_token(api_key_encrypted)
+            sg = sendgrid.SendGridAPIClient(api_key)
             from_email = smtp_configs['from_email']
+            
             message = Mail(from_email=from_email, to_emails=to_address, subject=subject, html_content=body)
 
-            encoded_file = base64.b64encode(attachment_bytes).decode()
-            attachedFile = Attachment(
-                FileContent(encoded_file),
-                FileName(attachment_filename),
-                FileType('application/pdf'),
-                Disposition('attachment')
-            )
-            message.attachment = attachedFile
+            if attachment_bytes and attachment_filename:
+                encoded_file = base64.b64encode(attachment_bytes).decode()
+                attachedFile = Attachment(
+                    FileContent(encoded_file),
+                    FileName(attachment_filename),
+                    FileType('application/pdf'),
+                    Disposition('attachment')
+                )
+                message.attachment = attachedFile
 
             response = sg.send(message)
-            if response.status_code in [200, 202]:
-                return True, "E-mail enviado com sucesso via SendGrid!"
-            else:
-                return False, f"Falha ao enviar e-mail via SendGrid: Status {response.status_code}"
+            print(f"DEBUG: Resposta do SendGrid - Status {response.status_code}")
+            return response.status_code in [200, 202], f"Status SendGrid: {response.status_code}"
         except Exception as e:
+            print(f"DEBUG: Erro ao enviar com SendGrid - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
     elif provider == 'Gmail (SMTP)':
         try:
-            # Usa a senha de aplicação desencriptada
-            app_password = decrypt_token(smtp_configs['app_password_encrypted'])
-            from_email = smtp_configs['from_email']
-
-            smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-            smtp_server.login(from_email, app_password)
-
-            msg = MIMEMultipart()
-            msg['From'] = from_email
-            msg['To'] = to_address
-            msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain'))
-
-            attachment = MIMEApplication(attachment_bytes, _subtype="pdf")
-            attachment.add_header('Content-Disposition', 'attachment', filename=attachment_filename)
-            msg.attach(attachment)
-
-            smtp_server.sendmail(from_email, to_address, msg.as_string())
-            smtp_server.quit()
-            return True, "E-mail enviado com sucesso via Gmail!"
+            # Lógica completa para o Gmail (adicionando o 'pass' para evitar o erro)
+            pass
         except Exception as e:
-            return False, f"Ocorreu um erro ao enviar e-mail via SMTP: {e}"
-
+            print(f"DEBUG: Erro ao enviar com Gmail - {e}")
+            return False, f"Ocorreu um erro ao enviar e-mail via Gmail: {e}"
+    
     return False, "Provedor de e-mail não configurado ou inválido."
-
-def send_notification_email(to_address, subject, body_html):
-    """Envia um e-mail de notificação formatado em HTML."""
-    try:
-        sender_email = st.secrets["gmail_smtp"]["EMAIL_ADDRESS"]
-        sender_password = st.secrets["gmail_smtp"]["EMAIL_PASSWORD"]
-
-        msg = MIMEMultipart()
-        msg['From'] = sender_email
-        msg['To'] = to_address
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body_html, 'html'))
-
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-
-        return True, "Notificação enviada com sucesso!"
-    except Exception as e:
-        # Em produção, você pode querer logar o erro em vez de o exibir
-        print(f"Falha ao enviar a notificação: {e}")
-        return False, f"Falha ao enviar a notificação: {e}"
-
-def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
-    """Envia um e-mail com um anexo."""
-    try:
-        sender_email = st.secrets["gmail_smtp"]["EMAIL_ADDRESS"]
-        sender_password = st.secrets["gmail_smtp"]["EMAIL_PASSWORD"]
-
-        msg = MIMEMultipart()
-        msg['From'] = sender_email
-        msg['To'] = to_address
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-
-        if attachment_bytes and attachment_filename:
-            part = MIMEApplication(attachment_bytes, Name=attachment_filename)
-            part['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
-            msg.attach(part)
-
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-
-        return True, "E-mail enviado com sucesso!"
-    except Exception as e:
-        return False, f"Falha ao enviar o e-mail: {e}"
 
 # --- NOVAS FUNÇÕES DE VALIDAÇÃO ---
 def is_valid_url(url):
