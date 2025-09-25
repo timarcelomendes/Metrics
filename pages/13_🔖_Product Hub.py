@@ -1,4 +1,4 @@
-# pages/13_🚀_Product_Hub.py
+# pages/13_🔖_Product Hub.py
 
 import streamlit as st
 import pandas as pd
@@ -10,7 +10,7 @@ from pathlib import Path
 # --- Configuração da Página ---
 st.set_page_config(page_title="Gauge Product Hub", page_icon="🚀", layout="wide")
 
-# --- CSS (mantido da versão anterior) ---
+# --- CSS ---
 st.markdown("""
 <style>
     /* ... (o seu CSS de estilo vai aqui) ... */
@@ -18,8 +18,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# --- DEFINIÇÕES ESTRUTURANTES (CONTEÚDO ESTÁTICO) ---
-# (O seu código original com SKILL_LEVELS, DEFAULT_PLAYBOOKS, ROLES)
+# --- DEFINIÇÕES ESTRUTURANTIS (CONTEÚDO ESTÁTICO) ---
 # ==============================================================================
 SKILL_LEVELS = {
     0: {"name": "Não Avaliado", "desc": "Ainda não foi definido um nível para esta competência."},
@@ -120,28 +119,23 @@ ROLES = {
 }
 
 # ==============================================================================
-# --- LÓGICA DA PÁGINA ---
+# --- FUNÇÕES AUXILIARES ---
 # ==============================================================================
 
 def get_all_competencies_from_framework(framework):
-    """Junta Hard e Soft skills numa lista única de dicionários."""
     all_competencies = []
     all_competencies.extend(framework.get('hard_skills', []))
     all_competencies.extend(framework.get('soft_skills', []))
     return all_competencies
 
 def sync_evaluations_with_framework():
-    """Garante que a estrutura de avaliação de cada membro corresponde ao framework global."""
     if 'competency_framework' not in st.session_state or 'membros' not in st.session_state or st.session_state.membros.empty:
         return
-
     framework = st.session_state.get('competency_framework', {})
     all_competencies = get_all_competencies_from_framework(framework)
-    current_competency_names = [comp.get('Competência') for comp in all_competencies if comp.get('Competência')]
+    current_competency_names = {comp.get('Competência') for comp in all_competencies if comp.get('Competência')}
     
-    membros_atuais = st.session_state.membros['Nome'].tolist()
-    
-    for member_name in membros_atuais:
+    for member_name in st.session_state.membros['Nome'].tolist():
         if member_name not in st.session_state.avaliacoes:
             st.session_state.avaliacoes[member_name] = {}
         
@@ -154,11 +148,8 @@ def sync_evaluations_with_framework():
         for comp_name in list(evaluations.keys()):
             if comp_name not in current_competency_names:
                 del evaluations[comp_name]
-        
-        st.session_state.avaliacoes[member_name] = evaluations
 
 def save_and_rerun():
-    """Salva os dados do Hub específicos do utilizador."""
     user_hub_data = {
         'membros': st.session_state.membros.to_dict('records'),
         'avaliacoes': st.session_state.avaliacoes,
@@ -170,62 +161,42 @@ def save_and_rerun():
     st.rerun()
 
 def load_data():
-    """
-    Carrega todos os dados necessários para o Hub, forçando a releitura
-    das configurações globais para garantir que os dados estejam sempre atualizados.
-    """
-    # 1. Limpa o cache para garantir a leitura dos dados mais recentes do disco/DB.
-    #    (Esta chamada depende de @st.cache_data na função get_global_configs em security.py)
+    if 'hub_data_loaded' in st.session_state:
+        return
     try:
         get_global_configs.clear()
     except Exception:
-        # Se a função não tiver cache, ignora o erro e continua.
         pass
     
-    # 2. Carrega as configurações globais diretamente da fonte.
     global_configs = get_global_configs() or {}
-
-    # 3. Alimenta o st.session_state com os dados frescos da Administração.
+    
+    if 'playbooks' in global_configs:
+        st.session_state.playbooks = global_configs['playbooks']
+    else:
+        st.session_state.playbooks = DEFAULT_PLAYBOOKS
+    
     st.session_state.competency_framework = global_configs.get('competency_framework', {})
     
-    loaded_playbooks = global_configs.get('playbooks')
-    st.session_state.playbooks = loaded_playbooks if loaded_playbooks else DEFAULT_PLAYBOOKS
-
-    # O resto da sua lógica de carregamento de dados do utilizador permanece igual.
     user_hub_data = get_user_product_hub_data(st.session_state['email'])
     
-    membros_data = user_hub_data.get('membros')
-    if membros_data is not None:
-        st.session_state.membros = pd.DataFrame(membros_data)
-    else:
-        st.session_state.membros = pd.DataFrame(columns=["Nome", "Papel"])
+    membros_data = user_hub_data.get('membros', [])
+    st.session_state.membros = pd.DataFrame(membros_data, columns=["Nome", "Papel"])
     
     st.session_state.avaliacoes = user_hub_data.get('avaliacoes', {})
     st.session_state.one_on_ones = user_hub_data.get('one_on_ones', {})
     st.session_state.cases_sucesso = user_hub_data.get('cases_sucesso', [])
-    
-    if st.session_state.membros.empty:
-         st.session_state.membros = pd.DataFrame(columns=["Nome", "Papel"])
-    else:
-        if 'Nome' not in st.session_state.membros.columns:
-            st.session_state.membros['Nome'] = ""
-        if 'Papel' not in st.session_state.membros.columns:
-            st.session_state.membros['Papel'] = ""
-        st.session_state.membros = st.session_state.membros[['Nome', 'Papel']]
          
     sync_evaluations_with_framework()
+    st.session_state['hub_data_loaded'] = True
 
-# A chamada a load_data() deve estar fora de qualquer verificação de 'hub_data_loaded'
-# e ser chamada após a verificação de login
-if 'email' in st.session_state:
-    load_data()
+# ==============================================================================
+# --- ESTRUTURA PRINCIPAL DA PÁGINA ---
+# ==============================================================================
 
-# --- Interface Principal ---
 st.markdown("<h1 style='text-align: center; color: #262730;'>🚀 Gauge Product Hub</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; font-size: 1.1rem; color: #525f7f;'>Bem-vindo ao centro de conhecimento e padrões do seu produto.</p>", unsafe_allow_html=True)
 st.markdown("---")
 
-# --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
@@ -236,44 +207,59 @@ if 'jira_client' not in st.session_state:
     else:
         st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡"); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
+load_data()
+
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(str(logo_path), size="large")
-    except Exception:
+        st.logo(
+            logo_path, 
+            size="large")
+    except FileNotFoundError:
         st.write("Gauge Metrics") 
     
-    st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    st.divider()
+    if st.session_state.get("email"):
+        st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
+    else:
+        st.info("⚠️ Usuário não conectado!")
+        
     if st.button("Logout", use_container_width=True, type='secondary'):
-        for key in list(st.session_state.keys()): del st.session_state[key]
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
-# --- Chamada da Nova Função de Carregamento ---
-load_data()
-
-# --- Painel de Diagnóstico (para ajudar a depurar) ---
 with st.expander("🔍 Painel de Diagnóstico de Dados Carregados"):
     st.write("**Playbooks Carregados:**")
     st.json(st.session_state.get('playbooks', {}))
     st.write("**Framework de Competências Carregado:**")
     st.json(st.session_state.get('competency_framework', {}))
 
-
-# --- Navegação por Abas ---
 tab_playbook, tab_papeis, tab_competencias, tab_gestao, tab_cases = st.tabs([
     "**📖 Playbook**", "**🎭 Papéis**", "**⚙️ Competências**",
     "**👥 Gestão de Pessoas**", "**🏆 Cases de Sucesso**"
 ])
 
+# --- ABA PLAYBOOK COM SUB-ABAS DINÂMICAS ---
 with tab_playbook:
     st.markdown('<p class="section-header">O Playbook de Produto</p>', unsafe_allow_html=True)
-    if not st.session_state.playbooks:
+    playbooks_to_show = st.session_state.get('playbooks', {})
+    
+    if not playbooks_to_show:
         st.info("Nenhum playbook foi configurado ainda. Peça a um administrador para adicionar conteúdo.")
     else:
-        for title, content in st.session_state.playbooks.items():
-            st.markdown(f'<div class="card"><div class="card-title">{title}</div>{content}</div>', unsafe_allow_html=True)
+        # Cria uma lista com os títulos dos playbooks para usar como nomes das abas
+        playbook_titles = list(playbooks_to_show.keys())
+        
+        # Cria as sub-abas dinamicamente
+        sub_tabs = st.tabs([f"**{title}**" for title in playbook_titles])
+        
+        # Itera sobre as abas e o conteúdo para exibir cada playbook na sua aba correspondente
+        for i, tab in enumerate(sub_tabs):
+            with tab:
+                playbook_title = playbook_titles[i]
+                playbook_content = playbooks_to_show[playbook_title]
+                st.markdown(f'<div class="card">{playbook_content}</div>', unsafe_allow_html=True)
 
 with tab_papeis:
     st.markdown('<p class="section-header">Papéis e Responsabilidades</p>', unsafe_allow_html=True)
@@ -288,34 +274,30 @@ with tab_papeis:
 
 with tab_competencias:
     st.markdown('<p class="section-header">Framework de Competências</p>', unsafe_allow_html=True)
-    framework = st.session_state.competency_framework
+    framework = st.session_state.get('competency_framework', {})
+    
     if not framework or (not framework.get('hard_skills') and not framework.get('soft_skills')):
         st.info("O Framework de Competências ainda não foi definido. Peça a um administrador para o configurar.")
     else:
         tab_hard, tab_soft = st.tabs(["**🛠️ Hard Skills**", "**🧠 Soft Skills**"])
+
+        def display_skills(skills_list):
+            if not skills_list:
+                st.info("Nenhuma competência deste tipo foi definida.")
+                return
+            
+            cols = st.columns(2)
+            for i, skill in enumerate(skills_list):
+                with cols[i % 2]:
+                    with st.container(border=True, height=150):
+                        st.markdown(f"**{skill.get('Competência', 'N/A')}**")
+                        st.caption(skill.get('Descrição', 'Nenhuma descrição fornecida.'))
+
         with tab_hard:
-            df_hard = pd.DataFrame(framework.get('hard_skills', []))
-            if not df_hard.empty and 'Pilar' in df_hard.columns:
-                for pilar, group in df_hard.groupby('Pilar'):
-                    st.markdown(f"### Pilar: {pilar}")
-                    cols = st.columns(2)
-                    for i, (_, row) in enumerate(group.iterrows()):
-                        with cols[i % 2]:
-                            with st.container(border=True, height=150):
-                                st.markdown(f"**{row['Competência']}**")
-                                st.caption(row.get('Descrição', 'Nenhuma descrição fornecida.'))
+            display_skills(framework.get('hard_skills', []))
 
         with tab_soft:
-            df_soft = pd.DataFrame(framework.get('soft_skills', []))
-            if not df_soft.empty and 'Pilar' in df_soft.columns:
-                for pilar, group in df_soft.groupby('Pilar'):
-                    st.markdown(f"### Pilar: {pilar}")
-                    cols = st.columns(2)
-                    for i, (_, row) in enumerate(group.iterrows()):
-                        with cols[i % 2]:
-                            with st.container(border=True, height=150):
-                                st.markdown(f"**{row['Competência']}**")
-                                st.caption(row.get('Descrição', 'Nenhuma descrição fornecida.'))
+            display_skills(framework.get('soft_skills', []))
 
 with tab_gestao:
     st.markdown('<p class="section-header">Gestão de Pessoas (Chapter)</p>', unsafe_allow_html=True)
@@ -351,29 +333,33 @@ with tab_gestao:
                     soft_skills = framework.get('soft_skills', [])
 
                     def render_evaluation_ui(eval_type, skills_list, member_name):
-                        if not skills_list: return
-                        df_skills = pd.DataFrame(skills_list)
-                        if 'Pilar' in df_skills.columns:
-                            for pilar, group in df_skills.groupby('Pilar'):
-                                with st.container(border=True):
-                                    st.markdown(f"##### Pilar: {pilar}")
-                                    for _, row in group.iterrows():
-                                        comp = row['Competência']
-                                        st.markdown(f"**{comp}**")
-                                        level = st.slider("Nível", 0, 5, value=st.session_state.avaliacoes[member_name][comp][eval_type]['level'], key=f"level_{eval_type}_{member_name}_{comp}")
-                                        st.info(f"**{SKILL_LEVELS[level]['name']}:** {SKILL_LEVELS[level]['desc']}")
-                                        pdi_text = "Plano de Desenvolvimento (Líder)" if eval_type == 'leader' else "Comentários / Autoavaliação (Membro)"
-                                        pdi = st.text_area(pdi_text, value=st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'], key=f"pdi_{eval_type}_{member_name}_{comp}", height=100)
-                                        st.session_state.avaliacoes[member_name][comp][eval_type]['level'] = level
-                                        st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'] = pdi
+                        if not skills_list:
+                            return
+                        with st.container(border=True):
+                            for skill in skills_list:
+                                comp = skill['Competência']
+                                st.markdown(f"**{comp}**")
+                                level = st.slider("Nível", 0, 5, value=st.session_state.avaliacoes[member_name][comp][eval_type]['level'], key=f"level_{eval_type}_{member_name}_{comp}")
+                                st.info(f"**{SKILL_LEVELS[level]['name']}:** {SKILL_LEVELS[level]['desc']}")
+                                pdi_text = "Plano de Desenvolvimento (Líder)" if eval_type == 'leader' else "Comentários / Autoavaliação (Membro)"
+                                pdi = st.text_area(pdi_text, value=st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'], key=f"pdi_{eval_type}_{member_name}_{comp}", height=100)
+                                st.session_state.avaliacoes[member_name][comp][eval_type]['level'] = level
+                                st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'] = pdi
+                                st.markdown("---")
                     
                     with aval_lider:
-                        st.subheader("🛠️ Hard Skills"); render_evaluation_ui('leader', hard_skills, membro_selecionado)
-                        st.subheader("🧠 Soft Skills"); render_evaluation_ui('leader', soft_skills, membro_selecionado)
+                        lider_hard, lider_soft = st.tabs(["🛠️ Hard Skills", "🧠 Soft Skills"])
+                        with lider_hard:
+                            render_evaluation_ui('leader', hard_skills, membro_selecionado)
+                        with lider_soft:
+                            render_evaluation_ui('leader', soft_skills, membro_selecionado)
 
                     with aval_membro:
-                        st.subheader("🛠️ Hard Skills"); render_evaluation_ui('member', hard_skills, membro_selecionado)
-                        st.subheader("🧠 Soft Skills"); render_evaluation_ui('member', soft_skills, membro_selecionado)
+                        membro_hard, membro_soft = st.tabs(["🛠️ Hard Skills", "🧠 Soft Skills"])
+                        with membro_hard:
+                            render_evaluation_ui('member', hard_skills, membro_selecionado)
+                        with membro_soft:
+                            render_evaluation_ui('member', soft_skills, membro_selecionado)
                     
                     with aval_comp:
                         st.subheader(f"Comparativo de Avaliações: {membro_selecionado}")

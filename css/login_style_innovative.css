@@ -1,14 +1,67 @@
-/* A propriedade mais importante:
-    Isto força o container que envolve as colunas a usar flexbox
-    e a esticar todos os seus filhos (as colunas) para a mesma altura.
-*/
+/* --- ESTILOS DO CABEÇALHO CENTRALIZADO --- */
+
+.header-container {
+    display: flex;
+    justify-content: center; /* Centraliza horizontalmente */
+    align-items: center;    /* Centraliza verticalmente */
+    padding-bottom: 1rem;   /* Espaço antes da linha divisória */
+}
+
+.header-logo {
+    width: 80px;
+    height: auto;
+    margin-right: 20px; /* Espaço entre o logo e o texto */
+}
+
+.title-container {
+    display: flex;
+    flex-direction: column; /* Coloca o título e o subtítulo um em cima da outro */
+}
+
+.header-title {
+    font-size: 2.8rem;
+    font-weight: bold;
+    line-height: 1.1; /* Ajusta a altura da linha para o texto grande */
+}
+
+.header-subtitle {
+    font-size: 1rem;
+    color: #555;
+}
+
+
+/* --- ESTILOS GERAIS E RESPONSIVOS (JÁ EXISTENTES) --- */
+
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
 div[data-testid="stHorizontalBlock"] {
+    display: flex;
     align-items: stretch;
 }
 
-/* Garante que o container com a borda, dentro de cada coluna,
-    ocupe toda a altura que a sua coluna agora tem.
-*/
 div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
+    display: flex;
+    flex-direction: column;
     height: 100%;
+}
+
+div[data-testid="stTabs"], form {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+div[data-testid="stTabContent"] {
+    flex-grow: 1;
+}
+
+@media (max-width: 992px) {
+    div[data-testid="stHorizontalBlock"] {
+        flex-direction: column;
+    }
+    div[data-testid="stHorizontalBlock"] > div:first-child {
+        margin-bottom: 1rem;
+    }
 }

@@ -15,11 +15,11 @@ def get_image_as_base64(path):
     try:
         with open(path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:image/svg+xml;base64,{data}"
+        return f"data:image/png;base64,{data}"
     except FileNotFoundError:
         return None
 
-logo_url = get_image_as_base64("images/gauge-logo.svg")
+logo_url = get_image_as_base64("images/logo.png")
 
 st.set_page_config(page_title="Gauge Metrics - Login",
                    page_icon=logo_url if logo_url else "🔑",
@@ -28,7 +28,7 @@ st.set_page_config(page_title="Gauge Metrics - Login",
 # --- CSS ---
 def load_css(file_name):
     try:
-        with open(file_name) as f:
+        with open(file_name, "r", encoding="utf-8") as f:
             st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
     except FileNotFoundError:
         st.warning(f"Arquivo CSS '{file_name}' não encontrado.")
@@ -53,25 +53,30 @@ if 'email' in st.session_state:
     st.markdown(f"Você já está logado como **{st.session_state['email']}**.")
     st.info("Pode agora navegar para as páginas de análise na barra lateral esquerda.")
     if st.button("Logout", use_container_width=True):
-        # LÓGICA DE LOGOUT CORRIGIDA E SEGURA
-        # Lista das chaves que devem ser mantidas após o logout
         keys_to_keep = ['remember_email']
-        
-        # Cria uma lista de chaves para apagar
         keys_to_delete = [key for key in st.session_state.keys() if key not in keys_to_keep]
-
-        # Apaga apenas as chaves da sessão atual do utilizador
         for key in keys_to_delete:
             del st.session_state[key]
-        
         st.rerun()
 else:
-    # Se não está logado, mostra a página de login
-    st.markdown("<h1 style='text-align: center;'>Gauge Products Hub 📶</h1>", unsafe_allow_html=True)
-    st.markdown("<h4 style='text-align: center; color: #555;'>Decisões Guiadas por Dados, Sem Complicações.</h4>", unsafe_allow_html=True)
+    # --- CABEÇALHO CENTRALIZADO COM LOGO E TÍTULO ---
+    if logo_url:
+        st.markdown(f"""
+            <div class="header-container">
+                <img src="{logo_url}" class="header-logo">
+                <div class="title-container">
+                    <div class="header-title">Gauge Products Hub</div>
+                    <div class="header-subtitle">Decisões Guiadas por Dados, Sem Complicações.</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("<h1 style='text-align: center;'>Gauge Products Hub</h1>", unsafe_allow_html=True)
+        st.markdown("<h4 style='text-align: center; color: #555;'>Decisões Guiadas por Dados, Sem Complicações.</h4>", unsafe_allow_html=True)
+
     st.divider()
 
-    login_col, desc_col = st.columns([0.8, 1.2], gap="large")
+    login_col, desc_col = st.columns([0.9, 1.1], gap="large")
 
     with login_col:
         with st.container(border=True):
@@ -91,7 +96,6 @@ else:
                                 if remember_me:
                                     st.session_state['remember_email'] = email
                                 else:
-                                    # Usa .get para evitar erro se a chave não existir
                                     if st.session_state.get('remember_email'):
                                         st.session_state['remember_email'] = ""
 
@@ -186,7 +190,6 @@ else:
                 O **Gauge Product Hub** é o seu copiloto estratégico, que transforma dados operacionais do Jira em **insights** de alto nível. Com ele, você está a poucos cliques de:
                 """
             )
-            st.markdown("---")
 
             with st.container(border=True):
                 st.markdown("📊 **Traduzir dados em narrativas:** Crie dashboards que contam a história do progresso do seu projeto.")
