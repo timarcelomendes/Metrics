@@ -15,8 +15,7 @@ from pathlib import Path
 
 st.set_page_config(page_title="Meu Dashboard", page_icon="🏠", layout="wide")
 
-# --- CABEÇALHO E CONTROLES ---   
-# Define um título padrão caso nenhum projeto tenha sido carregado ainda
+# --- CABEÇALHO E CONTROLES ---
 st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Bem-vindo')}")
 
 # --- Bloco de Autenticação e Conexão ---
@@ -31,17 +30,14 @@ if check_session_timeout():
     st.stop()
     
 if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
     user_connections = get_user_connections(st.session_state['email'])
     
     if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
         st.stop()
     else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
         st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
@@ -51,7 +47,7 @@ st.markdown("""
 <style>
 /* Adiciona um espaçamento mais seguro no topo da página */
 .block-container {
-    padding-top: 3rem; /* Aumentado de 2rem para 3rem */
+    padding-top: 3rem;
     padding-bottom: 2rem;
 }
 /* Alinha os itens nos controlos do cabeçalho verticalmente ao centro */
@@ -72,8 +68,32 @@ div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
 #empty-state-container .icon {
     font-size: 4rem;
 }
+
+/* --- CORREÇÃO: REGRAS PARA BOTÕES QUADRADOS E COMPACTOS --- */
+div[data-testid="stAppViewContainer"] div[data-testid="stContainer"] > div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button {
+    background-color: transparent;
+    border: none;
+    color: #4a4a4a;
+    width: 35px;  /* Largura fixa */
+    height: 35px; /* Altura fixa para criar um quadrado */
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+div[data-testid="stAppViewContainer"] div[data-testid="stContainer"] > div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button:hover {
+    background-color: #f0f2f6;
+    color: #1c1c1c;
+    border-radius: 0.25rem;
+}
+div[data-testid="stAppViewContainer"] div[data-testid="stContainer"] > div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button:focus {
+    box-shadow: none !important;
+    outline: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
 
 def on_project_change():
     """Limpa o estado relevante ao trocar de projeto."""
@@ -154,7 +174,7 @@ default_cols = project_config.get('dashboard_columns', 2)
 active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
 all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
 
-cols = st.columns([2.5, 1.5, 1.5, 1.5, 1.5]) # Adicionada uma coluna para o botão de IA
+cols = st.columns([2.5, 1.5, 1.5, 1.5, 1.5])
 
 with cols[0]:
     dashboard_names = {db['name']: db['id'] for db_id, db in available_dashboards.items()}
@@ -276,18 +296,63 @@ if organize_mode:
     with st.container(border=True):
         st.markdown("**2. Gerir Abas e Gráficos do Dashboard Atual**")
         
-        # --- Gerir Abas ---
+        # --- INÍCIO DA CORREÇÃO: GERIR ABAS COM ORDENAÇÃO ---
         st.markdown("###### Gerir Abas")
         tab_names = list(tabs_layout.keys())
-        tabs_df = pd.DataFrame({"Nome da Aba": tab_names})
+
+        for i, tab_name in enumerate(tab_names):
+            cols = st.columns([0.7, 0.1, 0.1, 0.1])
+            new_name = cols[0].text_input("Nome da Aba", value=tab_name, key=f"tab_name_{i}")
+            
+            # Botão para mover para cima
+            if cols[1].button("🔼", key=f"up_tab_{i}", help="Mover para cima", use_container_width=True, disabled=(i == 0)):
+                current_items = list(tabs_layout.items())
+                moved_items = move_item(current_items, i, i - 1)
+                project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
+                all_layouts[current_project_key] = project_layouts
+                save_user_dashboard(st.session_state['email'], all_layouts)
+                st.rerun()
+
+            # Botão para mover para baixo
+            if cols[2].button("🔽", key=f"down_tab_{i}", help="Mover para baixo", use_container_width=True, disabled=(i == len(tab_names) - 1)):
+                current_items = list(tabs_layout.items())
+                moved_items = move_item(current_items, i, i + 1)
+                project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
+                all_layouts[current_project_key] = project_layouts
+                save_user_dashboard(st.session_state['email'], all_layouts)
+                st.rerun()
+
+            # Botão para apagar
+            if cols[3].button("❌", key=f"del_tab_{i}", help="Apagar aba", use_container_width=True, disabled=(len(tab_names) <= 1)):
+                if tab_name in tabs_layout:
+                    # Move os gráficos da aba apagada para a primeira aba
+                    charts_to_move = tabs_layout.pop(tab_name)
+                    first_tab_name = next(iter(tabs_layout))
+                    tabs_layout[first_tab_name].extend(charts_to_move)
+                    
+                    project_layouts['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
+                    all_layouts[current_project_key] = project_layouts
+                    save_user_dashboard(st.session_state['email'], all_layouts)
+                    st.rerun()
+            
+            # Lógica para renomear
+            if new_name != tab_name:
+                items = list(tabs_layout.items())
+                items[i] = (new_name, items[i][1])
+                tabs_layout = dict(items)
+                # Guarda a alteração no estado da sessão para ser salva com o botão principal
+                st.session_state.updated_tabs_layout = tabs_layout
+
+
+        if st.button("➕ Adicionar Nova Aba", use_container_width=True):
+            new_tab_name = f"Nova Aba {len(tab_names) + 1}"
+            tabs_layout[new_tab_name] = []
+            project_layouts['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
+            all_layouts[current_project_key] = project_layouts
+            save_user_dashboard(st.session_state['email'], all_layouts)
+            st.rerun()
         
-        edited_tabs_df = st.data_editor(
-            tabs_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="tabs_editor"
-        )
-        
+        st.divider()
         # --- Atribuir Gráficos ---
         st.markdown("###### Atribuir Gráficos às Abas")
         if not all_charts:
@@ -298,10 +363,11 @@ if organize_mode:
                 chart_id = chart['id']
                 current_tab = next((tab for tab, charts in tabs_layout.items() if chart_id in [c['id'] for c in charts]), None)
                 
-                # Prepara a lista de abas para o selectbox
-                tab_options = edited_tabs_df["Nome da Aba"].tolist()
+                # --- INÍCIO DA CORREÇÃO ---
+                # A lista de opções de abas agora vem diretamente de 'tab_names'
+                tab_options = tab_names
+                # --- FIM DA CORREÇÃO ---
                 
-                # Garante que a aba atual do gráfico esteja na lista, mesmo que tenha sido apagada
                 if current_tab and current_tab not in tab_options:
                     tab_options.insert(0, current_tab)
 
@@ -319,16 +385,16 @@ if organize_mode:
 
         st.divider()
         if st.button("Salvar Alterações de Organização", type="primary", use_container_width=True):
-            # Lógica para salvar as alterações
-            new_tabs_layout = {name: [] for name in edited_tabs_df["Nome da Aba"].tolist()}
+            if 'updated_tabs_layout' in st.session_state:
+                tabs_layout = st.session_state.pop('updated_tabs_layout')
+
+            new_tabs_layout = {name: [] for name in tabs_layout.keys()}
             
-            # Reatribui os gráficos com base nas novas seleções
             for chart in all_charts:
                 assigned_tab = updated_chart_assignments.get(chart['id'])
                 if assigned_tab in new_tabs_layout:
                     new_tabs_layout[assigned_tab].append(chart)
             
-            # Atualiza e salva a configuração
             project_layouts['dashboards'][active_dashboard_id]['tabs'] = new_tabs_layout
             all_layouts[current_project_key] = project_layouts
             save_user_dashboard(st.session_state['email'], all_layouts)
@@ -358,14 +424,37 @@ else:
                 for j, chart_to_render in enumerate(dashboard_items_in_tab):
                     with cols[j % default_cols]:
                         with st.container(border=True):
-                            header_cols = st.columns([0.8, 0.1, 0.1])
+                            # --- CORREÇÃO: Proporção das colunas ajustada para botões compactos ---
+                            header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
+                            
                             with header_cols[0]:
                                 st.markdown(f"**{chart_to_render.get('icon', '📊')} {chart_to_render.get('title', 'Visualização')}**")
+                            
                             with header_cols[1]:
+                                if st.button("🔼", key=f"up_{chart_to_render['id']}", help="Mover para cima", use_container_width=True, disabled=(j == 0)):
+                                    new_order = move_item(dashboard_items_in_tab, j, j - 1)
+                                    tabs_layout[tab_name] = new_order
+                                    all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
+                                    save_user_dashboard(st.session_state['email'], all_layouts)
+                                    st.rerun()
+
+                            with header_cols[2]:
+                                if st.button("🔽", key=f"down_{chart_to_render['id']}", help="Mover para baixo", use_container_width=True, disabled=(j == len(dashboard_items_in_tab) - 1)):
+                                    new_order = move_item(dashboard_items_in_tab, j, j + 1)
+                                    tabs_layout[tab_name] = new_order
+                                    all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
+                                    save_user_dashboard(st.session_state['email'], all_layouts)
+                                    st.rerun()
+                            
+                            with header_cols[3]:
                                 if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Gráfico", use_container_width=True):
                                     st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
-                            with header_cols[2]:
+                            
+                            with header_cols[4]:
                                 if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Gráfico", use_container_width=True):
-                                    tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]; all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout; save_user_dashboard(st.session_state['email'], all_layouts); st.rerun()
+                                    tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]
+                                    all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
+                                    save_user_dashboard(st.session_state['email'], all_layouts)
+                                    st.rerun()
                             
                             render_chart(chart_to_render, filtered_df)

@@ -1,13 +1,16 @@
 # jira_connector.py
 
 import streamlit as st
-import os
 from jira import JIRA, Issue
 from functools import lru_cache
 import pandas as pd
 import requests
 from requests.auth import HTTPBasicAuth
 import json
+from datetime import datetime, timezone
+from collections import defaultdict
+from security import find_user, get_global_configs, get_project_config, save_global_configs
+from utils import get_start_end_states, find_date_for_status
 
 @lru_cache(maxsize=32)
 def connect_to_jira(server, user_email, api_token):
@@ -51,20 +54,12 @@ def get_boards(jira_client, project_key):
         return []
 
 @lru_cache(maxsize=32)
-def get_sprints(client: JIRA, board_id: int, state='active,closed'):
-    """Busca sprints de um quadro, por padrão ativas e fechadas."""
-    try:
-        return client.sprints(board_id, state=state)
-    except Exception as e:
-        # Não mostra erro na interface, apenas retorna lista vazia
-        return []
-
 def get_sprint_issues(jira_client, sprint_id):
-    """Busca todas as issues de uma sprint específica."""
+    """Busca todas as issues de um sprint específico."""
     try:
-        return jira_client.search_issues(f'Sprint = {sprint_id}', expand='changelog', maxResults=False)
+        return jira_client.search_issues(f'sprint = {sprint_id}', maxResults=False, fields="*all")
     except Exception as e:
-        print(f"Erro ao buscar issues da sprint {sprint_id}: {e}")
+        st.error(f"Erro ao buscar issues do sprint {sprint_id}: {e}")
         return []
 
 def get_issues_by_date_range(jira_client, project_key, start_date=None, end_date=None):
@@ -380,15 +375,147 @@ def get_priorities(jira_client):
         print(f"Erro ao buscar todas as prioridades: {e}")
         return []
     
-def get_all_jira_fields(client):
+def get_all_jira_fields(jira_client):
     """
-    Busca todos os campos (padrão e personalizados) disponíveis na instância do Jira.
-    Retorna uma lista de dicionários, cada um representando um campo.
+    Busca todos os campos do Jira e os classifica como padrão ou personalizados,
+    incluindo o tipo de dado mapeado para a aplicação.
     """
     try:
-        fields = client.fields()
-        # O retorno já é uma lista de dicionários com 'id', 'name', e 'custom'
-        return fields
+        all_fields = jira_client.fields()
+        
+        type_mapping = {
+            'string': 'Texto', 'number': 'Numérico', 'date': 'Data', 
+            'datetime': 'Data', 'user': 'Texto', 'project': 'Texto',
+            'issuetype': 'Texto', 'priority': 'Texto', 'status': 'Texto',
+            'option': 'Texto', 'array': 'Texto'
+        }
+        
+        classified_fields = []
+        for field in all_fields:
+            schema_type = field.get('schema', {}).get('type', 'string')
+            app_type = type_mapping.get(schema_type, 'Texto')
+            
+            classified_fields.append({
+                "id": field['id'],
+                "name": field['name'],
+                "custom": field['custom'],
+                "type": app_type
+            })
+        return classified_fields
     except Exception as e:
-        print(f"Erro ao buscar os campos do Jira: {e}")
+        st.error(f"Não foi possível buscar os campos do Jira: {e}")
         return []
+    
+@st.cache_data(ttl=3600, show_spinner="A carregar e processar os dados do Jira para o projeto...")
+def load_and_process_project_data(_jira_client, project_key):
+    if 'email' not in st.session_state:
+        st.error("Sessão inválida. Por favor, faça login novamente.")
+        return pd.DataFrame()
+
+    user_data = find_user(st.session_state['email'])
+    global_configs = get_global_configs()
+    project_config = get_project_config(project_key) or {}
+
+    user_standard_fields = user_data.get('standard_fields', [])
+    user_custom_fields = user_data.get('enabled_custom_fields', [])
+    all_available_standard = global_configs.get('available_standard_fields', {})
+    all_available_custom = global_configs.get('custom_fields', [])
+    estimation_field_config = project_config.get('estimation_field', {})
+
+    fields_to_fetch = ["summary", "issuetype", "status", "assignee", "reporter", "priority", "created", "updated", "resolutiondate", "labels", "project", "parent", "fixVersions", "components", "statuscategorychangedate"]
+
+    for field_name in user_standard_fields:
+        field_id = all_available_standard.get(field_name, {}).get('id')
+        if field_id: fields_to_fetch.append(field_id)
+    for custom_field_name in user_custom_fields:
+        field_details = next((f for f in all_available_custom if f.get('name') == custom_field_name), None)
+        if field_details and field_details.get('id'): fields_to_fetch.append(field_details['id'])
+    if estimation_field_config and estimation_field_config.get('id'):
+        fields_to_fetch.append(estimation_field_config['id'])
+    fields_to_fetch = list(set(fields_to_fetch))
+
+    jql_query = f'project = "{project_key}"'
+    issues_list, start_at, max_results = [], 0, 100
+    initial_search = _jira_client.search_issues(jql_query, startAt=0, maxResults=0)
+    total_issues = initial_search.total
+
+    if total_issues == 0:
+        st.warning("Nenhuma issue encontrada para este projeto.")
+        return pd.DataFrame()
+
+    progress_bar = st.progress(0, text=f"Buscando {total_issues} issues do projeto {project_key}...")
+    while start_at < total_issues:
+        issues_chunk = _jira_client.search_issues(jql_query, startAt=start_at, maxResults=max_results, fields=fields_to_fetch, expand='changelog')
+        issues_list.extend(issues_chunk)
+        start_at += len(issues_chunk)
+        progress_bar.progress(min(start_at / total_issues, 1.0), text=f"Buscando {total_issues} issues... ({start_at}/{total_issues})")
+    progress_bar.empty()
+
+    all_fields_map = {field['id']: field['name'] for field in _jira_client.fields()}
+    
+    processed_data = []
+    for issue in issues_list:
+        issue_data = {'Issue': issue.key}
+        for field_id in fields_to_fetch:
+            field_name = all_fields_map.get(field_id, field_id)
+            field_value = getattr(issue.fields, field_id, None)
+            if field_value is not None:
+                if hasattr(field_value, 'displayName'): issue_data[field_name] = field_value.displayName
+                elif hasattr(field_value, 'value'): issue_data[field_name] = field_value.value
+                elif isinstance(field_value, list) and all(hasattr(item, 'name') for item in field_value): issue_data[field_name] = ', '.join(item.name for item in field_value)
+                else: issue_data[field_name] = str(field_value)
+        
+        status_times = defaultdict(float)
+        last_change_date = pd.to_datetime(issue.fields.created).replace(tzinfo=None)
+        
+        initial_status = None
+        for history in sorted(issue.changelog.histories, key=lambda h: h.created):
+            for item in history.items:
+                if item.field == 'status':
+                    initial_status = item.fromString
+                    break
+            if initial_status: break
+        
+        current_status = initial_status or (issue.fields.status.name if hasattr(issue.fields.status, 'name') else None)
+
+        if current_status:
+            for history in sorted(issue.changelog.histories, key=lambda h: h.created):
+                for item in history.items:
+                    if item.field == 'status':
+                        change_date = pd.to_datetime(history.created).replace(tzinfo=None)
+                        time_spent = (change_date - last_change_date).total_seconds() / 86400
+                        status_times[current_status] += time_spent
+                        current_status = item.toString
+                        last_change_date = change_date
+            
+            end_date = pd.to_datetime(issue.fields.resolutiondate).replace(tzinfo=None) if issue.fields.resolutiondate else pd.to_datetime(datetime.now())
+            time_spent = (end_date - last_change_date).total_seconds() / 86400
+            if current_status:
+                status_times[current_status] += time_spent
+        issue_data['status_times_days'] = dict(status_times)
+
+        initial_state, done_state = get_start_end_states(project_key)
+        created_date = pd.to_datetime(issue.fields.created).replace(tzinfo=None)
+        resolution_date = pd.to_datetime(issue.fields.resolutiondate).replace(tzinfo=None) if issue.fields.resolutiondate else None
+        start_date = find_date_for_status(issue.changelog, initial_state, default=created_date)
+        
+        issue_data.update({'Data de Criação': created_date, 'Data de Início': start_date, 'Data de Conclusão': resolution_date})
+        if resolution_date:
+            issue_data['Lead Time (dias)'] = (resolution_date - created_date).days
+            if start_date: issue_data['Cycle Time (dias)'] = (resolution_date - start_date).days
+        if hasattr(issue.fields, 'status') and hasattr(issue.fields.status, 'statusCategory'):
+            issue_data['Categoria de Status'] = issue.fields.status.statusCategory.name
+        processed_data.append(issue_data)
+        
+    df = pd.DataFrame(processed_data)
+    
+    if 'status_times_days' in df.columns:
+        status_df = df['status_times_days'].apply(pd.Series).fillna(0)
+        status_df = status_df.add_prefix('Tempo em: ')
+        df = pd.concat([df.drop(columns=['status_times_days']), status_df], axis=1)
+
+    final_field_names = {**{conf.get('id'): name for name, conf in all_available_standard.items()}, **{field.get('id'): field.get('name') for field in all_available_custom}}
+    if estimation_field_config.get('id'):
+        final_field_names[estimation_field_config['id']] = estimation_field_config.get('name')
+    df.rename(columns=final_field_names, inplace=True)
+    return df

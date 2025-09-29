@@ -15,26 +15,15 @@ st.header("⚙️ Configurações da Aplicação", divider='rainbow')
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
-    
-    if not user_connections:
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
+    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
 st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items-center; } </style>""", unsafe_allow_html=True)
 
 configs = st.session_state.get('global_configs', get_global_configs())
 projects = st.session_state.get('projects', {})
+user_data = find_user(st.session_state['email'])
 
 def update_global_configs_and_rerun(configs_dict):
-    """Função central para salvar as configurações globais e recarregar a página."""
     save_global_configs(configs_dict)
     get_global_configs.clear()
     st.session_state['global_configs'] = get_global_configs()
@@ -45,9 +34,7 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            str(logo_path), 
-            size="large")
+        st.logo(str(logo_path), size="large")
     except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
 
@@ -237,92 +224,61 @@ with tab_projetos:
                             st.write(f"- **Pausa em:** {', '.join(policy['pause_statuses'])}")
                             st.write(f"- **Termina em:** {', '.join(policy['stop_statuses'])}")
     
-with tab_campos: # Adapte este nome se necessário
+with tab_campos:
     st.subheader("Gerir Campos Globais para Análise")
-    st.info("Selecione aqui os campos do Jira que estarão disponíveis para todos os utilizadores criarem os seus dashboards e análises.")
     
     with st.spinner("A buscar todos os campos disponíveis no Jira..."):
-        # A função que busca os campos pode ter um nome diferente no seu código
         all_jira_fields = get_all_jira_fields(st.session_state.jira_client) 
 
-    # 1. Verifica se a lista de campos retornou vazia.
     if not all_jira_fields:
         st.warning("Nenhum campo foi encontrado na sua instância do Jira.", icon="⚠️")
         st.info(
             """
             **Possíveis Causas:**
-
             * **Permissões Insuficientes:** A conexão Jira que está a usar pode não ter as permissões de administrador necessárias para listar todos os campos.
             * **Erro de Rede:** Pode ter ocorrido uma falha temporária de comunicação com o seu Jira.
-
-            **Ação Recomendada:**
-
-            Verifique se o token de API associado à sua conexão ativa tem permissões de **"Administrar o Jira"** e tente recarregar a página.
+            **Ação Recomendada:** Verifique se o token de API associado à sua conexão ativa tem permissões de **"Administrar o Jira"** e tente recarregar a página.
             """
         )
     else:
-        # 2. Se os campos foram encontrados, o resto do seu código para exibi-los
-        #    e salvá-los é executado normalmente.
-        
-        # Separa os campos em padrão e personalizados
         standard_fields = {f['name']: f for f in all_jira_fields if not f['custom']}
         custom_fields = [f for f in all_jira_fields if f['custom']]
         
-        # Carrega as configurações já salvas
         global_configs = get_global_configs()
         saved_standard_fields = global_configs.get('available_standard_fields', {})
-        saved_custom_fields = global_configs.get('custom_fields', [])
         
         st.markdown("---")
         st.markdown("#### Campos Padrão (Standard Fields)")
         st.caption("Selecione os campos padrão do Jira que deseja disponibilizar para análise.")
         
-        # Filtra os valores padrão para incluir apenas os que existem nas opções atuais
         valid_defaults = [field for field in saved_standard_fields.keys() if field in standard_fields]
-
-        # Filtra os valores padrão para incluir apenas os que existem nas opções atuais
-        valid_defaults = [field for field in saved_standard_fields.keys() if field in standard_fields]
-
         selected_standard_names = st.multiselect(
-            "Campos Padrão",
-            options=sorted(standard_fields.keys()),
-            default=valid_defaults, # Usa a lista segura que foi criada acima
-            label_visibility="collapsed"
+            "Campos Padrão", options=sorted(standard_fields.keys()),
+            default=valid_defaults, label_visibility="collapsed"
         )
         
         st.markdown("---")
         st.markdown("#### Campos Personalizados (Custom Fields)")
         st.caption("Adicione e nomeie os campos personalizados que são importantes para o seu negócio.")
 
-        # Prepara os dados para o editor
         df_custom = pd.DataFrame(custom_fields)
         df_custom_to_edit = df_custom[['id', 'name']].copy()
         df_custom_to_edit.rename(columns={'id': 'ID (Não editável)', 'name': 'Nome do Campo'}, inplace=True)
 
         edited_custom_fields_df = st.data_editor(
-            df_custom_to_edit,
-            use_container_width=True,
-            hide_index=True,
+            df_custom_to_edit, use_container_width=True, hide_index=True,
             column_config={
-                "ID (Não editável)": st.column_config.TextColumn(
-                    "ID (Não editável)",
-                    disabled=True,
-                ),
-                "Nome do Campo": st.column_config.TextColumn(
-                    "Nome do Campo (Pode renomear)",
-                    required=True,
-                )
+                "ID (Não editável)": st.column_config.TextColumn("ID (Não editável)", disabled=True),
+                "Nome do Campo": st.column_config.TextColumn("Nome do Campo (Pode renomear)", required=True)
             }
         )
         
         st.divider()
 
         if st.button("Salvar Configurações de Campos Globais", type="primary", use_container_width=True):
-            # Salva os campos padrão selecionados
             new_standard_fields = {name: standard_fields[name] for name in selected_standard_names}
             configs['available_standard_fields'] = new_standard_fields
             
-            # Salva os campos personalizados (com os nomes possivelmente editados)
             final_custom_list = []
             original_custom_map = {f['id']: f for f in custom_fields}
             for index, row in edited_custom_fields_df.iterrows():
@@ -335,7 +291,6 @@ with tab_campos: # Adapte este nome se necessário
                 })
             configs['custom_fields'] = final_custom_list
             
-            # Usa a função central que salva e limpa o cache
             update_global_configs_and_rerun(configs)
 
     with tab_os:

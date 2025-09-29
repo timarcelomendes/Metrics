@@ -67,19 +67,18 @@ def convert_dates_in_filters(filters):
 def render_chart(chart_config, df, return_fig=False):
     """
     Renderiza um único gráfico, aplicando os seus próprios filtros ao dataframe original.
-    Esta é a versão final e completa.
+    Esta é a versão final e completa com a correção para textposition.
     """
     try:
         df_to_render = df.copy() 
         
-        # --- LÓGICA DE FILTRAGEM COMPLETA E CORRIGIDA ---
+        # --- LÓGICA DE FILTRAGEM ---
         chart_filters = chart_config.get('filters', [])
         if chart_filters:
             for f in chart_filters:
                 field, op, val = f.get('field'), f.get('operator'), f.get('value')
                 if field and op and val is not None and field in df_to_render.columns:
                     try:
-                        # Filtros Categóricos e Numéricos
                         if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
                         elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
                         elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
@@ -87,15 +86,9 @@ def render_chart(chart_config, df, return_fig=False):
                         elif op == 'maior que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') > val]
                         elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
                         elif op == 'entre' and isinstance(val, list) and len(val) == 2:
-                             df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
-                        
-                        # Filtros de Data
+                            df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
                         elif op == "Períodos Relativos":
-                            days_map = {
-                                "Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30, 
-                                "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120, 
-                                "Últimos 150 dias": 150, "Últimos 180 dias": 180
-                            }
+                            days_map = {"Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30, "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120, "Últimos 150 dias": 150, "Últimos 180 dias": 180}
                             end_date = pd.to_datetime(datetime.now().date())
                             start_date = end_date - timedelta(days=days_map.get(val, 0))
                             df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
@@ -103,7 +96,7 @@ def render_chart(chart_config, df, return_fig=False):
                             start_date, end_date = pd.to_datetime(val[0]), pd.to_datetime(val[1])
                             df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
                     except Exception:
-                        pass # Ignora filtros malformados
+                        pass
         
         # --- ETAPA 2: VALIDAÇÃO DE CAMPOS ---
         required_cols = []
@@ -133,10 +126,8 @@ def render_chart(chart_config, df, return_fig=False):
         template = "plotly_white"
 
         if chart_type == 'indicator':
-            # Gráficos do tipo 'indicator' (st.metric) não são exportáveis como imagem
-            if return_fig:
-                return None
-                
+            if return_fig: return None
+            
             if source_type == 'jql':
                 with st.spinner("A calcular KPI com JQL..."):
                     val_a = get_jql_issue_count(st.session_state.jira_client, chart_config.get('jql_a'))
@@ -208,46 +199,62 @@ def render_chart(chart_config, df, return_fig=False):
                     elif style == 'Gráfico de Bala (Bullet)':
                         fig.add_trace(go.Indicator(mode = "number+gauge", value = final_value, gauge = {'shape': "bullet", 'axis': {'range': [None, target_value]}, 'threshold': {'line': {'color': chart_config.get('gauge_target_color', '#d62728'), 'width': 3}, 'thickness': 0.9, 'value': target_value}, 'steps': [{'range': [0, poor_limit], 'color': "rgba(255, 0, 0, 0.25)"}, {'range': [poor_limit, good_limit], 'color': "rgba(255, 255, 0, 0.35)"}, {'range': [good_limit, target_value], 'color': "rgba(0, 255, 0, 0.35)"}], 'bar': {'color': chart_config.get('gauge_bar_color', '#1f77b4'), 'thickness': 0.5}}))
                         fig.update_layout(height=100, margin=dict(l=1,r=1,t=20,b=20))
-
+                    
         elif chart_type in ['dispersão', 'linha']:
-            x_col, y_col, color_col = chart_config['x'], chart_config['y'], chart_config.get('color_by')
-            plot_df = df_to_render.dropna(subset=[x_col, y_col]).copy()
-            color_param = color_col if color_col and color_col != "Nenhum" and color_col in plot_df.columns else None
-            text_param = y_col if chart_config.get('show_data_labels') else None
+            plot_func = px.scatter if chart_type == "dispersão" else px.line
+            
+            # Verifica se a cor deve ser usada
+            color_by_value = chart_config.get('color_by')
+            if color_by_value == 'Nenhum':
+                color_by_value = None # Converte o texto "Nenhum" para o valor Nulo que o Plotly entende
+            
+            plot_args = {
+                'data_frame': df_to_render,
+                'x': chart_config.get('x'),
+                'y': chart_config.get('y'),
+                'color': color_by_value, # Usa o valor corrigido
+                'title': None,
+                'template': template,
+                'text': chart_config.get('y') if chart_config.get('show_data_labels') else None
+            }
+            
+            if chart_type == 'linha':
+                plot_args['markers'] = True
 
-            if chart_type == 'dispersão':
-                fig = px.scatter(plot_df, x=x_col, y=y_col, color=color_param, title=None, hover_name="Issue", template=template, text=text_param)
-            else: # linha
-                plot_df.sort_values(by=x_col, inplace=True)
-                fig = px.line(plot_df, x=x_col, y=y_col, color=color_param, title=None, hover_name="Issue", template=template, markers=True, text=text_param)
+            fig = plot_func(**plot_args)
             
-            if chart_config.get('show_data_labels') and fig:
-                fig.update_traces(textposition='top center', texttemplate='%{text:,.2f}')
- 
+            if chart_config.get('show_data_labels'):
+                fig.update_traces(textposition='top center')
+        
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
-            measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
+            from metrics_calculator import calculate_aggregated_metric # Importação local
             
-            if measure == 'Contagem de Issues':
-                grouped_df = df_to_render.groupby(dimension).size().reset_index(name='Contagem'); y_axis, values_col = 'Contagem', 'Contagem'
-            elif agg == 'Contagem Distinta':
-                new_column_name = f"Contagem de {measure}"; grouped_df = df_to_render.groupby(dimension)[measure].nunique().reset_index(name=new_column_name); y_axis, values_col = new_column_name, new_column_name
-            else:
-                agg_func = 'sum' if agg == 'Soma' else 'mean'; df_to_render[measure] = pd.to_numeric(df_to_render[measure], errors='coerce'); grouped_df = df_to_render.groupby(dimension)[measure].agg(agg_func).reset_index(); y_axis, values_col = measure, measure
+            measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
+            grouped_df = calculate_aggregated_metric(df_to_render, dimension, measure, agg)
+            y_axis, values_col = grouped_df.columns[1], grouped_df.columns[1]
             
             show_labels = chart_config.get('show_data_labels', False)
             text_param = y_axis if show_labels else None
 
-            if chart_type == 'barra': fig = px.bar(grouped_df, x=dimension, y=y_axis, color=dimension, title=None, template=template, text=text_param)
-            elif chart_type == 'linha_agregada': fig = px.line(grouped_df.sort_values(by=dimension), x=dimension, y=y_axis, title=None, template=template, markers=True, text=text_param)
-            elif chart_type == 'pizza': fig = px.pie(grouped_df, names=dimension, values=values_col, title=None, template=template)
-            elif chart_type == 'treemap': fig = px.treemap(grouped_df, path=[px.Constant("Todos"), dimension], values=values_col, color=y_axis, title=None, color_continuous_scale='Blues', template=template)
-            elif chart_type == 'funil': fig = px.funnel(grouped_df, x=y_axis, y=dimension, title=None, template=template, text=text_param)
-            
+            if chart_type == 'barra': 
+                fig = px.bar(grouped_df, x='Dimensão', y='Medida', color='Dimensão', title=None, template=template, text=text_param)
+            elif chart_type == 'linha_agregada': 
+                fig = px.line(grouped_df.sort_values(by='Dimensão'), x='Dimensão', y='Medida', title=None, template=template, markers=True, text=text_param)
+            elif chart_type == 'pizza': 
+                fig = px.pie(grouped_df, names='Dimensão', values='Medida', title=None, template=template)
+            elif chart_type == 'treemap': 
+                fig = px.treemap(grouped_df, path=[px.Constant("Todos"), 'Dimensão'], values='Medida', color='Medida', title=None, color_continuous_scale='Blues', template=template)
+            elif chart_type == 'funil': 
+                sorted_df = grouped_df.sort_values(by='Medida', ascending=True)
+                fig = px.funnel(sorted_df, x='Medida', y='Dimensão', title=None, template=template, text=text_param)
+
             if show_labels and fig:
-                if chart_type in ['barra', 'linha_agregada', 'funil']:
-                    is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
-                    text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
+                is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
+                text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
+                if chart_type in ['barra', 'funil']:
                     fig.update_traces(texttemplate=text_template, textposition='outside')
+                elif chart_type == 'linha_agregada':
+                    fig.update_traces(texttemplate=text_template, textposition='top center')
                 elif chart_type == 'pizza':
                     fig.update_traces(textinfo='percent+label', textposition='inside')
                 elif chart_type == 'treemap':
@@ -262,6 +269,38 @@ def render_chart(chart_config, df, return_fig=False):
         if not return_fig:
             st.error(f"Erro ao gerar a visualização '{chart_config.get('title', 'Desconhecido')}': {e}")
         return None
+
+def get_start_end_states(project_key):
+    project_config = get_project_config(project_key) or {}
+    status_mapping = project_config.get('status_mapping', {})
+    global_configs = get_global_configs()
+    initial_states = status_mapping.get('initial', global_configs.get('initial_states', []))
+    done_states = status_mapping.get('done', global_configs.get('done_states', []))
+    return initial_states, done_states
+
+def find_date_for_status(changelog, target_statuses, default=None):
+    for history in changelog.histories:
+        for item in history.items:
+            if item.field == 'status' and item.toString in target_statuses:
+                return pd.to_datetime(history.created).replace(tzinfo=None)
+    return default
+
+def convert_dates_in_filters(filters):
+    for f in filters:
+        if 'value' in f and isinstance(f['value'], tuple) and all(hasattr(d, 'strftime') for d in f['value']):
+            f['value'] = [d.strftime('%Y-%m-%d') for d in f['value']]
+    return filters
+
+def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
+    st.markdown("###### **Criar Dimensão Combinada**")
+    new_dim_name = st.text_input("Nome da nova dimensão", key=f"new_dim_name_{key_suffix}")
+    cols = st.columns(2)
+    dim1 = cols[0].selectbox("Selecione a primeira dimensão", options=categorical_cols + date_cols, key=f"dim1_{key_suffix}")
+    dim2 = cols[1].selectbox("Selecione a segunda dimensão", options=categorical_cols + date_cols, key=f"dim2_{key_suffix}")
+    if new_dim_name and dim1 and dim2:
+        df[new_dim_name] = df[dim1].astype(str) + " - " + df[dim2].astype(str)
+        return new_dim_name, df
+    return None, df
 
 # ===== CLASSE DE PDF E FUNÇÕES DE GERAÇÃO DE DOCUMENTOS =====
 class PDF(FPDF):

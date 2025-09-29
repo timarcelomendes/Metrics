@@ -1,9 +1,8 @@
-# metrics_calculator.py (VERSÃO FINAL COM CORREÇÃO DE CYCLE TIME)
+# metrics_calculator.py (VERSÃO FINAL COM CORREÇÃO DE IMPORTAÇÃO CIRCULAR)
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from jira_connector import get_sprint_issues
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
@@ -16,7 +15,7 @@ def find_completion_date(issue, project_config):
     configurados para o projeto.
     """
     status_mapping = project_config.get('status_mapping', {})
-    done_statuses = [s.lower() for s in status_mapping.get('done', [])] 
+    done_statuses = [s.lower() for s in status_mapping.get('done', [])]
     if not done_statuses or not hasattr(issue.changelog, 'histories'):
         return None
 
@@ -60,9 +59,9 @@ def calculate_cycle_time(issue, completion_date, project_config):
 
     status_mapping = project_config.get('status_mapping', {})
     in_progress_statuses = [s.lower() for s in status_mapping.get('in_progress', [])]
-    
+
     first_start_date = None
-    
+
     # Tenta encontrar a data de início real se os status estiverem configurados
     if in_progress_statuses and hasattr(issue.changelog, 'histories'):
         start_dates = []
@@ -70,18 +69,67 @@ def calculate_cycle_time(issue, completion_date, project_config):
             for item in history.items:
                 if item.field == 'status' and item.toString.lower() in in_progress_statuses:
                     start_dates.append(pd.to_datetime(history.created).tz_localize(None))
-        
+
         if start_dates:
             first_start_date = min(start_dates)
 
     # Fallback: Se não encontrou uma data de início, usa a data de criação.
-    # Isso torna o Cycle Time igual ao Lead Time para o item, o que é mais lógico que 0.
     if first_start_date is None:
         first_start_date = pd.to_datetime(issue.fields.created).tz_localize(None)
 
     # Calcula a diferença e garante que o resultado nunca seja negativo.
     time_delta = completion_date - first_start_date
     return max(0, time_delta.total_seconds() / (24 * 3600))
+
+def calculate_aggregated_metric(df, dimension, measure, agg):
+    if not dimension or dimension not in df.columns:
+        return pd.DataFrame({'Dimensão': [], 'Medida': []})
+
+    if measure and measure.startswith('Tempo em: '):
+        if measure not in df.columns:
+            return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        agg_df = df.groupby(dimension)[measure].mean().reset_index(name='Medida')
+
+    elif measure == 'Contagem de Issues':
+        agg_df = df.groupby(dimension).size().reset_index(name='Medida')
+
+    elif agg == 'Contagem Distinta':
+        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        agg_df = df.groupby(dimension)[measure].nunique().reset_index(name='Medida')
+
+    else:
+        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        numeric_series = pd.to_numeric(df[measure], errors='coerce')
+        grouped_data = numeric_series.groupby(df[dimension])
+        if agg == 'Soma': agg_df = grouped_data.sum().reset_index(name='Medida')
+        elif agg == 'Média': agg_df = grouped_data.mean().reset_index(name='Medida')
+        else: agg_df = grouped_data.count().reset_index(name='Medida')
+
+    return agg_df.rename(columns={dimension: 'Dimensão'})
+
+def calculate_kpi_value(df, op, field):
+    if not op or not field: return 0
+    if field == 'Contagem de Issues': return len(df)
+    if field not in df.columns: return 0
+    if op == 'Contagem': return len(df.dropna(subset=[field]))
+
+    numeric_series = pd.to_numeric(df[field], errors='coerce').dropna()
+    if numeric_series.empty: return 0
+
+    if op == 'Soma': return numeric_series.sum()
+    if op == 'Média': return numeric_series.mean()
+    return 0
+
+def calculate_pivot_table(df, rows, columns, values, aggfunc='Soma'):
+    agg_map = {'Soma': 'sum', 'Média': 'mean', 'Contagem': 'count'}
+
+    if rows in df.columns and columns in df.columns and values in df.columns:
+        pivot_df = df.pivot_table(
+            index=rows, columns=columns, values=values,
+            aggfunc=agg_map.get(aggfunc, 'sum'), fill_value=0
+        )
+        return pivot_df
+    return pd.DataFrame()
 
 def calculate_throughput(issues, project_config):
     return len([i for i in issues if find_completion_date(i, project_config) is not None])
@@ -91,10 +139,10 @@ def get_filtered_issues(issues):
     global_configs = st.session_state.get('global_configs', {})
     status_mapping = global_configs.get('status_mapping', {})
     ignored_states = status_mapping.get('ignored', [])
-    
+
     if not ignored_states:
         return issues
-        
+
     return [issue for issue in issues if issue.fields.status.name.lower() not in ignored_states]
 
 def filter_ignored_issues(raw_issues_list):
@@ -105,12 +153,12 @@ def filter_ignored_issues(raw_issues_list):
     global_configs = st.session_state.get('global_configs', {})
     status_mapping = global_configs.get('status_mapping', {})
     ignored_states = status_mapping.get('ignored', [])
-    
+
     if not ignored_states:
         return raw_issues_list
-        
+
     return [
-        issue for issue in raw_issues_list 
+        issue for issue in raw_issues_list
         if issue.fields.status.name.lower() not in ignored_states
     ]
 
@@ -120,7 +168,7 @@ def get_issue_estimation(issue, estimation_config):
     """
     if not estimation_config:
         return None
-    
+
     field_id = estimation_config.get('id')
     if hasattr(issue.fields, field_id) and getattr(issue.fields, field_id) is not None:
         return getattr(issue.fields, field_id)
@@ -162,6 +210,7 @@ def prepare_burndown_data(client, sprint_obj, estimation_config, project_config)
     """
     Prepara os dados para o gráfico de Burndown de uma sprint.
     """
+    from jira_connector import get_sprint_issues # <-- CORREÇÃO AQUI
     estimation_field_id = estimation_config.get('id')
     if not estimation_field_id:
         st.warning("Burndown não pode ser calculado sem um campo de estimativa configurado para o projeto.")
@@ -176,12 +225,12 @@ def prepare_burndown_data(client, sprint_obj, estimation_config, project_config)
 
     issues = get_sprint_issues(client, sprint_id)
     if not issues: return pd.DataFrame()
-        
+
     total_points_planned = sum(get_issue_estimation(i, estimation_config) for i in issues)
-    
+
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     points_completed_per_day = {day: 0 for day in date_range}
-    
+
     for issue in issues:
         completion_date = find_completion_date(issue, project_config)
         if completion_date and start_date <= completion_date <= end_date:
@@ -193,9 +242,9 @@ def prepare_burndown_data(client, sprint_obj, estimation_config, project_config)
     for day in date_range:
         remaining_points -= points_completed_per_day.get(day, 0)
         burndown_values.append(remaining_points)
-        
+
     ideal_line = np.linspace(total_points_planned, 0, len(date_range)) if len(date_range) > 0 else []
-    
+
     return pd.DataFrame({
         'Data': date_range,
         'Pontos Restantes (Real)': burndown_values,
@@ -236,13 +285,13 @@ def prepare_cfd_data(issues, start_date, end_date):
         return pd.DataFrame(), {}
 
     df = pd.DataFrame(transitions)
-    
+
     # Garante que as datas de input sejam do tipo correto
     start_date = pd.to_datetime(start_date)
     end_date = pd.to_datetime(end_date)
-    
+
     df_filtered = df[df['date'].between(start_date, end_date)]
-    
+
     if df_filtered.empty:
         return pd.DataFrame(), {}
 
@@ -261,23 +310,23 @@ def prepare_project_burnup_data(issues, unit, estimation_config, project_config)
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
         st.warning("Para análise por pontos, configure um 'Campo de Estimativa' para este projeto.")
         return pd.DataFrame()
-    
+
     data = []
     for issue in valid_issues: # Usa a lista filtrada
         created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
         completion_date = find_completion_date(issue, project_config)
         value = get_issue_estimation(issue, estimation_config) if unit == 'points' else 1
         data.append({'created': created_date, 'resolved': completion_date, 'value': value})
-        
+
     df = pd.DataFrame(data)
     if df.empty or df['created'].dropna().empty: return pd.DataFrame()
-    
+
     start_date = df['created'].min(); end_date = pd.Timestamp.now(tz=None).normalize()
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-    
+
     scope_over_time = [df[df['created'] <= day]['value'].sum() for day in date_range]
     completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
-    
+
     return pd.DataFrame({'Data': date_range, 'Escopo Total': scope_over_time, 'Trabalho Concluído': completed_over_time}).set_index('Data')
 
 def calculate_trend_and_forecast(burnup_df, trend_weeks):
@@ -292,7 +341,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
     first_work_day = burnup_df[burnup_df['Trabalho Concluído'] > 0].index.min()
     last_day = burnup_df.index.max()
-    
+
     avg_weekly_velocity = 0
     if pd.notna(first_work_day):
         duration_days = (last_day - first_work_day).days
@@ -306,7 +355,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     end_date = burnup_df.index.max()
     start_date_trend = end_date - pd.Timedelta(weeks=trend_weeks)
     trend_data = burnup_df[burnup_df.index >= start_date_trend]
-    
+
     trend_weekly_velocity = 0
     if len(trend_data) > 1:
         total_work_increase = trend_data['Trabalho Concluído'].iloc[-1] - trend_data['Trabalho Concluído'].iloc[0]
@@ -317,7 +366,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     total_scope = burnup_df['Escopo Total'].iloc[-1]
     remaining_work = total_scope - total_completed
     forecast_date = None
-    
+
     if trend_weekly_velocity > 0 and remaining_work > 0:
         days_to_complete = (remaining_work / trend_weekly_velocity) * 7
         forecast_date = end_date + pd.Timedelta(days=days_to_complete)
@@ -327,12 +376,12 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
     burnup_df_cleaned = burnup_df.dropna()
     fig.add_trace(go.Scatter(x=burnup_df_cleaned.index, y=burnup_df_cleaned['Escopo Total'], mode='lines', name='Escopo Total', line=dict(color='red', width=2)))
     fig.add_trace(go.Scatter(x=burnup_df_cleaned.index, y=burnup_df_cleaned['Trabalho Concluído'], mode='lines', name='Trabalho Concluído', line=dict(color='blue', width=3)))
-    
+
     if trend_weekly_velocity > 0 and len(trend_data) > 1:
         X = np.array(range(len(trend_data))).reshape(-1, 1)
         model = LinearRegression().fit(X, trend_data['Trabalho Concluído'])
         trend_line = model.predict(X)
-        
+
         if forecast_date:
             future_days = (forecast_date - trend_data.index[-1]).days
             if future_days > 0:
@@ -342,7 +391,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
                 full_trend_dates = trend_data.index.append(extended_dates)
                 full_trend_values = np.concatenate([trend_line, future_trend])
                 fig.add_trace(go.Scatter(x=full_trend_dates, y=full_trend_values, mode='lines', name='Tendência', line=dict(color='green', dash='dash')))
-    
+
     fig.update_layout(
         title_text=None,
         xaxis_title="Data",
@@ -350,7 +399,7 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
         legend_title="Legenda",
         template="plotly_white"
     )
-    
+
     return fig, forecast_date, trend_weekly_velocity, avg_weekly_velocity
 
 def calculate_time_in_status(issue, target_status):
@@ -394,15 +443,15 @@ def get_aging_wip(issues):
     global_configs = st.session_state.get('global_configs', {})
     initial_states = global_configs.get('initial_states', DEFAULT_INITIAL_STATES)
     done_states = global_configs.get('done_states', DEFAULT_DONE_STATES)
-    
+
     # --- Lógica de Identificação Corrigida ---
     wip_issues = [
-        i for i in issues 
-        if hasattr(i.fields, 'status') and 
+        i for i in issues
+        if hasattr(i.fields, 'status') and
         i.fields.status.name.lower() not in [s.lower() for s in initial_states] and
         i.fields.status.name.lower() not in [s.lower() for s in done_states]
     ]
-    
+
     if not wip_issues:
         return pd.DataFrame(columns=['Issue', 'Status Atual', 'Dias no Status'])
 
@@ -419,9 +468,9 @@ def get_aging_wip(issues):
                         break
                 else: continue
                 break
-        
+
         days_in_status = np.busday_count(last_status_change_date, today)
-        
+
         wip_data.append({
             'Issue': issue.key,
             'Status Atual': issue.fields.status.name,
@@ -457,11 +506,11 @@ def calculate_predictability(sprint_issues, estimation_config):
 def calculate_sprint_defects(sprint_issues):
     """Calcula a quantidade de defeitos (bugs) concluídos na sprint."""
     if not sprint_issues: return 0
-    
+
     # Usa as configurações da sessão
     global_configs = st.session_state.get('global_configs', {})
     done_states = global_configs.get('done_states', DEFAULT_DONE_STATES)
-    
+
     defect_count = 0
     for issue in sprint_issues:
         issue_type_lower = issue.fields.issuetype.name.lower()
@@ -472,9 +521,10 @@ def calculate_sprint_defects(sprint_issues):
 
 def calculate_sprint_goal_success_rate(sprints, threshold, estimation_config):
     """Calcula a taxa de sucesso de sprints com base num limiar de previsibilidade."""
+    from jira_connector import get_sprint_issues # <-- CORREÇÃO AQUI
     if not sprints:
         return 0.0
-    
+
     successful_sprints = 0
     for sprint in sprints:
         # Passa a configuração para a função de previsibilidade
@@ -482,11 +532,12 @@ def calculate_sprint_goal_success_rate(sprints, threshold, estimation_config):
         predictability = calculate_predictability(sprint_issues, estimation_config)
         if predictability >= threshold:
             successful_sprints += 1
-            
+
     return (successful_sprints / len(sprints)) * 100 if sprints else 0.0
 
 def prepare_burndown_data_by_count(client, sprint_obj, project_config):
     """Prepara os dados para o gráfico de Burndown por CONTAGEM DE ISSUES."""
+    from jira_connector import get_sprint_issues # <-- CORREÇÃO AQUI
     try:
         start_date = pd.to_datetime(sprint_obj.startDate).tz_localize(None).normalize()
         end_date = pd.to_datetime(sprint_obj.endDate).tz_localize(None).normalize()
@@ -513,7 +564,7 @@ def prepare_burndown_data_by_count(client, sprint_obj, project_config):
         burndown_values.append(remaining_issues)
 
     ideal_line = np.linspace(total_issues_planned, 0, len(date_range)) if len(date_range) > 0 else []
-    
+
     return pd.DataFrame({
         'Data': date_range,
         'Issues Restantes (Real)': burndown_values,
@@ -522,6 +573,7 @@ def prepare_burndown_data_by_count(client, sprint_obj, project_config):
 
 def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config, project_config):
     """Prepara os dados para o gráfico de Burndown por um CAMPO DE ESTIMATIVA."""
+    from jira_connector import get_sprint_issues # <-- CORREÇÃO AQUI
     try:
         start_date = pd.to_datetime(sprint_obj.startDate).tz_localize(None).normalize()
         end_date = pd.to_datetime(sprint_obj.endDate).tz_localize(None).normalize()
@@ -545,9 +597,9 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config, p
     for day in date_range:
         remaining_points -= points_completed_per_day.get(day, 0)
         burndown_values.append(remaining_points)
-        
+
     ideal_line = np.linspace(total_points_planned, 0, len(date_range)) if len(date_range) > 0 else []
-    
+
     return pd.DataFrame({
         'Data': date_range,
         'Pontos Restantes (Real)': burndown_values,
@@ -569,7 +621,7 @@ def calculate_executive_summary_metrics(issues, project_config):
     total_issues = len(issues)
     completed_issues = 0
     deliveries_last_30_days = 0
-    
+
     issues_with_deadline = 0
     issues_on_time = 0
     deadline_diffs = []
@@ -578,27 +630,27 @@ def calculate_executive_summary_metrics(issues, project_config):
 
     for issue in issues:
         completion_date = find_completion_date(issue, project_config)
-        
+
         if completion_date:
             completed_issues += 1
             if completion_date.date() >= thirty_days_ago.date():
                 deliveries_last_30_days += 1
-            
+
             if hasattr(issue.fields, 'duedate') and issue.fields.duedate:
                 due_date = pd.to_datetime(issue.fields.duedate).date()
                 actual_completion_date = completion_date.date()
-                
+
                 issues_with_deadline += 1
                 diff = (actual_completion_date - due_date).days
                 deadline_diffs.append(diff)
-                
+
                 if diff <= 0:
                     issues_on_time += 1
 
     completion_pct = (completed_issues / total_issues * 100) if total_issues > 0 else 0
     schedule_adherence = (issues_on_time / issues_with_deadline * 100) if issues_with_deadline > 0 else 0
     avg_deadline_diff = sum(deadline_diffs) / len(deadline_diffs) if deadline_diffs else 0
-    
+
     return {
         'completion_pct': completion_pct,
         'deliveries_month': deliveries_last_30_days,
@@ -613,17 +665,17 @@ def calculate_throughput_trend(project_issues, num_weeks=4):
 
     completed_issues = [{'completion_date': find_completion_date(i)} for i in project_issues]
     df = pd.DataFrame(completed_issues).dropna()
-    
+
     if df.empty:
         return pd.DataFrame({'Semana': [], 'Entregas': []})
 
     df['completion_date'] = pd.to_datetime(df['completion_date'])
     df = df[df['completion_date'] >= pd.Timestamp.now() - pd.DateOffset(weeks=num_weeks)]
-    
+
     # Agrupa por semana, usando o final da semana como rótulo
     trend = df.groupby(pd.Grouper(key='completion_date', freq='W-MON')).size().reset_index(name='Entregas')
     trend['Semana'] = trend['completion_date'].dt.strftime('Semana %U')
-    
+
     return trend[['Semana', 'Entregas']]
 
 def calculate_risk_level(probability, impact):
@@ -633,9 +685,9 @@ def calculate_risk_level(probability, impact):
     level_map = {'Baixa': 1, 'Média': 2, 'Alta': 3}
     prob_score = level_map.get(probability, 1)
     impact_score = level_map.get(impact, 1)
-    
+
     risk_score = prob_score * impact_score
-    
+
     if risk_score <= 2:
         return "Baixo", "#28a745" # Verde
     elif risk_score <= 4:
@@ -649,10 +701,10 @@ def calculate_time_to_first_response(issue, first_response_field_id):
     """Calcula o tempo em horas entre a criação e o primeiro atendimento."""
     if not hasattr(issue.fields, first_response_field_id) or not getattr(issue.fields, first_response_field_id):
         return None
-        
+
     creation_date = pd.to_datetime(issue.fields.created)
     response_date = pd.to_datetime(getattr(issue.fields, first_response_field_id))
-    
+
     # Usa apenas dias úteis (segunda a sexta)
     business_hours = np.busday_count(creation_date.date(), response_date.date()) * 8
     return business_hours
@@ -670,7 +722,7 @@ def calculate_sla_metrics(issues):
     all_fields_map = {f['name']: f['id'] for f in global_configs.get('custom_fields', [])}
     sla_field_id = all_fields_map.get(sla_field_name)
     response_field_id = all_fields_map.get(response_field_name)
-    
+
     if not sla_field_id or not response_field_id:
         return {'met_sla_pct': 'N/A', 'violated_sla_pct': 'N/A', 'avg_time_to_response': 'N/A'}
 
@@ -687,7 +739,7 @@ def calculate_sla_metrics(issues):
             all_response_times.append(time_to_response)
             if time_to_response <= float(sla_hours):
                 met_sla_count += 1
-    
+
     if total_with_response == 0:
         return {'met_sla_pct': 0, 'violated_sla_pct': 0, 'avg_time_to_response': 0}
 
@@ -717,10 +769,10 @@ def calculate_estimation_accuracy(completed_issues, estimation_config):
 
     for issue in completed_issues:
         estimated_value = get_issue_estimation(issue, estimation_config) or 0
-        
+
         # O campo 'timespent' do Jira sempre vem em segundos.
         time_spent_seconds = issue.fields.timespent if hasattr(issue.fields, 'timespent') and issue.fields.timespent is not None else 0
-        
+
         if estimated_value > 0:
             # Converte o tempo gasto para horas.
             actual_hours = time_spent_seconds / 3600
@@ -735,7 +787,6 @@ def calculate_estimation_accuracy(completed_issues, estimation_config):
                 total_estimated_hours += estimated_value
 
     # Calcula a acurácia. A comparação só faz sentido se ambos forem horas.
-    # Se a estimativa for em pontos, a acurácia pode não ser diretamente comparável em %.
     accuracy_ratio = (total_actual_hours / total_estimated_hours) * 100 if total_estimated_hours > 0 else 100
 
     return {
@@ -762,15 +813,15 @@ def calculate_schedule_adherence(issues, project_config):
         if hasattr(issue.fields, due_date_field_id) and getattr(issue.fields, due_date_field_id):
             with_due_date += 1
             completion_date = find_completion_date(issue, project_config)
-            
+
             if completion_date:
                 due_date = pd.to_datetime(getattr(issue.fields, due_date_field_id)).tz_localize(None)
                 if completion_date <= due_date:
                     met_deadline += 1
-    
+
     if with_due_date == 0:
         return 0.0
-    
+
     return (met_deadline / with_due_date) * 100
 
 def calculate_executive_summary_metrics(project_issues, project_config):
@@ -780,17 +831,17 @@ def calculate_executive_summary_metrics(project_issues, project_config):
 
     total_issues = len(project_issues)
     completed_issues_list = [i for i in project_issues if find_completion_date(i, project_config) is not None]
-    
+
     completion_pct = (len(completed_issues_list) / total_issues) * 100 if total_issues > 0 else 0
 
     current_month = datetime.now().month; current_year = datetime.now().year
     deliveries_month = len([
-        i for i in completed_issues_list 
+        i for i in completed_issues_list
         if (cd := find_completion_date(i, project_config)) and cd.month == current_month and cd.year == current_year
     ])
 
     date_mappings = project_config.get('date_mappings', {}); due_date_field_id = date_mappings.get('due_date_field_id')
-    
+
     deadline_diffs = []
     if due_date_field_id:
         for i in completed_issues_list:
@@ -800,11 +851,11 @@ def calculate_executive_summary_metrics(project_issues, project_config):
                 completion_date = find_completion_date(i, project_config)
                 if completion_date:
                     deadline_diffs.append((completion_date.normalize() - due_date).days)
-    
+
     avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
-    
+
     schedule_adherence = calculate_schedule_adherence(project_issues, project_config)
-    
+
     return {
         'completion_pct': completion_pct, 'deliveries_month': deliveries_month,
         'avg_deadline_diff': avg_deadline_diff, 'schedule_adherence': schedule_adherence,
@@ -831,7 +882,7 @@ def calculate_business_hours(start_time, end_time):
     """Calcula as horas úteis entre duas datas (simplificado, 8h/dia, seg-sex)."""
     if not start_time or not end_time:
         return 0
-    
+
     if isinstance(start_time, str): start_time = pd.to_datetime(start_time)
     if isinstance(end_time, str): end_time = pd.to_datetime(end_time)
 
@@ -839,7 +890,7 @@ def calculate_business_hours(start_time, end_time):
     end_time = end_time.tz_localize(None)
 
     business_days = np.busday_count(start_time.date(), end_time.date())
-    
+
     return business_days * 8
 
 def calculate_sla_metrics_for_issues(issues, global_configs):
@@ -857,15 +908,15 @@ def calculate_sla_metrics_for_issues(issues, global_configs):
         policy = get_applicable_sla_policy(issue, policies)
         if not policy:
             continue
-            
+
         total_sla_issues += 1
-        
+
         start_time, stop_time, first_response_time = None, None, None
-        
+
         # Garante que os status da política estão em minúsculas para comparação
         start_statuses = [s.lower() for s in policy['start_statuses']]
         stop_statuses = [s.lower() for s in policy['stop_statuses']]
-        
+
         for history in issue.changelog.histories:
             history_time = pd.to_datetime(history.created).tz_localize(None)
             for item in history.items:
@@ -890,7 +941,7 @@ def calculate_sla_metrics_for_issues(issues, global_configs):
                 violated_resolution_sla += 1
             else:
                 met_resolution_sla += 1
-        
+
         if start_time and first_response_time and first_response_time > start_time:
             response_hours = calculate_business_hours(start_time, first_response_time)
             first_response_times.append(response_hours)
