@@ -375,6 +375,22 @@ with tab_campos:
                         save_project_config(project_key, project_config)
                         st.success(f"Mapeamento de datas para '{selected_project_name}' guardado!"); st.rerun()
 
+            with st.container(border=True):
+                st.markdown(f"**Métricas Avançadas para '{selected_project_name}'**")
+                st.caption("Ative cálculos que podem exigir mais tempo de processamento durante o carregamento dos dados.")
+
+                calculate_time_in_status = st.toggle(
+                    "Calcular tempo em cada status",
+                    value=project_config.get('calculate_time_in_status', False),
+                    help="Quando ativado, a aplicação calcula o tempo total (em dias) que cada issue permaneceu em cada status do workflow. Essencial para a métrica 'Tempo em Status' no construtor de gráficos.",
+                    key=f"time_in_status_toggle_{project_key}"
+                )
+
+                if st.button(f"Salvar Configurações de Métricas para {selected_project_name}", use_container_width=True, key=f"save_metrics_config_{project_key}"):
+                    project_config['calculate_time_in_status'] = calculate_time_in_status
+                    save_project_config(project_key, project_config)
+                    st.success("Configuração de métricas avançadas guardada!"); st.rerun()
+
     with tab_email:
         st.subheader("Configuração de Envio de E-mail")
         st.caption("Configure as credenciais para que a aplicação possa enviar e-mails em seu nome.")

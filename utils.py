@@ -20,13 +20,12 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from pathlib import Path
 import re
-from jira_connector import *
 from security import *
-from metrics_calculator import *
 import fitz
-import sendgrid 
+import sendgrid
 import io
 import base64
+import requests
 
 def load_config(file_path, default_value):
     if os.path.exists(file_path):
@@ -46,7 +45,7 @@ def convert_dates_in_filters(filters):
     """
     if not filters:
         return []
-    
+
     sanitized_filters = []
     for f in filters:
         new_filter = f.copy()
@@ -55,7 +54,7 @@ def convert_dates_in_filters(filters):
             try:
                 # Converte cada item se for um objeto de data
                 new_filter['values'] = [
-                    v.isoformat() if hasattr(v, 'isoformat') else v 
+                    v.isoformat() if hasattr(v, 'isoformat') else v
                     for v in new_filter['values']
                 ]
             except Exception:
@@ -69,9 +68,13 @@ def render_chart(chart_config, df, return_fig=False):
     Renderiza um único gráfico, aplicando os seus próprios filtros ao dataframe original.
     Esta é a versão final e completa com a correção para textposition.
     """
+    # --- IMPORTAÇÃO LOCAL PARA EVITAR ERRO CIRCULAR ---
+    from jira_connector import get_jql_issue_count
+    from metrics_calculator import calculate_aggregated_metric
+
     try:
-        df_to_render = df.copy() 
-        
+        df_to_render = df.copy()
+
         # --- LÓGICA DE FILTRAGEM ---
         chart_filters = chart_config.get('filters', [])
         if chart_filters:
@@ -97,7 +100,7 @@ def render_chart(chart_config, df, return_fig=False):
                             df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
                     except Exception:
                         pass
-        
+
         # --- ETAPA 2: VALIDAÇÃO DE CAMPOS ---
         required_cols = []
         chart_type = chart_config.get('type')
@@ -111,7 +114,7 @@ def render_chart(chart_config, df, return_fig=False):
             required_cols.extend(chart_config.get('columns', []))
         elif chart_type == 'pivot_table':
             required_cols.extend([chart_config.get('rows'), chart_config.get('columns'), chart_config.get('values')])
-        
+
         missing_cols = [col for col in required_cols if col and col not in df_to_render.columns]
         if missing_cols:
             if not return_fig:
@@ -127,7 +130,7 @@ def render_chart(chart_config, df, return_fig=False):
 
         if chart_type == 'indicator':
             if return_fig: return None
-            
+
             if source_type == 'jql':
                 with st.spinner("A calcular KPI com JQL..."):
                     val_a = get_jql_issue_count(st.session_state.jira_client, chart_config.get('jql_a'))
@@ -139,7 +142,7 @@ def render_chart(chart_config, df, return_fig=False):
                         elif op == 'Somar (A + B)': final_value = val_a + val_b
                         elif op == 'Subtrair (A - B)': final_value = val_a - val_b
                         elif op == 'Multiplicar (A * B)': final_value = val_a * val_b
-                    
+
                     value_str = f"{int(final_value):,}" if final_value == int(final_value) else f"{final_value:,.2f}"
                     if chart_config.get('jql_operation') == 'Dividir (A / B)': value_str += "%"
                     delta_value = None
@@ -151,7 +154,7 @@ def render_chart(chart_config, df, return_fig=False):
                         delta_str = f"{int(delta_value):,}" if delta_value == int(delta_value) else f"{delta_value:,.2f}"
                     st.metric(label=chart_config.get('title', 'JQL KPI'), value=value_str, delta=delta_str, label_visibility="collapsed")
                 return
-            
+
             else: # Construtor Visual
                 def calculate_value(op, field, data_frame):
                     if not op or not field: return None
@@ -163,7 +166,7 @@ def render_chart(chart_config, df, return_fig=False):
                     if op == 'Soma': return numeric_series.sum()
                     if op == 'Média': return numeric_series.mean()
                     return None
-                
+
                 num_value = calculate_value(chart_config['num_op'], chart_config['num_field'], df_to_render)
                 final_value = num_value
                 if chart_config.get('use_den'):
@@ -171,11 +174,11 @@ def render_chart(chart_config, df, return_fig=False):
                     if den_value is not None and den_value != 0 and num_value is not None:
                         final_value = (num_value / den_value)
                     else: final_value = None
-                
+
                 if final_value is None or pd.isna(final_value):
                     st.metric(label=chart_config.get('title', 'KPI'), value="N/A", label_visibility="collapsed")
                     return
-                
+
                 style = chart_config.get('style', 'Número Grande')
                 if style == 'Número Grande':
                     delta_value, mean_val = None, 0
@@ -199,15 +202,15 @@ def render_chart(chart_config, df, return_fig=False):
                     elif style == 'Gráfico de Bala (Bullet)':
                         fig.add_trace(go.Indicator(mode = "number+gauge", value = final_value, gauge = {'shape': "bullet", 'axis': {'range': [None, target_value]}, 'threshold': {'line': {'color': chart_config.get('gauge_target_color', '#d62728'), 'width': 3}, 'thickness': 0.9, 'value': target_value}, 'steps': [{'range': [0, poor_limit], 'color': "rgba(255, 0, 0, 0.25)"}, {'range': [poor_limit, good_limit], 'color': "rgba(255, 255, 0, 0.35)"}, {'range': [good_limit, target_value], 'color': "rgba(0, 255, 0, 0.35)"}], 'bar': {'color': chart_config.get('gauge_bar_color', '#1f77b4'), 'thickness': 0.5}}))
                         fig.update_layout(height=100, margin=dict(l=1,r=1,t=20,b=20))
-                    
+
         elif chart_type in ['dispersão', 'linha']:
             plot_func = px.scatter if chart_type == "dispersão" else px.line
-            
+
             # Verifica se a cor deve ser usada
             color_by_value = chart_config.get('color_by')
             if color_by_value == 'Nenhum':
                 color_by_value = None # Converte o texto "Nenhum" para o valor Nulo que o Plotly entende
-            
+
             plot_args = {
                 'data_frame': df_to_render,
                 'x': chart_config.get('x'),
@@ -217,34 +220,32 @@ def render_chart(chart_config, df, return_fig=False):
                 'template': template,
                 'text': chart_config.get('y') if chart_config.get('show_data_labels') else None
             }
-            
+
             if chart_type == 'linha':
                 plot_args['markers'] = True
 
             fig = plot_func(**plot_args)
-            
+
             if chart_config.get('show_data_labels'):
                 fig.update_traces(textposition='top center')
-        
+
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
-            from metrics_calculator import calculate_aggregated_metric # Importação local
-            
             measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
             grouped_df = calculate_aggregated_metric(df_to_render, dimension, measure, agg)
             y_axis, values_col = grouped_df.columns[1], grouped_df.columns[1]
-            
+
             show_labels = chart_config.get('show_data_labels', False)
             text_param = y_axis if show_labels else None
 
-            if chart_type == 'barra': 
+            if chart_type == 'barra':
                 fig = px.bar(grouped_df, x='Dimensão', y='Medida', color='Dimensão', title=None, template=template, text=text_param)
-            elif chart_type == 'linha_agregada': 
+            elif chart_type == 'linha_agregada':
                 fig = px.line(grouped_df.sort_values(by='Dimensão'), x='Dimensão', y='Medida', title=None, template=template, markers=True, text=text_param)
-            elif chart_type == 'pizza': 
+            elif chart_type == 'pizza':
                 fig = px.pie(grouped_df, names='Dimensão', values='Medida', title=None, template=template)
-            elif chart_type == 'treemap': 
+            elif chart_type == 'treemap':
                 fig = px.treemap(grouped_df, path=[px.Constant("Todos"), 'Dimensão'], values='Medida', color='Medida', title=None, color_continuous_scale='Blues', template=template)
-            elif chart_type == 'funil': 
+            elif chart_type == 'funil':
                 sorted_df = grouped_df.sort_values(by='Medida', ascending=True)
                 fig = px.funnel(sorted_df, x='Medida', y='Dimensão', title=None, template=template, text=text_param)
 
@@ -259,12 +260,12 @@ def render_chart(chart_config, df, return_fig=False):
                     fig.update_traces(textinfo='percent+label', textposition='inside')
                 elif chart_type == 'treemap':
                     fig.update_traces(textinfo='label+value+percent root')
-        
+
         if return_fig:
             return fig
         elif fig is not None:
             st.plotly_chart(fig, use_container_width=True)
-            
+
     except Exception as e:
         if not return_fig:
             st.error(f"Erro ao gerar a visualização '{chart_config.get('title', 'Desconhecido')}': {e}")
@@ -306,21 +307,21 @@ def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
 class PDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.os_title = "" 
+        self.os_title = ""
 
     def header(self):
         try:
             self.image('images/gauge-logo.svg', 10, 8, 33)
         except Exception as e:
             print(f"Não foi possível carregar o logo: {e}")
-        
+
         self.set_y(13)
         self.set_x(45)
         self.set_font('Roboto', 'B', 16)
-        
+
         remaining_width = self.w - 45 - self.r_margin
         self.cell(remaining_width, 10, self.os_title, 0, 0, 'C')
-        
+
         self.ln(20)
 
     def footer(self):
@@ -351,9 +352,9 @@ def create_os_pdf(os_data):
     pdf.add_font('Roboto', '', str(roboto_regular_path))
     pdf.add_font('Roboto', 'B', str(roboto_bold_path))
     pdf.add_font('Roboto', 'I', str(roboto_italic_path))
-    
+
     pdf.add_page()
-    
+
     pdf.set_font('Roboto', 'B', 12)
     pdf.cell(0, 10, 'Detalhes da Ordem de Serviço', 0, 1, 'L')
     pdf.ln(2)
@@ -381,7 +382,7 @@ def create_os_pdf(os_data):
                     for col in df_table.columns:
                         pdf.cell(col_width, 7, clean_text(str(col)), 1, 0, 'C')
                     pdf.ln()
-                    
+
                     pdf.set_font('Roboto', '', 10)
                     for index, row in df_table.iterrows():
                         y_before_row = pdf.get_y(); x_before_row = pdf.get_x(); max_y = y_before_row
@@ -392,7 +393,7 @@ def create_os_pdf(os_data):
                         pdf.set_y(max_y)
             else:
                 pdf.multi_cell(0, 5, "Nenhum dado na tabela.", 0, 'L')
-        
+
         elif field_type == "Imagem":
             if isinstance(value, list) and value:
                 for img_bytes in value:
@@ -426,19 +427,19 @@ def create_os_pdf(os_data):
             elif isinstance(value, bool): value_str = "Sim" if value else "Não"
             else: value_str = str(value)
             pdf.multi_cell(0, 5, clean_text(value_str), 0, 'L')
-        
+
         pdf.ln(6)
-        
+
     # --- INÍCIO DA ALTERAÇÃO ---
     if os_data.get('items'):
         # Verifica se há espaço para o título, cabeçalho e pelo menos uma linha
         if pdf.get_y() > pdf.page_break_trigger - 30:
             pdf.add_page()
-            
+
         pdf.ln(5)
         pdf.set_font('Roboto', 'B', 12)
         pdf.cell(0, 10, 'Itens do Catálogo Inclusos', 0, 1, 'L')
-        
+
         def draw_catalog_header():
             pdf.set_font('Roboto', 'B', 10)
             pdf.cell(160, 8, 'Item', 1, 0, 'C')
@@ -446,18 +447,18 @@ def create_os_pdf(os_data):
             pdf.set_font('Roboto', '', 10)
 
         draw_catalog_header()
-        
+
         for item in os_data['items']:
             # Estima a altura necessária para o texto do item
             item_text = clean_text(item.get('Item', ''))
             lines = pdf.multi_cell(160, 8, item_text, split_only=True)
             required_height = len(lines) * 8
-            
+
             # Se a altura necessária ultrapassar o limite da página, adiciona uma nova página e o cabeçalho
             if pdf.get_y() + required_height > pdf.page_break_trigger:
                 pdf.add_page()
                 draw_catalog_header()
-            
+
             # Desenha a linha da tabela
             y_before = pdf.get_y()
             pdf.multi_cell(160, 8, item_text, border=1, align='L')
@@ -467,7 +468,7 @@ def create_os_pdf(os_data):
             y_after_valor = pdf.get_y()
             pdf.set_y(max(y_after_item, y_after_valor))
     # --- FIM DA ALTERAÇÃO ---
-            
+
     if os_data.get('assinantes'):
         # Verifica se há espaço para o título das assinaturas e pelo menos uma assinatura
         if pdf.get_y() > pdf.page_break_trigger - 50:
@@ -477,7 +478,7 @@ def create_os_pdf(os_data):
         pdf.set_font('Roboto', 'B', 12)
         pdf.cell(0, 10, 'Assinaturas', 0, 1, 'L')
         pdf.ln(15)
-        
+
         for assinante in os_data['assinantes']:
             if assinante.get('Nome') and assinante.get('Cargo'):
                 # Verifica se há espaço para uma assinatura completa
@@ -496,17 +497,17 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
     """Gera um PDF do dashboard, com gráficos como imagens."""
     pdf = PDF()
     pdf.os_title = f"Dashboard: {dashboard_name}"
-    
+
     base_dir = Path(__file__).resolve().parent
     font_dir = base_dir / "fonts"
     pdf.add_font('Roboto', '', str(font_dir / "Roboto-Regular.ttf"))
     pdf.add_font('Roboto', 'B', str(font_dir / "Roboto-Bold.ttf"))
-    
+
     pdf.add_page()
 
     for tab_name, charts in charts_by_tab.items():
         if not charts: continue
-        
+
         if pdf.page_no() > 1 or pdf.get_y() > 40:
             pdf.add_page()
 
@@ -517,13 +518,13 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
         for chart_config in charts:
             pdf.set_font('Roboto', 'B', 12)
             pdf.multi_cell(0, 8, f"📊 {chart_config.get('title', 'Gráfico sem título')}", 0, 'L')
-            
+
             try:
                 fig = render_chart(chart_config, df, return_fig=True)
                 if fig:
                     img_bytes = fig.to_image(format="png", scale=2, width=800, height=450)
                     img_file = io.BytesIO(img_bytes)
-                    
+
                     if pdf.get_y() + 80 > 297:
                         pdf.add_page()
 
@@ -543,7 +544,7 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
                 pdf.multi_cell(0, 5, safe_error_message)
                 pdf.set_text_color(0, 0, 0)
                 pdf.ln(5)
-                
+
     return pdf.output(dest='S').encode('latin-1')
 
 # --- FUNÇÃO AUXILIAR PARA CÁLCULO DE KPI ---
@@ -1062,7 +1063,7 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             api_key = decrypt_token(api_key_encrypted)
             sg = sendgrid.SendGridAPIClient(api_key)
             from_email = smtp_configs['from_email']
-            
+
             message = Mail(from_email=from_email, to_emails=to_address, subject=subject, html_content=body)
 
             if attachment_bytes and attachment_filename:
@@ -1089,7 +1090,7 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
         except Exception as e:
             print(f"DEBUG: Erro ao enviar com Gmail - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via Gmail: {e}"
-    
+
     return False, "Provedor de e-mail não configurado ou inválido."
 
 # --- NOVAS FUNÇÕES DE VALIDAÇÃO ---
@@ -1117,6 +1118,16 @@ def load_and_process_project_data(jira_client, project_key):
     Busca todas as issues de um projeto no Jira, processa os campos dinâmicos
     e retorna um DataFrame pronto para análise.
     """
+    # --- IMPORTAÇÕES LOCAIS PARA EVITAR ERRO CIRCULAR ---
+    from jira_connector import get_all_project_issues
+    from metrics_calculator import (
+        filter_ignored_issues,
+        find_completion_date,
+        calculate_lead_time,
+        calculate_cycle_time,
+        get_issue_estimation
+    )
+
     with st.spinner(f"A carregar e processar dados do projeto..."):
         all_issues_raw = get_all_project_issues(jira_client, project_key)
         st.session_state['raw_issues_for_fluxo'] = all_issues_raw
@@ -1596,7 +1607,7 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
         return json.loads(cleaned_response)
     except Exception as e:
         return {"error": f"Ocorreu um erro ao analisar a issue do Jira: {e}"}
-    
+
 def load_local_css(file_path):
     """Lê um arquivo CSS e o injeta na aplicação Streamlit."""
     try:
