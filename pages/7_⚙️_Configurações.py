@@ -8,6 +8,17 @@ from pathlib import Path
 import pandas as pd
 import uuid
 
+try:
+    from jira_connector import get_statuses, get_issue_types, get_priorities
+    
+    all_statuses_from_jira = [status.name for status in get_statuses(st.session_state.jira_client)]
+    all_issue_types = [it.name for it in get_issue_types(st.session_state.jira_client)]
+    all_priorities = [p.name for p in get_priorities(st.session_state.jira_client)] # A chamada agora corresponde à definição
+
+except Exception as e:
+    st.error(f"Não foi possível carregar os metadados do Jira (status, tipos, etc.): {e}")
+    all_statuses_from_jira, all_issue_types, all_priorities = [], [], []
+
 st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
 
 st.header("⚙️ Configurações da Aplicação", divider='rainbow')
@@ -389,6 +400,9 @@ with tab_campos:
                 if st.button(f"Salvar Configurações de Métricas para {selected_project_name}", use_container_width=True, key=f"save_metrics_config_{project_key}"):
                     project_config['calculate_time_in_status'] = calculate_time_in_status
                     save_project_config(project_key, project_config)
+
+                    st.session_state.force_cache_clear = True
+
                     st.success("Configuração de métricas avançadas guardada!"); st.rerun()
 
     with tab_email:

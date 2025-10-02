@@ -1,7 +1,7 @@
 # requirements.txt
 streamlit
 pandas
-jira
+jira>=3.0
 plotly
 numpy
 scikit-learn

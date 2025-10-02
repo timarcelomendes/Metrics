@@ -1,18 +1,18 @@
-# pages/5_🏗️_Personalizar Gráficos.py
+# pages/5_🏗️_Construir Gráficos.py
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import uuid, json, os
-from config import DASHBOARD_CHART_LIMIT
-from jira_connector import *
-from metrics_calculator import *
+import uuid
+from pathlib import Path
+from datetime import datetime, timedelta
+import importlib
+import jira_connector
+from jira_connector import get_jql_issue_count
+
+# Supondo que as suas outras importações estejam aqui
 from config import *
 from utils import *
 from security import *
-from pathlib import Path
-from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Personalizar Gráficos", page_icon="🏗️", layout="wide")
 
@@ -31,20 +31,12 @@ else: st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainb
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
 if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
-    
-    if not user_connections:
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
+    # ... (o seu bloco de "nenhuma conexão ativa" permanece aqui)
+    st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+    st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+    st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+    st.stop()
 
 # --- CSS e Funções Auxiliares ---
 st.markdown("""<style> 
@@ -56,10 +48,7 @@ st.markdown("""<style>
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
-    try:
-        st.logo(logo_path, size="large")
-    except FileNotFoundError:
-        st.write("Gauge Metrics") 
+    st.logo(str(logo_path), size="large")
     
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.header("Fonte de Dados")
@@ -67,16 +56,25 @@ with st.sidebar:
     project_names = list(projects.keys())
     
     last_project_key = find_user(st.session_state['email']).get('last_project_key')
-    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and projects else None
-    
+    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), project_names[0] if project_names else None)) if last_project_key else 0
+
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
     if selected_project_name:
         st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
         is_data_loaded = 'dynamic_df' in st.session_state and not st.session_state.dynamic_df.empty
         with st.expander("Carregar Dados", expanded=not is_data_loaded):
+            
+            # --- SOLUÇÃO FINAL E DEFINITIVA ---
             if st.button("Construir Gráficos", use_container_width=True, type="primary", icon="🔎"):
-                df = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+                # 1. Força o Python a reler o ficheiro jira_connector.py do disco
+                importlib.reload(jira_connector)
+                
+                # 2. Chama a função a partir do módulo recarregado
+                df = jira_connector.load_and_process_project_data(
+                    st.session_state.jira_client,
+                    st.session_state.project_key
+                )
                 st.session_state.dynamic_df = df
                 st.rerun()
 
@@ -89,8 +87,34 @@ df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
 
 if df is None or not current_project_key:
-    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Carregar / Atualizar Dados' para começar.")
+    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Construir Gráficos' para começar.")
     st.stop()
+
+st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
+
+# ======================= INÍCIO DO CÓDIGO DE DEBUG =======================
+with st.expander("🐞 DEBUG: Verificar Colunas do DataFrame Carregado", expanded=True):
+    st.warning("Esta é uma mensagem de depuração e pode ser removida mais tarde.")
+    
+    if df is not None:
+        st.write("Abaixo estão as primeiras 5 linhas do DataFrame carregado:")
+        st.dataframe(df.head())
+        
+        st.write("Lista de todas as colunas disponíveis:")
+        # Filtra para mostrar especificamente as colunas que nos interessam
+        tempo_em_status_cols = [col for col in df.columns if col.startswith('Tempo em:')]
+        
+        if tempo_em_status_cols:
+            st.success(f"SUCESSO: {len(tempo_em_status_cols)} colunas de 'Tempo em Status' foram encontradas!")
+            st.write(tempo_em_status_cols)
+        else:
+            st.error("FALHA: Nenhuma coluna 'Tempo em Status' (com o prefixo 'Tempo em:') foi encontrada no DataFrame.")
+            st.info("Isso significa que o cálculo não está a ser executado ou não está a adicionar as colunas ao DataFrame final.")
+            
+    else:
+        st.write("O DataFrame (df) ainda não foi carregado.")
+# ======================== FIM DO CÓDIGO DE DEBUG =========================
+
 
 st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
 
@@ -117,7 +141,11 @@ numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_fi
 date_cols = sorted(list(set(base_date_cols + [f['name'] for f in master_field_list if f['type'] == 'Data'])))
 categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto']])))
 status_time_cols = sorted([col for col in df.columns if col.startswith('Tempo em: ')])
-measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols + ["Tempo em Status"]
+
+# --- CORREÇÃO DA MÉTRICA "Tempo em Status" ---
+measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols
+if project_config.get('calculate_time_in_status', False):
+    measure_options.append("Tempo em Status")
 all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols + status_time_cols)))
 
 # ===== FILTROS DINÂMICOS COM PERÍODOS RELATIVOS =====
@@ -239,42 +267,32 @@ if creation_mode == "Construtor Visual":
 
         elif chart_creator_type == "Gráfico Agregado":
             st.markdown("###### **Configuração do Gráfico Agregado**")
-            
-            # --- Início da Lógica Refatorada ---
-
-            # 1. Widgets de seleção primária
             c1, c2 = st.columns(2)
-            final_dimension, measure_for_chart, agg = None, None, "Soma"
+            time_calc_method = "Soma"
+            new_measure_col = None
 
             with c1:
                 COMBINED_DIMENSION_OPTION = "— Criar Dimensão Combinada —"
                 dim_options = [COMBINED_DIMENSION_OPTION] + categorical_cols
-                dim_selection = st.selectbox("Dimensão (Agrupar por)", options=dim_options, index=dim_options.index(chart_data.get('dimension')) if editing_mode and chart_data.get('dimension') in dim_options else 0)
+                dim_selection_index = dim_options.index(chart_data.get('dimension')) if editing_mode and chart_data.get('dimension') in dim_options else 0
+                dim_selection = st.selectbox("Dimensão (Agrupar por)", options=dim_options, index=dim_selection_index)
                 final_dimension = dim_selection
                 if dim_selection == COMBINED_DIMENSION_OPTION:
                     with st.container(border=True):
                         final_dimension, df_for_preview = combined_dimension_ui(filtered_df, categorical_cols, date_cols, key_suffix="agg")
             
             with c2:
-                measure = st.selectbox("Medida (Calcular)", options=measure_options, key="measure_selector")
+                measure_selection_index = measure_options.index(chart_data.get('measure_selection')) if editing_mode and chart_data.get('measure_selection') in measure_options else 0
+                measure = st.selectbox("Medida (Calcular)", options=measure_options, key="measure_selector", index=measure_selection_index)
 
-            # 2. Bloco condicional para "Tempo em Status" que agora funciona
             if measure == "Tempo em Status":
-                # Extrai os nomes dos status das colunas do DataFrame
                 status_cols_in_df = [col.replace('Tempo em: ', '') for col in df.columns if col.startswith('Tempo em: ')]
-                
-                # Verifica se existem colunas de status para exibir
                 if not status_cols_in_df:
                     st.warning("Não foram encontradas colunas de 'Tempo em Status' nos dados. Verifique a configuração do seu projeto.")
                     measure_for_chart = None
                 else:
-                    # Adicionada uma 'key' para garantir que o widget se comporte como esperado
-                    selected_statuses = st.multiselect(
-                        "Selecione os Status para o cálculo",
-                        options=sorted(status_cols_in_df),
-                        help="Escolha um ou mais status.",
-                        key="status_selector_multiselect"  # <-- Chave única adicionada aqui
-                    )
+                    default_statuses = chart_data.get('selected_statuses', [])
+                    selected_statuses = st.multiselect("Selecione os Status para o cálculo", options=sorted(status_cols_in_df), default=default_statuses, help="Escolha um ou mais status.", key="status_selector_multiselect")
                     
                     if selected_statuses:
                         time_calc_method = st.radio("Calcular a", ["Soma", "Média"], horizontal=True, key="time_calc_method")
@@ -283,46 +301,53 @@ if creation_mode == "Construtor Visual":
                         if time_calc_method == "Soma":
                             new_measure_col = f"Soma de tempo em: {', '.join(selected_statuses)}"
                             df_for_preview[new_measure_col] = df_for_preview[cols_to_process].sum(axis=1)
-                        else:  # Média
+                        else:
                             new_measure_col = f"Média de tempo em: {', '.join(selected_statuses)}"
                             df_for_preview[new_measure_col] = df_for_preview[cols_to_process].mean(axis=1)
                         
                         measure_for_chart = new_measure_col
                     else:
-                        # Garante que nada seja processado se nenhum status for selecionado
                         measure_for_chart = None
             else:
                 measure_for_chart = measure
 
-            # 3. Bloco de configuração final 
             if final_dimension and measure_for_chart:
                 st.divider()
                 c1, c2 = st.columns([1, 2])
                 with c1:
-                    # Determina o tipo de agregação
-                    if measure in categorical_cols:
-                        agg = 'Contagem Distinta'; st.info("Contagem Distinta", icon="🔢")
-                    elif measure in numeric_cols or new_measure_col:
-                        agg_options = ["Soma", "Média"]; agg_idx = agg_options.index(chart_data.get('agg', 'Soma')) if editing_mode and chart_data.get('agg') in agg_options else 0
-                        agg = st.radio("Cálculo Final do Grupo", agg_options, index=agg_idx, horizontal=True)
-                    else: # Contagem de Issues
-                        agg = 'Contagem'; st.info("Contagem", icon="🧮")
+                    if measure_for_chart in categorical_cols:
+                        agg = 'Contagem Distinta'; st.info("Agregação: Contagem Distinta", icon="🔢")
+                    elif measure_for_chart in numeric_cols or new_measure_col:
+                        agg_options = ["Soma", "Média"]; default_agg = 'Soma'
+                        if measure == "Tempo em Status": default_agg = time_calc_method
+                        elif editing_mode and chart_data.get('agg') in agg_options: default_agg = chart_data.get('agg')
+                        agg_idx = agg_options.index(default_agg); agg = st.radio("Cálculo Final do Grupo", agg_options, index=agg_idx, horizontal=True)
+                    else:
+                        agg = 'Contagem'; st.info("Agregação: Contagem", icon="🧮")
+                
                 with c2:
                     format_options = ["Barras", "Linhas", "Pizza", "Treemap", "Funil", "Tabela"]
                     type_map_inv = {'barra': 'Barras', 'linha_agregada': 'Linhas', 'pizza': 'Pizza', 'treemap': 'Treemap', 'funil': 'Funil', 'tabela':'Tabela'}
-                    type_from_data = type_map_inv.get(chart_data.get('type', 'barra')); type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
+                    type_from_data = type_map_inv.get(chart_data.get('type', 'barra'))
+                    type_idx = format_options.index(type_from_data) if editing_mode and type_from_data in format_options else 0
                     chart_type_str = st.radio("Formato", format_options, index=type_idx, horizontal=True)
                     chart_type = chart_type_str.lower().replace("s", "").replace("á", "a")
                 
                 auto_title = f"{agg} de '{measure_for_chart}' por '{final_dimension}'" if chart_type != 'tabela' else f"Tabela de Dados por {final_dimension}"
-                custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg")
+
+                if not editing_mode:
+                    custom_title = st.text_input("Título do Gráfico:", value=auto_title, key=f"chart_title_input_agg_{auto_title}")
+                else:
+                    custom_title = st.text_input("Título do Gráfico:", value=chart_data.get('title', auto_title), key="chart_title_input_agg_edit")
+
                 show_labels = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=chart_data.get('show_data_labels', False))
 
-                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': final_dimension, 'measure': measure_for_chart, 'agg': agg, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
-                if chart_type == 'tabela': chart_config['columns'] = [final_dimension, measure_for_chart]
-            
-            # --- Fim da Lógica Refatorada ---
-            
+                chart_config = {'id': str(uuid.uuid4()), 'type': 'linha_agregada' if chart_type == 'linha' else chart_type, 'dimension': final_dimension, 'measure': measure_for_chart, 'measure_selection': measure, 'agg': agg, 'title': custom_title, 'creator_type': chart_creator_type, 'source_type': 'visual', 'filters': st.session_state.get('creator_filters', []), 'show_data_labels': show_labels}
+                if measure == "Tempo em Status":
+                    chart_config['selected_statuses'] = selected_statuses
+                if chart_type == 'tabela': 
+                    chart_config['columns'] = [final_dimension, measure_for_chart]
+        
         elif chart_creator_type == "Indicador (KPI)":
             kpi_source_type = st.radio("Como deseja criar o seu KPI?", ["Construtor Visual", "Avançado (com JQL)"], horizontal=True, key="kpi_source_selector")
             st.divider()
@@ -420,7 +445,8 @@ if creation_mode == "Construtor Visual":
             auto_title = f"{aggfunc} de '{values}' por '{rows}' e '{columns}'"
             custom_title_input = st.text_input("Título da Tabela:", value=chart_data.get('title', auto_title))
             chart_config = {'id': str(uuid.uuid4()),'type': 'pivot_table','title': custom_title_input.strip(),'rows': rows,'columns': columns,'values': values,'aggfunc': aggfunc,'creator_type': chart_creator_type,'source_type': 'visual','filters': st.session_state.get('creator_filters', [])}
-else:
+
+else: # Modo IA
     st.subheader("🤖 Assistente de Geração de Gráficos com IA")
     st.info("Descreva o gráfico que você quer ver. A IA irá respeitar os filtros da pré-visualização que você definiu acima.")
     prompt = st.text_area("O seu pedido:", placeholder="Ex: Crie um gráfico de barras com a contagem de issues por responsável", height=100)

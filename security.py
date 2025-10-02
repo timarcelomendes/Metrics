@@ -1,4 +1,4 @@
-# security.py
+# security.py (Versão Completa e Corrigida para o Erro Bcrypt)
 
 import streamlit as st
 import pandas as pd
@@ -10,14 +10,14 @@ from config import *
 import string
 import secrets
 import random
-import string
 import os
 import json
 from cryptography.fernet import Fernet, InvalidToken
-from bson.objectid import ObjectId
 import smtplib
-import sendgrid 
+import sendgrid
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from datetime import datetime, timedelta
+import bcrypt
 
 # --- CONSTANTES PADRÃO ---
 AVAILABLE_STANDARD_FIELDS = {
@@ -32,39 +32,23 @@ DEFAULT_COLORS = {
     'status_colors': {'A Fazer': '#808080', 'Em Andamento': '#007bff', 'Concluído': '#28a745'},
     'type_colors': {'Bug': '#d73a49', 'Melhoria': '#28a745', 'Tarefa': '#007bff'}
 }
-
 DEFAULT_PLAYBOOKS = {
     "Geral (Manifesto)": "### Nosso Manifesto de Produto\nEste playbook é o guia oficial...",
     "Discovery": "### O Processo de Discovery\nFazer um bom Product Discovery é a etapa mais crucial..."
 }
 
-from datetime import datetime, timedelta
-import streamlit as st
-
 def check_session_timeout():
-    """
-    Verifica se a sessão do utilizador expirou por inatividade.
-    Retorna True se a sessão expirou, False caso contrário.
-    """
     if 'last_activity_time' not in st.session_state:
-        # Se não houver registo de atividade, considera a sessão inválida.
         return True
-
-    # Define o limite de inatividade para 10 minutos
     timeout_limit = timedelta(minutes=10)
-    
-    # Calcula o tempo decorrido desde a última atividade
     elapsed_time = datetime.now() - st.session_state['last_activity_time']
-
     if elapsed_time > timeout_limit:
-        # Se o tempo for excedido, limpa a sessão
         keys_to_delete = ['email', 'jira_client', 'active_connection', 'projects', 'last_activity_time']
         for key in keys_to_delete:
             if key in st.session_state:
                 del st.session_state[key]
         return True
     else:
-        # Se a sessão for válida, atualiza o tempo da última atividade
         st.session_state['last_activity_time'] = datetime.now()
         return False
 
@@ -80,19 +64,33 @@ def save_config(data, file_path):
         json.dump(data, f, indent=4)
 
 # --- Configuração de Hashing de Senha ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 cipher_suite = Fernet(st.secrets["SECRET_KEY"].encode())
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    """
+    Verifica se uma senha em texto simples corresponde a uma senha com hash
+    usando a biblioteca bcrypt diretamente.
+    """
+    password_bytes = plain_password.encode('utf-8')
+    # O bcrypt lida internamente com a limitação de 72 bytes.
+    hashed_password_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password_bytes, hashed_password_bytes)
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    """
+    Cria um hash de uma senha em texto simples usando a biblioteca bcrypt diretamente.
+    """
+    password_bytes = password.encode('utf-8')
+    # Trunca a senha para 72 bytes para garantir compatibilidade.
+    truncated_bytes = password_bytes[:72]
+    # Gera um "sal" e cria o hash
+    salt = bcrypt.gensalt()
+    hashed_bytes = bcrypt.hashpw(truncated_bytes, salt)
+    return hashed_bytes.decode('utf-8')
 
 # --- Funções de Criptografia de Token ---
 @st.cache_resource
 def get_cipher():
-    """Obtém a instância do cifrador a partir dos secrets."""
     key = st.secrets["ENCRYPTION_KEY"]
     return Fernet(key.encode())
 
@@ -106,76 +104,56 @@ def decrypt_token(encrypted_token):
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
 def get_db_client():
-    """Retorna uma instância do cliente MongoDB, em cache para performance."""
     return MongoClient(st.secrets["MONGO_CONNECTION_STRING"])
 
 def get_db():
-    """Retorna a instância da base de dados."""
     return get_db_client().get_database("dashboard_metrics")
 
 def get_users_collection():
-    """Retorna a coleção de utilizadores."""
     return get_db().get_collection("users")
 
 def get_connections_collection():
-    """Retorna a coleção de conexões Jira."""
     return get_db().get_collection("jira_connections")
 
 def get_dashboards_collection():
-    """Retorna a coleção de dashboards dos utilizadores."""
     return get_db().get_collection("user_dashboards")
 
 def get_app_configs_collection():
-    """Retorna a coleção de configurações globais da aplicação."""
     return get_db().get_collection("app_configs")
 
 def get_project_configs_collection():
-    """Retorna a coleção de configurações por projeto."""
     return get_db().get_collection("project_configs")
 
 # --- Funções de Gestão de Utilizadores ---
 def find_user(email):
-    """
-    Finds a user and automatically migrates their dashboard layout from the old
-    list-based format to the new dictionary-based format if needed.
-    """
     user = get_users_collection().find_one({'email': email})
-    
     if user and 'dashboard_layout' in user:
         needs_update = False
-        # Iterate through each project in the user's dashboard layout
         for project_key, layout in user['dashboard_layout'].items():
-            
-            # --- FIX IS HERE: Check if the layout is the old list format ---
             if isinstance(layout, list):
                 needs_update = True
-                # Convert the old list of charts into the new structure
                 new_layout_structure = {
                     "active_dashboard_id": "main_dashboard",
                     "dashboards": {
                         "main_dashboard": {
                             "id": "main_dashboard",
                             "name": "Dashboard Principal",
-                            "tabs": {"Geral": layout}  # The old list goes into the "Geral" tab
+                            "tabs": {"Geral": layout}
                         }
                     }
                 }
                 user['dashboard_layout'][project_key] = new_layout_structure
-        
         if needs_update:
             save_user_dashboard(email, user['dashboard_layout'])
-            
     return user
 
 def create_user(email, password):
-    """Cria um novo utilizador, garantindo que a senha seja hashed."""
     hashed_password = get_password_hash(password)
     get_users_collection().insert_one({'email': email, 'hashed_password': hashed_password})
 
 
 # --- Funções de Gestão de Conexões Jira ---
 def add_jira_connection(user_email, conn_name, url, api_email, encrypted_token):
-    """Adiciona uma nova conexão Jira para um utilizador."""
     get_connections_collection().insert_one({
         "user_email": user_email, "connection_name": conn_name,
         "jira_url": url, "jira_email": api_email,
@@ -183,16 +161,13 @@ def add_jira_connection(user_email, conn_name, url, api_email, encrypted_token):
     })
 
 def get_user_connections(user_email):
-    """Busca todas as conexões Jira de um utilizador."""
     return list(get_connections_collection().find({"user_email": user_email}))
 
 def delete_jira_connection(connection_id):
-    """Remove uma conexão Jira pelo seu ID."""
     get_connections_collection().delete_one({"_id": ObjectId(connection_id)})
 
 # --- Funções de Gestão de Dashboards ---
 def get_user_dashboard(user_email, project_key):
-    """Busca o layout de um utilizador para um projeto específico."""
     user_data = find_user(user_email)
     if user_data:
         all_dashboards = user_data.get('dashboard_layout', {})
@@ -200,7 +175,6 @@ def get_user_dashboard(user_email, project_key):
     return []
 
 def save_user_dashboard(email, all_dashboard_layouts):
-    """Guarda o objeto completo de dashboards (todos os projetos) para um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'dashboard_layout': all_dashboard_layouts}}
@@ -209,17 +183,14 @@ def save_user_dashboard(email, all_dashboard_layouts):
 # --- Funções de Gestão de Configurações ---
 @st.cache_data
 def get_project_config(project_key):
-    """Busca a configuração de um projeto específico."""
     return get_project_configs_collection().find_one({'_id': project_key})
 
 def save_project_config(project_key, config_data):
-    """Guarda ou atualiza a configuração de um projeto."""
     if '_id' in config_data: del config_data['_id']
     get_project_configs_collection().update_one({'_id': project_key}, {'$set': config_data}, upsert=True)
     get_project_config.clear()
 
 def save_last_project(email, project_key):
-    """Guarda a chave do último projeto acedido pelo utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'last_project_key': project_key}}
@@ -227,7 +198,6 @@ def save_last_project(email, project_key):
 
 @st.cache_data
 def get_global_configs():
-    """Busca as configs globais do MongoDB, incluindo playbooks."""
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
     
@@ -235,13 +205,11 @@ def get_global_configs():
         configs = {
             '_id': 'global_settings',
             'playbooks': DEFAULT_PLAYBOOKS,
-            'admin_emails': ["seu-email-admin@dominio.com"], # Adicione o seu e-mail aqui
-            # ... (outras configurações padrão)
+            'admin_emails': ["seu-email-admin@dominio.com"],
         }
         collection.insert_one(configs)
         return configs
     
-    # Lógica de migração para garantir que a chave 'playbooks' exista
     if 'playbooks' not in configs:
         configs['playbooks'] = DEFAULT_PLAYBOOKS
         save_global_configs(configs)
@@ -249,7 +217,6 @@ def get_global_configs():
     return configs
 
 def save_global_configs(configs_data):
-    """Atualiza as configurações globais no MongoDB e limpa o cache."""
     if '_id' in configs_data: del configs_data['_id']
     get_app_configs_collection().update_one(
         {'_id': 'global_settings'}, 
@@ -260,7 +227,6 @@ def save_global_configs(configs_data):
 
 # --- Funções de Gestão de Dados do Product Hub (Simplificadas) ---
 def get_user_product_hub_data(user_email):
-    """Busca os dados do Product Hub de um utilizador (NÃO inclui playbooks)."""
     user = find_user(user_email)
     if not user: return {}
     hub_data = user.get('product_hub_data', {})
@@ -271,7 +237,6 @@ def get_user_product_hub_data(user_email):
     return hub_data
 
 def save_user_product_hub_data(user_email, hub_data):
-    """Guarda os dados do Product Hub de um utilizador (NÃO inclui playbooks)."""
     data_to_save = hub_data.copy()
     if 'membros' in data_to_save and isinstance(data_to_save['membros'], pd.DataFrame):
         data_to_save['membros'] = data_to_save['membros'].to_dict('records')
@@ -282,43 +247,34 @@ def save_user_product_hub_data(user_email, hub_data):
     )
 
 def save_user_standard_fields(email, standard_fields_list):
-    """Guarda a lista de campos padrão selecionados por um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'standard_fields': standard_fields_list}}
     )
 
 def save_user_custom_fields(email, custom_fields_list):
-    """Guarda a lista de campos personalizados selecionados por um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'enabled_custom_fields': custom_fields_list}}
     )
 
 def save_dashboard_column_preference(project_key, num_columns):
-    """Guarda a preferência de número de colunas do dashboard para um projeto."""
     if not project_key:
         return
-    # Padrão "Ler-Modificar-Escrever" para garantir a integridade dos dados
     project_config = get_project_config(project_key) or {}
     project_config['dashboard_columns'] = num_columns
     save_project_config(project_key, project_config)
 
 def save_last_active_connection(user_email, connection_id):
-    """Guarda o ID da última conexão Jira ativada pelo utilizador."""
-    # Garante que o ID seja um ObjectId válido antes de guardar
     get_users_collection().update_one(
         {'email': user_email},
         {'$set': {'last_active_connection_id': ObjectId(connection_id)}}
     )
 
 def get_connection_by_id(connection_id):
-    """Busca os detalhes de uma conexão específica pelo seu ID."""
-    # Garante que estamos a procurar por um ObjectId
     return get_connections_collection().find_one({"_id": ObjectId(connection_id)})
 
 def delete_user(email):
-    """Remove um utilizador e todas as suas configurações associadas."""
     if find_user(email):
         get_users_collection().delete_one({'email': email})
         get_connections_collection().delete_many({'user_email': email})
@@ -327,7 +283,6 @@ def delete_user(email):
     return False
 
 def generate_temporary_password(length=12):
-    """Gera uma senha aleatória e segura."""
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
     password = ''.join(secrets.choice(alphabet) for i in range(length))
     return password
@@ -337,71 +292,54 @@ def update_user_password(email, new_hashed_password):
 
 
 def save_user_tabs(email, tabs_list):
-    """Guarda a lista de abas personalizadas de um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'user_defined_tabs': tabs_list}}
     )
 
 def save_user_gemini_key(email, encrypted_gemini_key):
-    """Guarda a chave de API do Gemini encriptada para um utilizador específico."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'encrypted_gemini_key': encrypted_gemini_key}}
     )
 
 def save_user_openai_key(email, encrypted_openai_key):
-    """Guarda a chave de API da OpenAI encriptada para um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'encrypted_openai_key': encrypted_openai_key}}
     )
 
 def save_user_ai_provider_preference(email, provider_name):
-    """Guarda o provedor de IA preferido de um utilizador (Gemini ou OpenAI)."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'ai_provider_preference': provider_name}}
     )
 
 def save_user_ai_model_preference(email, model_name):
-    """Guarda o modelo de IA preferido de um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'ai_model_preference': model_name}}
     )
 
 def remove_user_gemini_key(email):
-    """Remove o campo da chave de API do Gemini do documento de um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$unset': {'encrypted_gemini_key': ""}}
     )
 
 def remove_user_openai_key(email):
-    """Remove o campo da chave de API da OpenAI do documento de um utilizador."""
     get_users_collection().update_one(
         {'email': email},
         {'$unset': {'encrypted_openai_key': ""}}
     )
 
 def reset_user_password_with_temporary(email):
-    """
-    Gera uma senha temporária, atualiza-a na base de dados (hashed)
-    e retorna a senha em texto plano para ser enviada por e-mail.
-    """
-    # Gera uma senha aleatória de 10 caracteres
     temp_password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    
-    # Guarda a versão hashed da nova senha
     new_hashed_password = get_password_hash(temp_password)
     update_user_password(email, new_hashed_password)
-    
-    # Retorna a senha em texto plano para o envio do e-mail
     return temp_password
 
 def get_all_users(exclude_email=None):
-    """Retorna uma lista de todos os e-mails de utilizadores, opcionalmente excluindo um."""
     query = {}
     if exclude_email:
         query = {'email': {'$ne': exclude_email}}
@@ -409,10 +347,7 @@ def get_all_users(exclude_email=None):
     return [user['email'] for user in users]
 
 def share_specific_dashboard(source_email, target_emails, project_key, dashboard_id):
-    """Copia um layout de dashboard específico de um utilizador para outros."""
     users_collection = get_users_collection()
-    
-    # 1. Busca o layout do utilizador de origem
     source_user = find_user(source_email)
     source_layout = source_user.get('dashboard_layout', {}).get(project_key, {})
     dashboard_to_share = source_layout.get('dashboards', {}).get(dashboard_id)
@@ -420,9 +355,7 @@ def share_specific_dashboard(source_email, target_emails, project_key, dashboard
     if not dashboard_to_share:
         return False, "Dashboard de origem não encontrado."
         
-    # 2. Atualiza o layout para todos os utilizadores de destino
     for target_email in target_emails:
-        # Usa a notação de ponto para atualizar/criar o dashboard específico
         users_collection.update_one(
             {'email': target_email},
             {'$set': {f'dashboard_layout.{project_key}.dashboards.{dashboard_id}': dashboard_to_share}}
@@ -431,15 +364,10 @@ def share_specific_dashboard(source_email, target_emails, project_key, dashboard
     return True, "Dashboard partilhado com sucesso!"
 
 def get_app_configs():
-    """
-    Busca as configurações globais da aplicação no MongoDB.
-    Se não existirem, cria um documento com os valores padrão.
-    """
     configs_collection = get_app_configs_collection()
     configs = configs_collection.find_one()
     
     if configs is None:
-        # Se não houver configurações, cria o documento inicial ("seeding")
         default_configs = {
             'initial_states': DEFAULT_INITIAL_STATES,
             'done_states': DEFAULT_DONE_STATES,
@@ -452,17 +380,11 @@ def get_app_configs():
     return configs
 
 def save_app_configs(configs_data):
-    """Atualiza as configurações globais da aplicação no MongoDB."""
     configs_collection = get_app_configs_collection()
-    # Usa upsert=True para garantir que o documento seja criado se não existir
     configs_collection.update_one({}, {'$set': configs_data}, upsert=True)
 
 # ===== NOVAS FUNÇÕES PARA GESTÃO DE CREDENCIAIS DE E-MAIL =====
 def get_smtp_configs():
-    """
-    Busca as configurações de e-mail do utilizador atual na base de dados.
-    Agora lida com tokens inválidos de forma robusta.
-    """
     user_email = st.session_state.get('email')
     if not user_email: return {}
     
@@ -485,7 +407,6 @@ def get_smtp_configs():
     return decrypted_configs
 
 def save_smtp_configs(smtp_configs):
-    """Guarda as configurações de e-mail do utilizador atual, encriptando os dados sensíveis."""
     user_email = st.session_state.get('email')
     if not user_email: return False
 
@@ -502,16 +423,13 @@ def save_smtp_configs(smtp_configs):
     return True
 
 def decrypt_smtp_password(encrypted_password):
-    """Desencripta a palavra-passe do SMTP."""
     try:
         return decrypt_token(encrypted_password)
     except Exception:
         return None
     
 def save_user_figma_token(user_email, figma_token):
-    """Encripta e guarda o Token de Acesso Pessoal do Figma para um utilizador."""
     if not figma_token:
-        # Se o token estiver vazio, remove-o da base de dados
         get_users_collection().update_one(
             {'email': user_email},
             {'$unset': {'figma_token': ""}}
@@ -526,7 +444,6 @@ def save_user_figma_token(user_email, figma_token):
     )
 
 def get_user_figma_token(user_email):
-    """Busca e desencripta o Token de Acesso Pessoal do Figma de um utilizador."""
     user = find_user(user_email)
     encrypted_token = user.get('figma_token')
     
@@ -540,14 +457,9 @@ def get_user_figma_token(user_email):
         return None
     
 def get_user_product_hub_data(user_email):
-    """
-    Busca os dados do Product Hub de um utilizador (membros, avaliações, etc.).
-    Se não existirem, retorna uma estrutura vazia.
-    """
     user = find_user(user_email)
     hub_data = user.get('product_hub_data', {})
     
-    # Converte os dados dos membros de volta para um DataFrame do pandas
     if 'membros' in hub_data and isinstance(hub_data['membros'], list):
         hub_data['membros'] = pd.DataFrame(hub_data['membros'])
     else:
@@ -556,11 +468,6 @@ def get_user_product_hub_data(user_email):
     return hub_data
 
 def save_user_product_hub_data(user_email, hub_data):
-    """
-    Guarda os dados do Product Hub de um utilizador.
-    Converte o DataFrame de membros para um formato compatível com JSON/BSON.
-    """
-    # Cria uma cópia para não alterar o objeto original na sessão
     data_to_save = hub_data.copy()
     
     if 'membros' in data_to_save and isinstance(data_to_save['membros'], pd.DataFrame):
@@ -573,59 +480,43 @@ def save_user_product_hub_data(user_email, hub_data):
     )
 
 def get_global_smtp_configs():
-    """
-    Busca as configurações de SMTP diretamente da base de dados,
-    sem depender de um utilizador logado na sessão.
-    """
     try:
-        # Assumindo que as configurações de SMTP estão no documento de configurações globais
-        # ou no primeiro utilizador admin encontrado.
-        # Esta lógica pode precisar de ser ajustada dependendo de onde salvou as configs.
-        configs = get_global_configs() # Usa a função que já lê o configs.json
+        configs = get_global_configs()
         return configs.get("smtp_configs")
     except Exception as e:
         print(f"Erro ao buscar configurações globais de SMTP: {e}")
         return None
     
 def save_global_smtp_configs(smtp_data):
-    """Salva as configurações de SMTP no ficheiro de configurações globais."""
     configs = get_global_configs()
     configs['smtp_configs'] = smtp_data
     save_global_configs(configs)
-    # Limpa o cache para garantir que as alterações sejam vistas por toda a aplicação
     get_global_configs.clear()
 
 def get_global_smtp_configs():
-    """Lê as configurações de SMTP do ficheiro de configurações globais."""
     configs = get_global_configs()
     return configs.get("smtp_configs")
 
 def validate_smtp_connection(provider, from_email, credential):
-    """
-    Tenta estabelecer uma conexão com o provedor de e-mail para validar as credenciais.
-    Retorna (True, "Sucesso") ou (False, "Mensagem de Erro").
-    """
     if provider == 'SendGrid':
         try:
-            # Para o SendGrid, a melhor validação é fazer uma chamada simples à API
             sg = sendgrid.SendGridAPIClient(credential)
             response = sg.client.user.email.get()
             if response.status_code == 200:
                 return True, "Credenciais do SendGrid validadas com sucesso!"
             else:
-                return False, f"Falha na validação do SendGrid. A chave de API pode ser inválida ou não ter permissões. (Status: {response.status_code})"
+                return False, f"Falha na validação do SendGrid. (Status: {response.status_code})"
         except Exception as e:
             return False, f"Erro ao conectar ao SendGrid: A chave de API parece ser inválida. ({e})"
 
     elif provider == 'Gmail (SMTP)':
         try:
-            # Para o Gmail, a validação é tentar fazer login no servidor SMTP
             smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
             smtp_server.login(from_email, credential)
             smtp_server.quit()
             return True, "Credenciais do Gmail validadas com sucesso!"
         except smtplib.SMTPAuthenticationError:
-            return False, "Falha na autenticação com o Gmail. Verifique se o e-mail e a senha de aplicação estão corretos."
+            return False, "Falha na autenticação com o Gmail. Verifique o e-mail e a senha de aplicação."
         except Exception as e:
             return False, f"Erro ao conectar ao SMTP do Gmail: {e}"
             

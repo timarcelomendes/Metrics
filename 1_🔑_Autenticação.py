@@ -92,6 +92,7 @@ else:
                     if st.form_submit_button("Entrar", use_container_width=True, type="primary"):
                         if email and password:
                             user = find_user(email)
+
                             if user and verify_password(password, user['hashed_password']):
                                 if remember_me:
                                     st.session_state['remember_email'] = email

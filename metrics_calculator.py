@@ -6,7 +6,7 @@ from sklearn.linear_model import LinearRegression
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
-from security import get_project_config
+from security import *
 
 # --- Funções Auxiliares de Data ---
 def find_completion_date(issue, project_config):
@@ -18,12 +18,10 @@ def find_completion_date(issue, project_config):
     done_statuses = [s.lower() for s in status_mapping.get('done', [])]
     if not done_statuses or not hasattr(issue.changelog, 'histories'):
         return None
-
     for history in reversed(issue.changelog.histories):
         for item in history.items:
             if item.field == 'status' and item.toString.lower() in done_statuses:
-                completion_date = pd.to_datetime(history.created).tz_localize(None)
-                return completion_date
+                return pd.to_datetime(history.created).tz_localize(None)
     return None
 
 def find_start_date(issue):
@@ -49,35 +47,22 @@ def calculate_lead_time(issue, completion_date):
     return None
 
 def calculate_cycle_time(issue, completion_date, project_config):
-    """
-    Calcula o Cycle Time em dias. Procura o primeiro status de 'Em Andamento'.
-    Se não encontrar, usa a data de criação como fallback para evitar resultados
-    inconsistentes como zero.
-    """
+    """Calcula o Cycle Time em dias."""
     if not completion_date:
         return None
-
     status_mapping = project_config.get('status_mapping', {})
     in_progress_statuses = [s.lower() for s in status_mapping.get('in_progress', [])]
-
     first_start_date = None
-
-    # Tenta encontrar a data de início real se os status estiverem configurados
     if in_progress_statuses and hasattr(issue.changelog, 'histories'):
         start_dates = []
         for history in issue.changelog.histories:
             for item in history.items:
                 if item.field == 'status' and item.toString.lower() in in_progress_statuses:
                     start_dates.append(pd.to_datetime(history.created).tz_localize(None))
-
         if start_dates:
             first_start_date = min(start_dates)
-
-    # Fallback: Se não encontrou uma data de início, usa a data de criação.
     if first_start_date is None:
         first_start_date = pd.to_datetime(issue.fields.created).tz_localize(None)
-
-    # Calcula a diferença e garante que o resultado nunca seja negativo.
     time_delta = completion_date - first_start_date
     return max(0, time_delta.total_seconds() / (24 * 3600))
 
@@ -163,12 +148,9 @@ def filter_ignored_issues(raw_issues_list):
     ]
 
 def get_issue_estimation(issue, estimation_config):
-    """
-    Retorna a estimativa de uma issue com base na configuração do projeto.
-    """
+    """Retorna a estimativa de uma issue com base na configuração do projeto."""
     if not estimation_config:
         return None
-
     field_id = estimation_config.get('id')
     if hasattr(issue.fields, field_id) and getattr(issue.fields, field_id) is not None:
         return getattr(issue.fields, field_id)
@@ -402,19 +384,53 @@ def calculate_trend_and_forecast(burnup_df, trend_weeks):
 
     return fig, forecast_date, trend_weekly_velocity, avg_weekly_velocity
 
-def calculate_time_in_status(issue, target_status):
-    """Calcula o tempo total que uma issue passou em um ou mais status."""
-    total_time = pd.Timedelta(0)
-    try:
+def calculate_time_in_status(issue, all_statuses, completion_date):
+    """
+    Calcula o tempo total que uma issue passou em cada status, usando a data de
+    conclusão para issues finalizadas.
+    """
+    time_in_status = {status: 0.0 for status in all_statuses}
+    status_changes = []
+    if hasattr(issue.changelog, 'histories'):
         for history in issue.changelog.histories:
             for item in history.items:
-                if item.field == 'status':
-                    if item.fromString.lower() in target_status:
-                        # Assume que o tempo no status é a diferença para a próxima mudança
-                        total_time += pd.to_datetime(history.created) - pd.to_datetime(issue.fields.created) # Simplificação
-    except Exception:
-        return 0 # Retorna 0 se houver erro ou o histórico for complexo
-    return total_time.total_seconds() / 86400 # em dias
+                if item.field.lower() == 'status':
+                    change = {
+                        'timestamp': pd.to_datetime(history.created).tz_localize(None),
+                        'from': item.fromString,
+                        'to': item.toString
+                    }
+                    status_changes.append(change)
+    created_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+    if not status_changes:
+        current_status = issue.fields.status.name
+        if current_status in time_in_status:
+            end_time = completion_date if completion_date else pd.Timestamp.now(tz=None)
+            duration_seconds = (end_time - created_date).total_seconds()
+            if duration_seconds > 0:
+                time_in_status[current_status] = duration_seconds / 86400
+        return time_in_status
+    status_changes.sort(key=lambda x: x['timestamp'])
+    first_change = status_changes[0]
+    initial_status = first_change['from']
+    duration = (first_change['timestamp'] - created_date).total_seconds()
+    if duration > 0 and initial_status in time_in_status:
+        time_in_status[initial_status] += duration / 86400
+    for i in range(len(status_changes) - 1):
+        current_change = status_changes[i]
+        next_change = status_changes[i+1]
+        status = current_change['to']
+        duration = (next_change['timestamp'] - current_change['timestamp']).total_seconds()
+        if duration > 0 and status in time_in_status:
+            time_in_status[status] += duration / 86400
+    last_change = status_changes[-1]
+    last_status = last_change['to']
+    if last_status in time_in_status:
+        end_time = completion_date if completion_date else pd.Timestamp.now(tz=None)
+        last_status_duration = (end_time - last_change['timestamp']).total_seconds()
+        if last_status_duration > 0:
+            time_in_status[last_status] += last_status_duration / 86400
+    return time_in_status
 
 def calculate_flow_efficiency(issue, project_config):
     """

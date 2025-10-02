@@ -5,6 +5,7 @@ from jira import JIRA, Issue
 from functools import lru_cache
 import pandas as pd
 import requests
+from stqdm import stqdm
 from requests.auth import HTTPBasicAuth
 import json
 from datetime import datetime, timezone
@@ -14,14 +15,19 @@ from utils import get_start_end_states, find_date_for_status
 
 @lru_cache(maxsize=32)
 def connect_to_jira(server, user_email, api_token):
-    """Conecta-se à instância do Jira Cloud usando um token de API."""
     try:
-        jira_options = {'server': server}
-        jira_client = JIRA(options=jira_options, basic_auth=(user_email, api_token))
-        return jira_client
+        return JIRA(options={'server': server}, basic_auth=(user_email, api_token))
     except Exception as e:
-        print(f"Erro ao conectar ao Jira: {e}")
+        st.error(f"Erro ao conectar ao Jira: {e}")
         return None
+    
+@st.cache_data(ttl=3600, show_spinner="A obter os projetos do Jira...")
+def get_jira_projects(_jira_client):
+    try:
+        return {p.name: p.key for p in _jira_client.projects()}
+    except Exception as e:
+        st.error(f"Não foi possível obter os projetos do Jira: {e}")
+        return {}
 
 @lru_cache(maxsize=32)
 def get_projects(jira_client):
@@ -53,13 +59,12 @@ def get_boards(jira_client, project_key):
         print(f"Erro ao buscar quadros para o projeto {project_key}: {e}")
         return []
 
-@lru_cache(maxsize=32)
-def get_sprint_issues(jira_client, sprint_id):
-    """Busca todas as issues de um sprint específico."""
+@st.cache_data(ttl=3600, show_spinner="A buscar os dados da sprint...")
+def get_sprint_issues(_jira_client, sprint_id, expand='changelog'):
     try:
-        return jira_client.search_issues(f'sprint = {sprint_id}', maxResults=False, fields="*all")
+        return _jira_client.search_issues(f'sprint = {sprint_id}', maxResults=False, expand=expand)
     except Exception as e:
-        st.error(f"Erro ao buscar issues do sprint {sprint_id}: {e}")
+        st.error(f"Erro ao buscar issues da sprint {sprint_id}: {e}")
         return []
 
 def get_issues_by_date_range(jira_client, project_key, start_date=None, end_date=None):
@@ -136,20 +141,13 @@ def get_sprints_in_range(client: JIRA, project_key: str, start_date, end_date):
         st.error(f"Erro ao buscar quadros (boards) do projeto: {e}")
         return []
     
-def get_jql_issue_count(client: JIRA, jql_string: str):
-    """
-    Executa uma consulta JQL e retorna apenas o número total de issues correspondentes.
-    É muito eficiente pois usa maxResults=0.
-    """
-    if not jql_string:
-        return 0
+def get_jql_issue_count(client, jql_query):
+    if not jql_query: return 0
     try:
-        # maxResults=0 é um truque para pedir ao Jira apenas o total, sem os dados das issues
-        search_result = client.search_issues(jql_string, maxResults=0)
-        return search_result.total
-    except Exception as e:
-        st.error(f"Erro ao executar a consulta JQL: {e}")
-        return 0
+        issues = client.search_issues(jql_query, maxResults=0)
+        return issues.total
+    except Exception:
+        return "Erro na consulta JQL"
 
 @st.cache_data(show_spinner="A validar campo no Jira...")
 def validate_jira_field(_client: JIRA, field_id: str):
@@ -167,56 +165,47 @@ def validate_jira_field(_client: JIRA, field_id: str):
         st.error(f"Não foi possível validar o campo no Jira: {e}")
         return False
     
-def search_issues_jql(jira_client, jql, max_results=2000):
-    """
-    Busca issues usando uma query JQL com uma paginação robusta que faz
-    chamadas diretas à API com o método POST para máxima compatibilidade.
-    """
+def search_issues_jql(jira_client, jql, fields=None, max_results=5000):
     all_issues = []
     start_at = 0
-    chunk_size = 100 # O máximo por página para a API de busca
-
+    chunk_size = 100
     server_url = jira_client._options['server']
-    # Acessa as credenciais como uma tupla (índice 0 e 1)
     auth = HTTPBasicAuth(jira_client._session.auth[0], jira_client._session.auth[1])
-    headers = {
-      "Accept": "application/json",
-      "Content-Type": "application/json"
-    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    url = f"{server_url}/rest/api/2/search"
+    # --- CORREÇÃO FINAL: Usando o endpoint exato da mensagem de erro do Jira ---
+    url = f"{server_url}/rest/api/3/search" # Mantido o /search pois o método é POST
 
     while True:
         try:
-            payload = json.dumps({
+            payload_dict = {
                 "jql": jql,
                 "startAt": start_at,
                 "maxResults": chunk_size,
-                "expand": ["changelog"]
-            })
-            
-            response = requests.request("POST", url, data=payload, headers=headers, auth=auth)
+                "expand": ["changelog"],
+                "fields": fields or ["*navigable"]
+            }
+            response = requests.post(url, data=json.dumps(payload_dict), headers=headers, auth=auth, timeout=30)
             response.raise_for_status()
-            
             data = response.json()
             issues_data = data.get('issues', [])
             
-            # Reconstrói os objetos de Issue a partir dos dados JSON
-            chunk = [Issue(options={'server': server_url}, session=jira_client._session, raw=raw_issue_data) for raw_issue_data in issues_data]
-            all_issues.extend(chunk)
-            
-            # Condição de paragem robusta: para se a API retornar menos do que pedimos
-            if len(chunk) < chunk_size:
-                break
-            
-            start_at += len(chunk)
-            
-            if start_at >= max_results:
-                break
+            if not issues_data: break
 
+            all_issues.extend([Issue(options={'server': server_url}, session=jira_client._session, raw=raw) for raw in issues_data])
+            
+            # Condição de paragem mais robusta
+            if len(all_issues) >= data.get('total', 0): break
+            start_at += len(issues_data)
+            if len(all_issues) >= max_results: break
+        
+        except requests.exceptions.HTTPError as e:
+            # Fornece uma mensagem de erro mais clara na interface
+            st.error(f"Erro de comunicação com o Jira (Código: {e.response.status_code}). Verifique se a sua conexão tem permissões para ler issues neste projeto. Detalhes no terminal.")
+            print(f"Detalhes do Erro do Jira: {e.response.text}")
+            return []
         except Exception as e:
-            print(f"ERRO CRÍTICO na chamada direta à API de busca: {e}")
-            st.error("Não foi possível buscar as issues do Jira.")
+            st.error(f"Ocorreu um erro inesperado ao buscar issues: {e}")
             return []
             
     return all_issues
@@ -227,6 +216,25 @@ def get_project_boards(jira_client, project_key):
         return jira_client.boards(projectKeyOrID=project_key)
     except Exception as e:
         print(f"ERRO ao buscar quadros para o projeto {project_key}: {e}")
+        return []
+    
+@st.cache_data(ttl=3600, show_spinner="A buscar as issues do projeto... Isso pode demorar.")
+def get_project_issues(_jira_client, project_key, expand='changelog'):
+    """
+    CORREÇÃO FINAL: Busca todas as issues de um projeto usando o método moderno
+    que funciona com a biblioteca jira-python atualizada.
+    """
+    try:
+        # maxResults=False é o método correto para obter todos os resultados.
+        # Isto só funciona corretamente com uma versão recente da biblioteca.
+        all_issues = _jira_client.search_issues(
+            f'project = "{project_key}" ORDER BY created DESC',
+            maxResults=False,
+            expand=expand
+        )
+        return all_issues
+    except Exception as e:
+        st.error(f"Erro ao buscar issues do projeto '{project_key}': {e}")
         return []
 
 def get_issues_by_board(jira_client, board_id):
@@ -348,174 +356,102 @@ def get_issue_as_dict(jira_client, issue_key):
         print(f"Erro ao buscar ou processar a issue '{issue_key}': {e}")
         raise e
 
-@lru_cache(maxsize=1)
-def get_statuses(jira_client):
-    """Busca todos os status disponíveis na instância do Jira."""
+@st.cache_data(ttl=3600, show_spinner="A obter os status do Jira...")
+def get_statuses(_jira_client):
     try:
-        return jira_client.statuses()
+        return _jira_client.statuses()
     except Exception as e:
-        print(f"Erro ao buscar todos os status: {e}")
+        st.error(f"Erro ao buscar os status: {e}")
         return []
 
-@lru_cache(maxsize=1)
-def get_issue_types(jira_client):
-    """Busca todos os tipos de issue disponíveis na instância do Jira."""
+@st.cache_data(ttl=3600, show_spinner="A obter os tipos de issue do Jira...")
+def get_issue_types(_jira_client):
     try:
-        return jira_client.issue_types()
+        return _jira_client.issue_types()
     except Exception as e:
-        print(f"Erro ao buscar todos os tipos de issue: {e}")
+        st.error(f"Erro ao buscar os tipos de issue: {e}")
         return []
 
-@lru_cache(maxsize=1)
-def get_priorities(jira_client):
-    """Busca todas as prioridades disponíveis na instância do Jira."""
+@st.cache_data(ttl=3600, show_spinner="A obter as prioridades do Jira...")
+def get_priorities(_jira_client):
     try:
-        return jira_client.priorities()
+        return _jira_client.priorities()
     except Exception as e:
-        print(f"Erro ao buscar todas as prioridades: {e}")
+        st.error(f"Erro ao buscar as prioridades: {e}")
         return []
     
-def get_all_jira_fields(jira_client):
-    """
-    Busca todos os campos do Jira e os classifica como padrão ou personalizados,
-    incluindo o tipo de dado mapeado para a aplicação.
-    """
+@st.cache_data(ttl=3600, show_spinner="A carregar todos os campos do Jira...")
+def get_all_jira_fields(_jira_client):
     try:
-        all_fields = jira_client.fields()
-        
-        type_mapping = {
-            'string': 'Texto', 'number': 'Numérico', 'date': 'Data', 
-            'datetime': 'Data', 'user': 'Texto', 'project': 'Texto',
-            'issuetype': 'Texto', 'priority': 'Texto', 'status': 'Texto',
-            'option': 'Texto', 'array': 'Texto'
-        }
-        
-        classified_fields = []
-        for field in all_fields:
-            schema_type = field.get('schema', {}).get('type', 'string')
-            app_type = type_mapping.get(schema_type, 'Texto')
-            
-            classified_fields.append({
-                "id": field['id'],
-                "name": field['name'],
-                "custom": field['custom'],
-                "type": app_type
-            })
-        return classified_fields
+        all_fields = _jira_client.fields()
+        return [
+            {
+                'id': field['id'],
+                'name': field['name'],
+                'custom': field['custom'],
+                'type': field.get('schema', {}).get('type', 'Desconhecido')
+            }
+            for field in all_fields
+        ]
     except Exception as e:
-        st.error(f"Não foi possível buscar os campos do Jira: {e}")
+        st.error(f"Não foi possível carregar os campos do Jira: {e}")
         return []
-    
-@st.cache_data(ttl=3600, show_spinner="A carregar e processar os dados do Jira para o projeto...")
+
+@st.cache_data(ttl=3600, show_spinner="A carregar e processar os dados do projeto do Jira...")
 def load_and_process_project_data(_jira_client, project_key):
-    if 'email' not in st.session_state:
-        st.error("Sessão inválida. Por favor, faça login novamente.")
-        return pd.DataFrame()
+    """
+    Carrega e processa todos os dados de um projeto, aplicando métricas
+    e configurações de forma centralizada.
+    """
+    from metrics_calculator import (
+        calculate_lead_time, calculate_cycle_time,
+        get_issue_estimation, calculate_time_in_status,
+        find_completion_date
+    )
+    from security import get_project_config, find_user
 
-    user_data = find_user(st.session_state['email'])
-    global_configs = get_global_configs()
     project_config = get_project_config(project_key) or {}
+    estimation_config = project_config.get('estimation_field', {})
+    should_calculate = project_config.get('calculate_time_in_status', False)
 
-    user_standard_fields = user_data.get('standard_fields', [])
-    user_custom_fields = user_data.get('enabled_custom_fields', [])
-    all_available_standard = global_configs.get('available_standard_fields', {})
-    all_available_custom = global_configs.get('custom_fields', [])
-    estimation_field_config = project_config.get('estimation_field', {})
+    all_statuses = [s.name for s in get_statuses(_jira_client)]
+    issues = get_project_issues(_jira_client, project_key)
 
-    fields_to_fetch = ["summary", "issuetype", "status", "assignee", "reporter", "priority", "created", "updated", "resolutiondate", "labels", "project", "parent", "fixVersions", "components", "statuscategorychangedate"]
-
-    for field_name in user_standard_fields:
-        field_id = all_available_standard.get(field_name, {}).get('id')
-        if field_id: fields_to_fetch.append(field_id)
-    for custom_field_name in user_custom_fields:
-        field_details = next((f for f in all_available_custom if f.get('name') == custom_field_name), None)
-        if field_details and field_details.get('id'): fields_to_fetch.append(field_details['id'])
-    if estimation_field_config and estimation_field_config.get('id'):
-        fields_to_fetch.append(estimation_field_config['id'])
-    fields_to_fetch = list(set(fields_to_fetch))
-
-    jql_query = f'project = "{project_key}"'
-    issues_list, start_at, max_results = [], 0, 100
-    initial_search = _jira_client.search_issues(jql_query, startAt=0, maxResults=0)
-    total_issues = initial_search.total
-
-    if total_issues == 0:
+    if not issues:
         st.warning("Nenhuma issue encontrada para este projeto.")
         return pd.DataFrame()
 
-    progress_bar = st.progress(0, text=f"Buscando {total_issues} issues do projeto {project_key}...")
-    while start_at < total_issues:
-        issues_chunk = _jira_client.search_issues(jql_query, startAt=start_at, maxResults=max_results, fields=fields_to_fetch, expand='changelog')
-        issues_list.extend(issues_chunk)
-        start_at += len(issues_chunk)
-        progress_bar.progress(min(start_at / total_issues, 1.0), text=f"Buscando {total_issues} issues... ({start_at}/{total_issues})")
-    progress_bar.empty()
+    data = []
+    for issue in stqdm(issues, desc=f"A processar {len(issues)} issues..."):
+        completion_date = find_completion_date(issue, project_config)
+        issue_data = {
+            'Issue': issue.key,
+            'Tipo de Issue': issue.fields.issuetype.name,
+            'Status': issue.fields.status.name,
+            'Categoria de Status': issue.fields.status.statusCategory.name,
+            'Responsável': issue.fields.assignee.displayName if issue.fields.assignee else 'Não atribuído',
+            'Prioridade': issue.fields.priority.name if issue.fields.priority else 'N/A',
+            'Data de Criação': pd.to_datetime(issue.fields.created).tz_localize(None).normalize(),
+            'Data de Conclusão': completion_date,
+            'Lead Time (dias)': calculate_lead_time(issue, completion_date),
+            'Cycle Time (dias)': calculate_cycle_time(issue, completion_date, project_config),
+            estimation_config.get('name', 'Estimativa'): get_issue_estimation(issue, estimation_config) if estimation_config else None,
+        }
+        if should_calculate:
+            time_in_each_status = calculate_time_in_status(issue, all_statuses, completion_date)
+            for status_name, time_days in time_in_each_status.items():
+                if time_days and time_days > 0:
+                    issue_data[f'Tempo em: {status_name}'] = time_days
+        data.append(issue_data)
 
-    all_fields_map = {field['id']: field['name'] for field in _jira_client.fields()}
-    
-    processed_data = []
-    for issue in issues_list:
-        issue_data = {'Issue': issue.key}
-        for field_id in fields_to_fetch:
-            field_name = all_fields_map.get(field_id, field_id)
-            field_value = getattr(issue.fields, field_id, None)
-            if field_value is not None:
-                if hasattr(field_value, 'displayName'): issue_data[field_name] = field_value.displayName
-                elif hasattr(field_value, 'value'): issue_data[field_name] = field_value.value
-                elif isinstance(field_value, list) and all(hasattr(item, 'name') for item in field_value): issue_data[field_name] = ', '.join(item.name for item in field_value)
-                else: issue_data[field_name] = str(field_value)
-        
-        status_times = defaultdict(float)
-        last_change_date = pd.to_datetime(issue.fields.created).replace(tzinfo=None)
-        
-        initial_status = None
-        for history in sorted(issue.changelog.histories, key=lambda h: h.created):
-            for item in history.items:
-                if item.field == 'status':
-                    initial_status = item.fromString
-                    break
-            if initial_status: break
-        
-        current_status = initial_status or (issue.fields.status.name if hasattr(issue.fields.status, 'name') else None)
-
-        if current_status:
-            for history in sorted(issue.changelog.histories, key=lambda h: h.created):
-                for item in history.items:
-                    if item.field == 'status':
-                        change_date = pd.to_datetime(history.created).replace(tzinfo=None)
-                        time_spent = (change_date - last_change_date).total_seconds() / 86400
-                        status_times[current_status] += time_spent
-                        current_status = item.toString
-                        last_change_date = change_date
-            
-            end_date = pd.to_datetime(issue.fields.resolutiondate).replace(tzinfo=None) if issue.fields.resolutiondate else pd.to_datetime(datetime.now())
-            time_spent = (end_date - last_change_date).total_seconds() / 86400
-            if current_status:
-                status_times[current_status] += time_spent
-        issue_data['status_times_days'] = dict(status_times)
-
-        initial_state, done_state = get_start_end_states(project_key)
-        created_date = pd.to_datetime(issue.fields.created).replace(tzinfo=None)
-        resolution_date = pd.to_datetime(issue.fields.resolutiondate).replace(tzinfo=None) if issue.fields.resolutiondate else None
-        start_date = find_date_for_status(issue.changelog, initial_state, default=created_date)
-        
-        issue_data.update({'Data de Criação': created_date, 'Data de Início': start_date, 'Data de Conclusão': resolution_date})
-        if resolution_date:
-            issue_data['Lead Time (dias)'] = (resolution_date - created_date).days
-            if start_date: issue_data['Cycle Time (dias)'] = (resolution_date - start_date).days
-        if hasattr(issue.fields, 'status') and hasattr(issue.fields.status, 'statusCategory'):
-            issue_data['Categoria de Status'] = issue.fields.status.statusCategory.name
-        processed_data.append(issue_data)
-        
-    df = pd.DataFrame(processed_data)
-    
-    if 'status_times_days' in df.columns:
-        status_df = df['status_times_days'].apply(pd.Series).fillna(0)
-        status_df = status_df.add_prefix('Tempo em: ')
-        df = pd.concat([df.drop(columns=['status_times_days']), status_df], axis=1)
-
-    final_field_names = {**{conf.get('id'): name for name, conf in all_available_standard.items()}, **{field.get('id'): field.get('name') for field in all_available_custom}}
-    if estimation_field_config.get('id'):
-        final_field_names[estimation_field_config['id']] = estimation_field_config.get('name')
-    df.rename(columns=final_field_names, inplace=True)
+    if not data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data)
+    user_data = find_user(st.session_state['email'])
+    enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+    all_custom_fields_map = {f['name']: f['id'] for f in st.session_state.get('global_configs', {}).get('custom_fields', [])}
+    for field_name in enabled_custom_fields:
+        field_id = all_custom_fields_map.get(field_name)
+        if field_id:
+            df[field_name] = [getattr(issue.fields, field_id, None) for issue in issues]
     return df
