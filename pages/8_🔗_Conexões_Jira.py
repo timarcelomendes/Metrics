@@ -5,6 +5,7 @@ from security import *
 from bson.objectid import ObjectId
 from pathlib import Path
 import os
+from config import SESSION_TIMEOUT_MINUTES
 from utils import is_valid_url, is_valid_email
 from jira_connector import connect_to_jira, get_projects
 
@@ -14,6 +15,12 @@ st.header("🔗 Gerir Conexões Jira", divider='rainbow')
 
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
 
 email = st.session_state['email']
 

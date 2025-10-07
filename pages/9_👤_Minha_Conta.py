@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from security import *
 from utils import send_email_with_attachment, validate_smtp_connection
+from config import SESSION_TIMEOUT_MINUTES
 
 st.set_page_config(page_title="Minha Conta", page_icon="👤", layout="wide")
 
@@ -13,6 +14,12 @@ st.header("👤 Minha Conta", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
 
 # --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
@@ -185,86 +192,96 @@ with tab_ai:
     st.subheader("🤖 Configurações de Inteligência Artificial")
     st.caption("Selecione o seu provedor de IA preferido e insira a sua chave de API pessoal.")
 
-    with st.container(border=True):
-        provider_options = ["Google Gemini", "OpenAI (ChatGPT)"]
-        user_provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    provider_options = ["Google Gemini", "OpenAI (ChatGPT)"]
+    user_provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    selected_provider = st.radio(
+        "Selecione o seu Provedor de IA:",
+        provider_options,
+        index=provider_options.index(user_provider) if user_provider in provider_options else 0,
+        horizontal=True
+    )
+
+    if selected_provider != user_provider:
+        update_user_configs(email, {'ai_provider_preference': selected_provider})
+        st.rerun()
+
+    st.divider()
+
+    if selected_provider == "Google Gemini":
+        st.markdown("##### Configuração do Google Gemini")
+        key_exists = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
+        if key_exists: st.success("Uma chave de API do Gemini já está configurada.", icon="✅")
         
-        selected_provider = st.radio(
-            "Selecione o seu Provedor de IA Preferido:",
-            provider_options,
-            index=provider_options.index(user_provider) if user_provider in provider_options else 0,
-            horizontal=True
+        with st.form("gemini_form"):
+            api_key_input = st.text_input("Chave de API do Google Gemini", type="password", placeholder="Cole a sua chave aqui para adicionar ou alterar")
+            
+            GEMINI_MODELS = {
+                "Flash (Rápido, Multimodal)": "gemini-flash-latest",
+                "Pro (Avançado, Estável)": "gemini-pro-latest"
+            }
+            current_model_id = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model_names_list = list(GEMINI_MODELS.keys())
+            default_model_index = model_names_list.index(next((name for name, model_id in GEMINI_MODELS.items() if model_id == current_model_id), "Flash (Rápido, Multimodal)"))
+            
+            selected_model_name = st.selectbox("Modelo Gemini Preferido:", options=model_names_list, index=default_model_index)
+            st.caption("[Crie uma chave gratuitamente no Google AI Studio](https://aistudio.google.com/app/apikey)")
+            
+            s1, s2 = st.columns(2)
+            if s1.form_submit_button("Salvar Configurações Gemini", use_container_width=True, type="primary"):
+                updates = {'ai_model_preference': GEMINI_MODELS[selected_model_name]}
+                if api_key_input:
+                    updates['encrypted_gemini_key'] = encrypt_token(api_key_input)
+                update_user_configs(email, updates)
+                st.success("Configurações do Gemini guardadas!"); st.rerun()
+            if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
+                update_user_configs(email, {'encrypted_gemini_key': None})
+                st.success("Chave do Gemini removida!"); st.rerun()
+
+    elif selected_provider == "OpenAI (ChatGPT)":
+        st.markdown("##### Configuração da OpenAI (ChatGPT)")
+        st.info("Ao selecionar OpenAI, a aplicação utilizará o modelo **GPT-4o**.", icon="✨")
+        
+        key_exists = 'encrypted_openai_key' in user_data and user_data['encrypted_openai_key']
+        if key_exists: st.success("Uma chave de API da OpenAI já está configurada.", icon="✅")
+
+        with st.form("openai_form"):
+            api_key_input = st.text_input("Chave de API da OpenAI", type="password", placeholder="Cole a sua chave de API aqui (sk-...)")
+            st.caption("[Crie uma chave no site da OpenAI](https://platform.openai.com/api-keys)")
+
+            s1, s2 = st.columns(2)
+            if s1.form_submit_button("Salvar Chave OpenAI", use_container_width=True, type="primary"):
+                if api_key_input:
+                    update_user_configs(email, {'encrypted_openai_key': encrypt_token(api_key_input)})
+                    st.success("Chave da OpenAI guardada!"); st.rerun()
+                else:
+                    st.warning("Por favor, insira uma chave para salvar.")
+            if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
+                update_user_configs(email, {'encrypted_openai_key': None})
+                st.success("Chave da OpenAI removida!"); st.rerun()
+
+with tab_tokens:
+    st.subheader("Configuração do Figma")
+    st.info("Para utilizar a funcionalidade de gerar histórias a partir do Figma, é necessário fornecer o seu Token de Acesso Pessoal.")
+    
+    with st.form("figma_token_form"):
+        figma_token_encrypted = user_data.get('encrypted_figma_token')
+        figma_token_status = "✅ Token configurado." if figma_token_encrypted else "❌ Nenhum token configurado."
+        
+        st.caption(f"Status do Token do Figma: {figma_token_status}")
+        
+        figma_token = st.text_input(
+            "Seu Token de Acesso Pessoal do Figma",
+            type="password",
+            placeholder="Insira aqui para salvar ou atualizar",
+            help="Pode gerar um novo token nas configurações do seu perfil no Figma."
         )
 
-        if selected_provider != user_provider:
-            save_user_ai_provider_preference(email, selected_provider)
-            st.session_state['user_data'] = find_user(email)
-            st.rerun()
-        
-        st.divider()
-
-        if selected_provider == "Google Gemini":
-            key_exists = 'encrypted_gemini_key' in user_data and user_data['encrypted_gemini_key']
-            if key_exists: st.success("Uma chave de API do Gemini já está configurada.", icon="✅")
-            else:
-                st.warning("Nenhuma chave de API do Gemini configurada.", icon="⚠️")
-            
-            with st.form("gemini_form"):
-                api_key_input = st.text_input("Chave de API do Google Gemini", type="password", placeholder="Cole a sua chave aqui para adicionar ou alterar")
-                model_options = {"Gemini 1.5 Pro (Mais poderoso)": "gemini-1.5-pro-latest", "Gemini 1.5 Flash (Mais rápido)": "gemini-1.5-flash-latest"}
-                user_model = user_data.get('ai_model_preference', 'gemini-1.5-pro-latest')
-                default_model_name = next((name for name, model_id in model_options.items() if model_id == user_model), None)
-                selected_model_name = st.selectbox("Modelo Gemini Preferido", options=model_options.keys(), index=list(model_options.keys()).index(default_model_name) if default_model_name else 0)
-                st.caption("[Crie uma chave gratuitamente no Google AI Studio](https://aistudio.google.com/app/apikey)")
-                
-                s1, s2 = st.columns([1,1])
-                if s1.form_submit_button("Salvar / Alterar", use_container_width=True, type="primary"):
-                    if api_key_input: save_user_gemini_key(email, encrypt_token(api_key_input))
-                    if 'selected_model_name' in locals(): save_user_ai_model_preference(email, model_options[selected_model_name])
-                    st.session_state['user_data'] = find_user(email); st.success("Configurações do Gemini guardadas!"); st.rerun()
-                if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
-                    remove_user_gemini_key(email)
-                    st.session_state['user_data'] = find_user(email); st.success("Chave do Gemini removida!"); st.rerun()
-
-        else: # OpenAI
-            key_exists = 'encrypted_openai_key' in user_data and user_data['encrypted_openai_key']
-            if key_exists: st.success("Uma chave de API da OpenAI já está configurada.", icon="✅")
-            else:
-                st.warning("Nenhuma chave de API do OpenAI configurada.", icon="⚠️")
-            
-            with st.form("openai_form"):
-                api_key_input = st.text_input("Chave de API da OpenAI", type="password", placeholder="Cole a sua chave de API aqui (sk-...)")
-                st.caption("[Crie uma chave no site da OpenAI](https://platform.openai.com/api-keys)")
-
-                s1, s2 = st.columns([1,1])
-                if s1.form_submit_button("Salvar / Alterar Chave", use_container_width=True, type="primary"):
-                    if api_key_input:
-                        save_user_openai_key(email, encrypt_token(api_key_input))
-                        st.session_state['user_data'] = find_user(email); st.success("Chave da OpenAI guardada!"); st.rerun()
-                    else:
-                        st.warning("Por favor, insira uma chave para salvar.")
-                if s2.form_submit_button("Remover Chave", use_container_width=True, disabled=not key_exists):
-                    remove_user_openai_key(email)
-                    st.session_state['user_data'] = find_user(email); st.success("Chave da OpenAI removida!"); st.rerun()
-
-# ===== ABA DE TOKENS E CREDENCIAIS =====
-with tab_tokens:
-    st.subheader("Gestão de Tokens de API e Credenciais de E-mail")
-    st.caption("Guarde as suas credenciais aqui. Elas são guardadas de forma encriptada na base de dados.")
-    
-    # --- Seção do Figma ---
-    with st.container(border=True):
-        with st.form("figma_token_form"):
-            st.markdown("**Token de Acesso Pessoal do Figma**")
-            current_figma_token = get_user_figma_token(email)
-            figma_token = st.text_input(
-                "Seu Token do Figma", 
-                value=current_figma_token or "",
-                type="password",
-                help="O seu token é guardado de forma encriptada."
-            )
-            
-            if st.form_submit_button("Salvar Token do Figma", use_container_width=True):
-                save_user_figma_token(email, figma_token)
-                st.success("Token do Figma guardado com sucesso!")
+        if st.form_submit_button("Salvar Token do Figma", use_container_width=True, type="primary"):
+            if figma_token:
+                updates = {'encrypted_figma_token': encrypt_token(figma_token)}
+                update_user_configs(st.session_state['email'], updates)
+                st.success("O seu token do Figma foi salvo com sucesso!")
                 st.rerun()
+            else:
+                st.warning("Por favor, insira um token para salvar.")

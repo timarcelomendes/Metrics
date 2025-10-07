@@ -10,7 +10,7 @@ import uuid
 import base64
 import google.generativeai as genai
 from security import find_user, decrypt_token
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta 
 import openai
 from sklearn.linear_model import LinearRegression
 import numpy as np
@@ -63,213 +63,187 @@ def convert_dates_in_filters(filters):
         sanitized_filters.append(new_filter)
     return sanitized_filters
 
-def render_chart(chart_config, df, return_fig=False):
+def parse_dates_in_filters(filters):
     """
-    Renderiza um único gráfico, aplicando os seus próprios filtros ao dataframe original.
-    Esta é a versão final e completa com a correção para textposition.
+    Percorre uma lista de filtros e converte strings de data ISO de volta para objetos de data.
+    VERSÃO CORRIGIDA: Usa datetime.strptime para ser mais explícito.
     """
-    # --- IMPORTAÇÃO LOCAL PARA EVITAR ERRO CIRCULAR ---
-    from jira_connector import get_jql_issue_count
-    from metrics_calculator import calculate_aggregated_metric
+    processed_filters = []
+    for f in filters:
+        new_filter = f.copy()
+        op = new_filter.get('operator')
+        value = new_filter.get('value')
+        
+        if op == 'Período Personalizado' and isinstance(value, list) and len(value) == 2:
+            try:
+                # --- INÍCIO DA CORREÇÃO ---
+                # Usa um método mais explícito que remove a ambiguidade para o Pylance
+                start_date = datetime.strptime(value[0], '%Y-%m-%d').date()
+                end_date = datetime.strptime(value[1], '%Y-%m-%d').date()
+                new_filter['value'] = (start_date, end_date)
+                # --- FIM DA CORREÇÃO ---
+            except (TypeError, ValueError):
+                pass
+        processed_filters.append(new_filter)
+    return processed_filters
 
+def render_chart(chart, df):
+    """
+    Renderiza uma visualização (gráfico, KPI, tabela) com base na sua configuração
+    e num DataFrame de dados.
+    """
+    if not isinstance(chart, dict) or not chart.get('type'):
+        st.warning("Configuração de visualização inválida.")
+        return
+
+    df_filtered = df.copy()
+    
+    if chart.get('measure_selection') == 'Tempo em Status' and 'measure' in chart:
+        measure_col_name = chart['measure']
+        if measure_col_name not in df_filtered.columns:
+            selected_statuses = chart.get('selected_statuses', [])
+            agg_method = chart.get('agg')
+            if selected_statuses and agg_method:
+                cols_to_process = [f'Tempo em: {s}' for s in selected_statuses]
+                missing_cols = [col for col in cols_to_process if col not in df_filtered.columns]
+                if missing_cols:
+                    st.warning(f"Não foi possível renderizar: A(s) coluna(s) base '{', '.join(missing_cols)}' não foi/foram encontrada(s) nos dados.")
+                    return
+                if agg_method == "Soma":
+                    df_filtered[measure_col_name] = df_filtered[cols_to_process].sum(axis=1)
+                elif agg_method == "Média":
+                    df_filtered[measure_col_name] = df_filtered[cols_to_process].mean(axis=1)
+
+    if 'filters' in chart and chart['filters']:
+        filters = parse_dates_in_filters(chart['filters'])
+        for f in filters:
+            field, op, val = f.get('field'), f.get('operator'), f.get('value')
+            if field and op and val is not None and field in df_filtered.columns:
+                try:
+                    if op == 'é igual a': df_filtered = df_filtered[df_filtered[field] == val]
+                    elif op == 'não é igual a': df_filtered = df_filtered[df_filtered[field] != val]
+                    elif op == 'está em': df_filtered = df_filtered[df_filtered[field].isin(val)]
+                    elif op == 'não está em': df_filtered = df_filtered[~df_filtered[field].isin(val)]
+                    elif op == 'maior que': df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce') > val]
+                    elif op == 'menor que': df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce') < val]
+                    elif op == 'entre' and len(val) == 2:
+                        df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce').between(val[0], val[1])]
+                except Exception: pass
+    
     try:
-        df_to_render = df.copy()
+        chart_type = chart.get('type')
+        selected_theme_name = chart.get('color_theme', list(COLOR_THEMES.keys())[0])
+        color_sequence = COLOR_THEMES.get(selected_theme_name)
+        color_by_param = chart.get('color_by')
+        if color_by_param == "Nenhum":
+            color_by_param = None
 
-        # --- LÓGICA DE FILTRAGEM ---
-        chart_filters = chart_config.get('filters', [])
-        if chart_filters:
-            for f in chart_filters:
-                field, op, val = f.get('field'), f.get('operator'), f.get('value')
-                if field and op and val is not None and field in df_to_render.columns:
-                    try:
-                        if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
-                        elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
-                        elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
-                        elif op == 'não está em': df_to_render = df_to_render[~df_to_render[field].isin(val)]
-                        elif op == 'maior que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') > val]
-                        elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
-                        elif op == 'entre' and isinstance(val, list) and len(val) == 2:
-                            df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
-                        elif op == "Períodos Relativos":
-                            days_map = {"Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30, "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120, "Últimos 150 dias": 150, "Últimos 180 dias": 180}
-                            end_date = pd.to_datetime(datetime.now().date())
-                            start_date = end_date - timedelta(days=days_map.get(val, 0))
-                            df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
-                        elif op == "Período Personalizado" and len(val) == 2:
-                            start_date, end_date = pd.to_datetime(val[0]), pd.to_datetime(val[1])
-                            df_to_render = df_to_render[(pd.to_datetime(df_to_render[field]) >= start_date) & (pd.to_datetime(df_to_render[field]) <= end_date)]
-                    except Exception:
-                        pass
-
-        # --- ETAPA 2: VALIDAÇÃO DE CAMPOS ---
-        required_cols = []
-        chart_type = chart_config.get('type')
+        if df_filtered.empty and chart.get('source_type') != 'jql':
+            st.info("Nenhum dado para exibir com os filtros aplicados.")
+            return
+            
         if chart_type in ['dispersão', 'linha']:
-            required_cols.extend([chart_config.get('x'), chart_config.get('y')])
-            if chart_config.get('color_by') and chart_config.get('color_by') != 'Nenhum': required_cols.append(chart_config.get('color_by'))
+            if 'x' not in chart or 'y' not in chart:
+                st.error(f"Configuração de gráfico inválida. Gráficos do tipo '{chart_type}' requerem a definição dos eixos 'x' e 'y'. A IA pode ter gerado uma configuração incompleta.")
+                return
+            fig = px.scatter(df_filtered, x=chart['x'], y=chart['y'], color=color_by_param, color_discrete_sequence=color_sequence) if chart_type == 'dispersão' else px.line(df_filtered, x=chart['x'], y=chart['y'], color=color_by_param, color_discrete_sequence=color_sequence)
+            st.plotly_chart(fig, use_container_width=True)
+        
         elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
-            required_cols.append(chart_config.get('dimension'))
-            if chart_config.get('measure') != 'Contagem de Issues': required_cols.append(chart_config.get('measure'))
-        elif chart_type == 'tabela':
-            required_cols.extend(chart_config.get('columns', []))
-        elif chart_type == 'pivot_table':
-            required_cols.extend([chart_config.get('rows'), chart_config.get('columns'), chart_config.get('values')])
-
-        missing_cols = [col for col in required_cols if col and col not in df_to_render.columns]
-        if missing_cols:
-            if not return_fig:
-                st.warning(f"Não foi possível renderizar esta visualização.", icon="⚠️")
-                st.error(f"Motivo: O(s) campo(s) **{', '.join(missing_cols)}** não foi/foram encontrado(s) nos dados atuais.")
-                st.badge("Habilite o campo que deseja utilizar e **atualize os dados**", color='orange')
-            return None
-
-        # --- ETAPA 3: RENDERIZAÇÃO ---
-        source_type = chart_config.get('source_type', 'visual')
-        fig = None
-        template = "plotly_white"
-
-        if chart_type == 'indicator':
-            if return_fig: return None
-
-            if source_type == 'jql':
-                with st.spinner("A calcular KPI com JQL..."):
-                    val_a = get_jql_issue_count(st.session_state.jira_client, chart_config.get('jql_a'))
-                    final_value = float(val_a)
-                    if chart_config.get('jql_b') and chart_config.get('jql_operation'):
-                        val_b = get_jql_issue_count(st.session_state.jira_client, chart_config.get('jql_b'))
-                        op = chart_config.get('jql_operation')
-                        if op == 'Dividir (A / B)': final_value = (val_a / val_b) * 100 if val_b > 0 else 0
-                        elif op == 'Somar (A + B)': final_value = val_a + val_b
-                        elif op == 'Subtrair (A - B)': final_value = val_a - val_b
-                        elif op == 'Multiplicar (A * B)': final_value = val_a * val_b
-
-                    value_str = f"{int(final_value):,}" if final_value == int(final_value) else f"{final_value:,.2f}"
-                    if chart_config.get('jql_operation') == 'Dividir (A / B)': value_str += "%"
-                    delta_value = None
-                    if chart_config.get('jql_baseline'):
-                        baseline_value = get_jql_issue_count(st.session_state.jira_client, chart_config.get('jql_baseline'))
-                        delta_value = final_value - baseline_value
-                    delta_str = None
-                    if delta_value is not None:
-                        delta_str = f"{int(delta_value):,}" if delta_value == int(delta_value) else f"{delta_value:,.2f}"
-                    st.metric(label=chart_config.get('title', 'JQL KPI'), value=value_str, delta=delta_str, label_visibility="collapsed")
+            if 'dimension' not in chart or 'measure' not in chart:
+                st.error(f"Configuração de gráfico inválida. Gráficos agregados requerem 'dimension' e 'measure'. A IA pode ter gerado uma configuração incompleta.")
                 return
 
-            else: # Construtor Visual
-                def calculate_value(op, field, data_frame):
-                    if not op or not field: return None
-                    if field == 'Contagem de Issues': return len(data_frame)
-                    if field not in data_frame.columns: return None
-                    if op == 'Contagem': return len(data_frame.dropna(subset=[field]))
-                    numeric_series = pd.to_numeric(data_frame[field], errors='coerce')
-                    if numeric_series.isnull().all(): return None
-                    if op == 'Soma': return numeric_series.sum()
-                    if op == 'Média': return numeric_series.mean()
-                    return None
-
-                num_value = calculate_value(chart_config['num_op'], chart_config['num_field'], df_to_render)
-                final_value = num_value
-                if chart_config.get('use_den'):
-                    den_value = calculate_value(chart_config['den_op'], chart_config['den_field'], df_to_render)
-                    if den_value is not None and den_value != 0 and num_value is not None:
-                        final_value = (num_value / den_value)
-                    else: final_value = None
-
-                if final_value is None or pd.isna(final_value):
-                    st.metric(label=chart_config.get('title', 'KPI'), value="N/A", label_visibility="collapsed")
-                    return
-
-                style = chart_config.get('style', 'Número Grande')
-                if style == 'Número Grande':
-                    delta_value, mean_val = None, 0
-                    if chart_config.get('show_delta') and chart_config.get('num_field') != 'Contagem de Issues':
-                        mean_val = calculate_value('Média', chart_config['num_field'], df_to_render)
-                        if mean_val is not None and pd.notna(mean_val) and mean_val > 0: delta_value = final_value - mean_val
-                    value_str = f"{int(final_value):,}" if pd.notna(final_value) and final_value == int(final_value) else f"{final_value:,.2f}"
-                    delta_str = None
-                    if delta_value is not None:
-                        delta_str = f"{int(delta_value):,}" if delta_value == int(delta_value) else f"{delta_value:,.2f}"
-                    st.metric(label=chart_config.get('title', 'KPI'), value=value_str, delta=delta_str, help=f"Variação vs. média ({mean_val:,.2f})" if delta_value is not None else None, label_visibility="collapsed")
-                elif style in ['Medidor (Gauge)', 'Gráfico de Bala (Bullet)']:
-                    target_value = 100
-                    if chart_config.get('target_type') == 'Valor Fixo': target_value = chart_config.get('gauge_max_static', 100)
-                    else:
-                        if chart_config.get('target_op') and chart_config.get('target_field'): target_value = calculate_value(chart_config['target_op'], chart_config['target_field'], df_to_render)
-                    poor_limit = chart_config.get('gauge_poor_threshold', target_value * 0.5); good_limit = chart_config.get('gauge_good_threshold', target_value * 0.8); fig = go.Figure()
-                    if style == 'Medidor (Gauge)':
-                        fig.add_trace(go.Indicator(mode = "gauge+number", value = final_value, gauge = {'axis': {'range': [chart_config.get('gauge_min', 0), target_value]}, 'bar': {'color': chart_config.get('gauge_bar_color', '#1f77b4')}, 'steps': [{'range': [0, poor_limit], 'color': 'rgba(255, 0, 0, 0.15)'}, {'range': [poor_limit, good_limit], 'color': 'rgba(255, 255, 0, 0.25)'}, {'range': [good_limit, target_value], 'color': 'rgba(0, 255, 0, 0.25)'}], 'threshold': {'line': {'color': chart_config.get('gauge_target_color', '#d62728'), 'width': 4}, 'thickness': 0.9, 'value': target_value}}))
-                        fig.update_layout(height=150, margin=dict(l=20,r=20,t=1,b=1))
-                    elif style == 'Gráfico de Bala (Bullet)':
-                        fig.add_trace(go.Indicator(mode = "number+gauge", value = final_value, gauge = {'shape': "bullet", 'axis': {'range': [None, target_value]}, 'threshold': {'line': {'color': chart_config.get('gauge_target_color', '#d62728'), 'width': 3}, 'thickness': 0.9, 'value': target_value}, 'steps': [{'range': [0, poor_limit], 'color': "rgba(255, 0, 0, 0.25)"}, {'range': [poor_limit, good_limit], 'color': "rgba(255, 255, 0, 0.35)"}, {'range': [good_limit, target_value], 'color': "rgba(0, 255, 0, 0.35)"}], 'bar': {'color': chart_config.get('gauge_bar_color', '#1f77b4'), 'thickness': 0.5}}))
-                        fig.update_layout(height=100, margin=dict(l=1,r=1,t=20,b=20))
-
-        elif chart_type in ['dispersão', 'linha']:
-            plot_func = px.scatter if chart_type == "dispersão" else px.line
-
-            # Verifica se a cor deve ser usada
-            color_by_value = chart_config.get('color_by')
-            if color_by_value == 'Nenhum':
-                color_by_value = None # Converte o texto "Nenhum" para o valor Nulo que o Plotly entende
-
-            plot_args = {
-                'data_frame': df_to_render,
-                'x': chart_config.get('x'),
-                'y': chart_config.get('y'),
-                'color': color_by_value, # Usa o valor corrigido
-                'title': None,
-                'template': template,
-                'text': chart_config.get('y') if chart_config.get('show_data_labels') else None
-            }
-
-            if chart_type == 'linha':
-                plot_args['markers'] = True
-
-            fig = plot_func(**plot_args)
-
-            if chart_config.get('show_data_labels'):
-                fig.update_traces(textposition='top center')
-
-        elif chart_type in ['barra', 'linha_agregada', 'pizza', 'treemap', 'funil']:
-            measure, dimension, agg = chart_config['measure'], chart_config['dimension'], chart_config.get('agg')
-            grouped_df = calculate_aggregated_metric(df_to_render, dimension, measure, agg)
-            y_axis, values_col = grouped_df.columns[1], grouped_df.columns[1]
-
-            show_labels = chart_config.get('show_data_labels', False)
-            text_param = y_axis if show_labels else None
-
+            dimension, measure, agg = chart['dimension'], chart['measure'], chart.get('agg', 'Contagem')
+            
+            if measure == 'Contagem de Issues':
+                agg_df = df_filtered.groupby(dimension).size().reset_index(name=measure)
+            elif measure not in df_filtered.columns:
+                st.warning(f"O campo '{measure}' não foi encontrado nos dados.")
+                return
+            elif agg == 'Contagem Distinta':
+                 agg_df = df_filtered.groupby(dimension)[measure].nunique().reset_index(name=measure)
+            else:
+                numeric_series = pd.to_numeric(df_filtered[measure], errors='coerce')
+                grouped = numeric_series.groupby(df_filtered[dimension])
+                if agg == 'Soma': agg_df = grouped.sum().reset_index(name=measure)
+                else: agg_df = grouped.mean().reset_index(name=measure)
+            
+            agg_df = agg_df.sort_values(by=measure, ascending=False)
+            
+            fig = None
+            text_param = measure if chart.get('show_data_labels') else None
             if chart_type == 'barra':
-                fig = px.bar(grouped_df, x='Dimensão', y='Medida', color='Dimensão', title=None, template=template, text=text_param)
+                fig = px.bar(agg_df, x=dimension, y=measure, text=text_param, color=dimension, color_discrete_sequence=color_sequence)
             elif chart_type == 'linha_agregada':
-                fig = px.line(grouped_df.sort_values(by='Dimensão'), x='Dimensão', y='Medida', title=None, template=template, markers=True, text=text_param)
+                fig = px.line(agg_df, x=dimension, y=measure, text=text_param, color_discrete_sequence=color_sequence)
             elif chart_type == 'pizza':
-                fig = px.pie(grouped_df, names='Dimensão', values='Medida', title=None, template=template)
+                fig = px.pie(agg_df, names=dimension, values=measure, color_discrete_sequence=color_sequence)
             elif chart_type == 'treemap':
-                fig = px.treemap(grouped_df, path=[px.Constant("Todos"), 'Dimensão'], values='Medida', color='Medida', title=None, color_continuous_scale='Blues', template=template)
+                fig = px.treemap(agg_df, path=[dimension], values=measure, color_discrete_sequence=color_sequence)
             elif chart_type == 'funil':
-                sorted_df = grouped_df.sort_values(by='Medida', ascending=True)
-                fig = px.funnel(sorted_df, x='Medida', y='Dimensão', title=None, template=template, text=text_param)
+                fig = px.funnel(agg_df, x=measure, y=dimension, color_discrete_sequence=color_sequence)
 
-            if show_labels and fig:
-                is_float = pd.api.types.is_float_dtype(grouped_df[y_axis])
-                text_template = '%{text:,.2f}' if is_float else '%{text:,.0f}'
-                if chart_type in ['barra', 'funil']:
-                    fig.update_traces(texttemplate=text_template, textposition='outside')
-                elif chart_type == 'linha_agregada':
-                    fig.update_traces(texttemplate=text_template, textposition='top center')
-                elif chart_type == 'pizza':
-                    fig.update_traces(textinfo='percent+label', textposition='inside')
-                elif chart_type == 'treemap':
-                    fig.update_traces(textinfo='label+value+percent root')
+            if fig:
+                if chart.get('show_data_labels') and chart_type in ['barra', 'linha_agregada']:
+                    # --- INÍCIO DA CORREÇÃO ---
+                    # O valor 'outside' não é universalmente válido. 'top center' é uma alternativa mais segura.
+                    fig.update_traces(texttemplate='%{text:.2s}', textposition='top center')
+                    # --- FIM DA CORREÇÃO ---
+                    if not agg_df.empty:
+                        max_val = agg_df[measure].max()
+                        if max_val > 0: fig.update_layout(yaxis_range=[0, max_val * 1.15])
+                st.plotly_chart(fig, use_container_width=True)
 
-        if return_fig:
-            return fig
-        elif fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+        elif chart_type == 'indicator':
+            from jira_connector import get_jql_issue_count
+            from metrics_calculator import calculate_kpi_value
+
+            if chart.get('source_type') == 'jql':
+                jql_a = chart.get('jql_a')
+                if not jql_a:
+                    st.warning("A Consulta JQL 1 (Valor A) é obrigatória."); return
+                value_a = get_jql_issue_count(st.session_state.jira_client, jql_a)
+                if not isinstance(value_a, (int, float)):
+                    st.error(f"Erro na JQL 1: {value_a}"); return
+                
+                final_value, is_percentage = float(value_a), False
+                jql_b = chart.get('jql_b')
+                if jql_b:
+                    value_b = get_jql_issue_count(st.session_state.jira_client, jql_b)
+                    if not isinstance(value_b, (int, float)):
+                        st.error(f"Erro na JQL 2: {value_b}"); return
+                    operation = chart.get('jql_operation')
+                    if operation == 'Dividir (A / B)':
+                        final_value, is_percentage = (value_a / value_b * 100) if value_b != 0 else 0, True
+                    elif operation == 'Somar (A + B)': final_value = value_a + value_b
+                    elif operation == 'Subtrair (A - B)': final_value = value_a - value_b
+                    elif operation == 'Multiplicar (A * B)': final_value = value_a * value_b
+                
+                delta_value = None
+                jql_c = chart.get('jql_baseline')
+                if jql_c:
+                    value_c = get_jql_issue_count(st.session_state.jira_client, jql_c)
+                    if isinstance(value_c, (int, float)) and value_c > 0:
+                        delta_value = f"{(final_value - value_c) / value_c * 100:.1f}%"
+                    elif isinstance(value_c, (int, float)) and value_c == 0 and final_value > 0:
+                         delta_value = "∞%"
+                
+                display_value = f"{final_value:.1f}%" if is_percentage else f"{final_value:,.0f}"
+                st.metric(label=chart.get('title', 'Indicador JQL'), value=display_value, delta=delta_value)
+            else:
+                num_val = calculate_kpi_value(df_filtered, chart['num_op'], chart['num_field'])
+                den_val = calculate_kpi_value(df_filtered, chart['den_op'], chart['den_field']) if chart.get('use_den') else None
+                final_value = (num_val / den_val * 100) if den_val is not None and den_val != 0 else num_val
+                st.metric(label=chart.get('title', 'Indicador'), value=f"{final_value:.1f}%" if den_val is not None else f"{final_value:,.0f}")
+        
+        elif chart_type == 'pivot_table':
+            from metrics_calculator import calculate_pivot_table
+            pivot_df = calculate_pivot_table(df_filtered, chart['rows'], chart['columns'], chart['values'], chart['aggfunc'])
+            st.dataframe(pivot_df)
 
     except Exception as e:
-        if not return_fig:
-            st.error(f"Erro ao gerar a visualização '{chart_config.get('title', 'Desconhecido')}': {e}")
-        return None
+        st.error(f"Ocorreu um erro ao renderizar a visualização: {e}")
 
 def get_start_end_states(project_key):
     project_config = get_project_config(project_key) or {}
@@ -287,10 +261,20 @@ def find_date_for_status(changelog, target_statuses, default=None):
     return default
 
 def convert_dates_in_filters(filters):
+    """
+    Percorre uma lista de filtros e converte quaisquer objetos de data/datetime
+    em strings ISO para que possam ser salvos em JSON.
+    """
+    processed_filters = []
     for f in filters:
-        if 'value' in f and isinstance(f['value'], tuple) and all(hasattr(d, 'strftime') for d in f['value']):
-            f['value'] = [d.strftime('%Y-%m-%d') for d in f['value']]
-    return filters
+        new_filter = f.copy()
+        value = new_filter.get('value')
+        if isinstance(value, (date, datetime)):
+            new_filter['value'] = value.isoformat()
+        elif isinstance(value, (list, tuple)) and any(isinstance(v, (date, datetime)) for v in value):
+            new_filter['value'] = [v.isoformat() if isinstance(v, (date, datetime)) else v for v in value]
+        processed_filters.append(new_filter)
+    return processed_filters
 
 def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
     st.markdown("###### **Criar Dimensão Combinada**")
@@ -318,10 +302,8 @@ class PDF(FPDF):
         self.set_y(13)
         self.set_x(45)
         self.set_font('Roboto', 'B', 16)
-
         remaining_width = self.w - 45 - self.r_margin
         self.cell(remaining_width, 10, self.os_title, 0, 0, 'C')
-
         self.ln(20)
 
     def footer(self):
@@ -352,85 +334,66 @@ def create_os_pdf(os_data):
     pdf.add_font('Roboto', '', str(roboto_regular_path))
     pdf.add_font('Roboto', 'B', str(roboto_bold_path))
     pdf.add_font('Roboto', 'I', str(roboto_italic_path))
-
     pdf.add_page()
-
     pdf.set_font('Roboto', 'B', 12)
     pdf.cell(0, 10, 'Detalhes da Ordem de Serviço', 0, 1, 'L')
     pdf.ln(2)
 
-    for field_data in os_data.get('custom_fields_layout', []):
-        field_name = field_data.get('field_name')
+    def render_pdf_field(field_data, value, width):
         field_type = field_data.get('field_type')
-        value = os_data.get('custom_fields', {}).get(field_name)
+        pdf.set_font('Roboto', '', 11)
+        effective_width = width if width > 0 else pdf.w - pdf.l_margin - pdf.r_margin
 
         if value is None or value == '' or (isinstance(value, list) and not value) or (isinstance(value, pd.DataFrame) and value.empty):
-            continue
+            pdf.multi_cell(effective_width, 5, "N/A", 0, 'L')
+            return
 
-        pdf.set_font('Roboto', 'B', 11)
-        pdf.multi_cell(0, 8, clean_text(f"{field_name}:"), border=0, align='L', ln=1)
-        pdf.set_font('Roboto', '', 11)
-
-        if field_type == "Tabela":
-            if isinstance(value, list) and value:
-                df_table = pd.DataFrame(value)
-                if not df_table.empty:
-                    pdf.ln(2)
-                    pdf.set_font('Roboto', 'B', 10)
-                    num_cols = len(df_table.columns)
-                    col_width = 190 / num_cols if num_cols > 0 else 190
-                    for col in df_table.columns:
-                        pdf.cell(col_width, 7, clean_text(str(col)), 1, 0, 'C')
-                    pdf.ln()
-
-                    pdf.set_font('Roboto', '', 10)
-                    for index, row in df_table.iterrows():
-                        y_before_row = pdf.get_y(); x_before_row = pdf.get_x(); max_y = y_before_row
-                        for i, col in enumerate(df_table.columns):
-                            pdf.set_xy(x_before_row + (i * col_width), y_before_row)
-                            pdf.multi_cell(col_width, 7, clean_text(str(row[col])), 1, 'L')
-                            if pdf.get_y() > max_y: max_y = pdf.get_y()
-                        pdf.set_y(max_y)
+        if field_type == "Texto Longo":
+            if isinstance(value, dict) and value.get("text"):
+                 pdf.multi_cell(effective_width, 5, clean_text(value["text"]), 0, 'L')
             else:
-                pdf.multi_cell(0, 5, "Nenhum dado na tabela.", 0, 'L')
-
-        elif field_type == "Imagem":
-            if isinstance(value, list) and value:
-                for img_bytes in value:
-                    try:
-                        temp_img_path = f"temp_image_{uuid.uuid4().hex}.png"
-                        with open(temp_img_path, "wb") as f: f.write(img_bytes)
-                        pdf.image(temp_img_path, w=100); pdf.ln(2)
-                        os.remove(temp_img_path)
-                    except Exception as e:
-                        pdf.multi_cell(0, 5, f"[Erro ao renderizar imagem: {e}]", 0, 'L')
-
-        elif field_type == "Texto Longo":
-            if isinstance(value, dict):
-                if value.get("text"):
-                    pdf.multi_cell(0, 5, clean_text(value["text"]), 0, 'L')
-                if isinstance(value.get("images"), list) and value["images"]:
-                    pdf.ln(2)
-                    for img_bytes in value["images"]:
-                        try:
-                            temp_img_path = f"temp_image_{uuid.uuid4().hex}.png"
-                            with open(temp_img_path, "wb") as f: f.write(img_bytes)
-                            pdf.image(temp_img_path, w=100); pdf.ln(2)
-                            os.remove(temp_img_path)
-                        except Exception as e:
-                            pdf.multi_cell(0, 5, f"[Erro ao renderizar imagem: {e}]", 0, 'L')
-            else:
-                pdf.multi_cell(0, 5, clean_text(value), 0, 'L')
-
+                 pdf.multi_cell(effective_width, 5, clean_text(value), 0, 'L')
         else:
             if isinstance(value, list): value_str = ", ".join(map(str, value))
             elif isinstance(value, bool): value_str = "Sim" if value else "Não"
             else: value_str = str(value)
-            pdf.multi_cell(0, 5, clean_text(value_str), 0, 'L')
+            pdf.multi_cell(effective_width, 5, clean_text(value_str), 0, 'L')
 
-        pdf.ln(6)
+    layout_fields = os_data.get('custom_fields_layout', [])
+    custom_data = os_data.get('custom_fields', {})
+    
+    i = 0
+    while i < len(layout_fields):
+        field1 = layout_fields[i]
+        is_two_col = field1.get('two_columns', False)
+        next_field_is_two_col = (i + 1 < len(layout_fields)) and layout_fields[i+1].get('two_columns', False)
 
-    # --- INÍCIO DA ALTERAÇÃO ---
+        if is_two_col and next_field_is_two_col:
+            field2 = layout_fields[i+1]
+            y_before = pdf.get_y()
+            
+            pdf.set_xy(pdf.l_margin, y_before)
+            pdf.set_font('Roboto', 'B', 11)
+            pdf.multi_cell(95, 8, clean_text(f"{field1['field_name']}:"), 0, 'L')
+            render_pdf_field(field1, custom_data.get(field1['field_name']), width=95)
+            y_after1 = pdf.get_y()
+
+            pdf.set_xy(pdf.l_margin + 100, y_before)
+            pdf.set_font('Roboto', 'B', 11)
+            pdf.multi_cell(90, 8, clean_text(f"{field2['field_name']}:"), 0, 'L')
+            render_pdf_field(field2, custom_data.get(field2['field_name']), width=90)
+            y_after2 = pdf.get_y()
+
+            pdf.set_y(max(y_after1, y_after2) + 6)
+            i += 2
+        else:
+            pdf.set_x(pdf.l_margin)
+            pdf.set_font('Roboto', 'B', 11)
+            pdf.multi_cell(0, 8, clean_text(f"{field1['field_name']}:"), 0, 'L')
+            render_pdf_field(field1, custom_data.get(field1['field_name']), width=0)
+            pdf.ln(6)
+            i += 1
+
     if os_data.get('items'):
         # Verifica se há espaço para o título, cabeçalho e pelo menos uma linha
         if pdf.get_y() > pdf.page_break_trigger - 30:
@@ -467,7 +430,6 @@ def create_os_pdf(os_data):
             pdf.multi_cell(30, 8, clean_text(str(item.get('Valor', ''))), border=1, align='C', ln=1)
             y_after_valor = pdf.get_y()
             pdf.set_y(max(y_after_item, y_after_valor))
-    # --- FIM DA ALTERAÇÃO ---
 
     if os_data.get('assinantes'):
         # Verifica se há espaço para o título das assinaturas e pelo menos uma assinatura
@@ -484,7 +446,7 @@ def create_os_pdf(os_data):
                 # Verifica se há espaço para uma assinatura completa
                 if pdf.get_y() > pdf.page_break_trigger - 35:
                     pdf.add_page()
-                    pdf.ln(10) # Adiciona espaço no topo da nova página
+                    pdf.ln(10)
 
                 pdf.cell(0, 8, "___________________________________________", 0, 1, 'C')
                 pdf.cell(0, 8, clean_text(f"{assinante['Nome']}"), 0, 1, 'C')
@@ -621,18 +583,25 @@ def summarize_chart_data(chart_config, df):
 # --- FUNÇÕES DE IA ---
 def _get_ai_client_and_model(provider, user_data):
     """Função auxiliar para configurar e retornar o cliente de IA correto."""
+    
+    # Verifica se o utilizador tem o perfil de 'admin' antes de mostrar a caixa de depuração.
+    # Esta verificação assume que o seu objeto 'user_data' tem um campo 'role'.
+    if user_data and user_data.get('role') == 'admin':
+        with st.expander("🔍 Dados do Perfil (Depuração)", expanded=False):
+            st.info("Esta caixa mostra os dados lidos do seu perfil para configurar a IA. Verifique se a chave correta (Gemini ou OpenAI) está presente aqui.")
+            st.json(user_data)
+
     api_key_encrypted = None
     if provider == "Google Gemini":
         api_key_encrypted = user_data.get('encrypted_gemini_key')
         if not api_key_encrypted:
             st.warning("Nenhuma chave de API do Gemini configurada.", icon="🔑")
-            st.info("Para usar esta funcionalidade, por favor, adicione a sua chave na página 'Minha Conta'.")
             st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
             return None
         try:
             api_key = decrypt_token(api_key_encrypted)
             genai.configure(api_key=api_key)
-            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
+            model_name = user_data.get('ai_model_preference', 'gemini-flash-latest')
             return genai.GenerativeModel(model_name)
         except Exception as e:
             st.error(f"Erro com a API do Gemini: {e}"); return None
@@ -641,7 +610,6 @@ def _get_ai_client_and_model(provider, user_data):
         api_key_encrypted = user_data.get('encrypted_openai_key')
         if not api_key_encrypted:
             st.warning("Nenhuma chave de API da OpenAI configurada.", icon="🔑")
-            st.info("Para usar esta funcionalidade, por favor, adicione a sua chave na página 'Minha Conta'.")
             st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Chave de IA Agora", icon="🤖")
             return None
         try:
@@ -699,72 +667,75 @@ def get_ai_insights(project_name, chart_summaries, provider):
 def generate_chart_config_from_text(prompt, numeric_cols, categorical_cols, active_filters=None):
     """
     Usa a API de IA para gerar uma configuração de gráfico e aplica os filtros ativos.
-    Versão final com prompt aprimorado e verificação de segurança.
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    cleaned_response = ""
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
         return None, "A sua chave de API não está configurada ou é inválida."
 
-    # --- PROMPT DE ENGENHARIA MELHORADO ---
     system_prompt = f"""
-    Aja como um especialista em Business Intelligence. A sua tarefa é converter um pedido de utilizador em linguagem natural para um objeto JSON que define uma visualização.
+    Aja como um especialista em Business Intelligence. Sua tarefa é converter um pedido em linguagem natural para um objeto JSON que define uma visualização.
 
-    O utilizador tem acesso aos seguintes campos:
-    - Campos Categóricos (para dimensões): {', '.join(categorical_cols)}
-    - Campos Numéricos (para medidas): {', '.join(numeric_cols)}
+    **GLOSSÁRIO DE CONCEITOS:**
+    * **Dimensão ('dimension'):** O campo para agrupar os dados (ex: "issues POR STATUS").
+    * **Medida ('measure'):** O valor a ser calculado (ex: "a SOMA DO LEAD TIME").
+    * **Eixo X ('x') / Eixo Y ('y'):** Usados para gráficos não agregados que comparam duas colunas diretamente.
+    * **Filtros ('filters'):** Condições para limitar os dados (ex: "APENAS PARA O CLIENTE 'APEX'").
+    * **Rótulos de Dados ('show_data_labels'):** `true` se o utilizador pedir para "mostrar valores" ou "exibir totais".
 
-    **Regras para a conversão:**
-    1.  **Primeiro, identifique a intenção:**
-        - Se o pedido for uma pergunta que resulta num **número único** (ex: "qual o total de issues?", "quantos bugs abertos?"), gere um **Indicador (KPI)**.
-        - Se o pedido mencionar explicitamente "tabela", gere uma **Tabela**.
-        - Para todos os outros casos (ex: "issues por status"), gere um **Gráfico Agregado**.
+    **CAMPOS DISPONÍVEIS:**
+    - Categóricos: {', '.join(categorical_cols)}
+    - Numéricos: {', '.join(numeric_cols)}
 
-    2.  **Estruturas JSON:**
-        - **KPI:** `{{"creator_type": "Indicador (KPI)", "type": "indicator", "style": "Número Grande", "title": "...", "num_op": "...", "num_field": "..."}}`
-        - **Tabela:** `{{"creator_type": "Gráfico Agregado", "type": "tabela", "title": "...", "columns": ["campo1", "campo2"]}}`
-        - **Gráfico Agregado:** `{{"creator_type": "Gráfico Agregado", "type": "barra", "dimension": "...", "measure": "...", "agg": "...", "title": "..."}}`
+    **REGRAS DE GERAÇÃO:**
+    1.  **Identificar a Intenção:**
+        * Se o pedido compara duas colunas diretamente (ex: "cycle time vs data de conclusão"), gere um **Gráfico X-Y**.
+        * Se o pedido agrega uma medida por uma dimensão (ex: "total de issues por status"), gere um **Gráfico Agregado**.
+        * Se o pedido resulta num número único (ex: "qual o total de issues?"), gere um **Indicador (KPI)**.
+
+    2.  **Estruturas JSON de Exemplo:**
+        * **Gráfico X-Y:** `{{"creator_type": "Gráfico X-Y", "type": "[dispersão|linha]", "x": "...", "y": "...", "title": "..."}}`
+        * **Gráfico Agregado:** `{{"creator_type": "Gráfico Agregado", "type": "[barra|linha_agregada|pizza]", "dimension": "...", "measure": "...", "agg": "...", "title": "..."}}`
+        * **KPI:** `{{"creator_type": "Indicador (KPI)", "type": "indicator", "style": "Número Grande", "title": "...", "num_op": "...", "num_field": "..."}}`
 
     3.  **Regras de Preenchimento:**
-        - **IMPORTANTE:** Se o cálculo for uma contagem, a 'measure' ou 'num_field' DEVE ser a string exata "Contagem de Issues".
-        - Se o pedido não especificar uma dimensão para um gráfico, você DEVE retornar uma mensagem de erro.
+        * Para contagem, a 'measure' DEVE ser "Contagem de Issues" e o 'agg' DEVE ser "Contagem".
+        * Preste atenção a palavras-chave como "linha", "barras", "pizza" para definir o campo "type". Se nada for dito, use "barra".
 
     Responda APENAS com o objeto JSON.
+    ---
     """
-    full_prompt = f"{system_prompt}\n\nPedido do Utilizador: \"{prompt}\""
+    
+    full_prompt = f"{system_prompt}\n\n**TAREFA REAL:**\nPedido do Utilizador: \"{prompt}\""
 
     try:
         if provider == "Google Gemini":
             response = model_client.generate_content(full_prompt)
-            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            cleaned_response = match.group(0) if match else "{}"
         else: # OpenAI
             response = model_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": full_prompt}], response_format={"type": "json_object"})
             cleaned_response = response.choices[0].message.content
 
-        if not cleaned_response:
-            return None, "A IA não conseguiu gerar uma configuração válida. Tente reformular o seu pedido."
+        if not cleaned_response: return None, "A IA não retornou uma resposta."
 
         chart_config = json.loads(cleaned_response)
 
-        # --- VERIFICAÇÃO DE SEGURANÇA ---
-        # Se a IA gerou um gráfico agregado sem dimensão, corrige para um KPI.
-        if chart_config.get('type') in ['barra', 'pizza', 'linha_agregada'] and not chart_config.get('dimension'):
-            st.warning("A IA interpretou o seu pedido como um gráfico, mas não encontrou uma dimensão. A exibir o total como um KPI.")
-            chart_config = {
-                'creator_type': 'Indicador (KPI)', 'type': 'indicator',
-                'style': 'Número Grande', 'title': prompt,
-                'num_op': 'Contagem', 'num_field': 'Contagem de Issues'
-            }
+        if not isinstance(chart_config, dict) or 'type' not in chart_config:
+            return None, f"A IA retornou uma resposta inesperada. Resposta: {cleaned_response}"
 
-        chart_config['filters'] = active_filters if active_filters else []
+        ia_filters = chart_config.get('filters', [])
+        chart_config['filters'] = active_filters + ia_filters
         chart_config['id'] = str(uuid.uuid4())
         chart_config['source_type'] = 'visual'
 
         return chart_config, None
     except Exception as e:
-        return None, f"Ocorreu um erro ao comunicar com a IA: {e}"
+        return None, f"Ocorreu um erro ao processar a resposta da IA: {e}"
+
 
 def generate_risk_analysis_with_ai(project_name, metrics_summary):
     """
@@ -773,6 +744,11 @@ def generate_risk_analysis_with_ai(project_name, metrics_summary):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        st.error("Análise de riscos indisponível. Verifique a configuração da sua chave de IA.")
+        return [f"Erro: Chave de IA para o provedor '{provider}' não configurada."]
 
     prompt = f"""
     Aja como um Agile Coach especialista. Analise o seguinte resumo de métricas do projeto "{project_name}":
@@ -786,27 +762,19 @@ def generate_risk_analysis_with_ai(project_name, metrics_summary):
 
     try:
         if provider == "Google Gemini":
-            api_key = decrypt_token(user_data['encrypted_gemini_key'])
-            genai.configure(api_key=api_key)
-            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            # Limpa a resposta para garantir que é um JSON válido
+            response = model_client.generate_content(prompt)
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
             return json.loads(cleaned_response)
 
         elif provider == "OpenAI (ChatGPT)":
-            api_key = decrypt_token(user_data['encrypted_openai_key'])
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
+            response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "Responda apenas com um JSON array de strings."},
                     {"role": "user", "content": prompt}
                 ],
-                response_format={"type": "json_object"} # Pede à OpenAI para forçar a saída em JSON
+                response_format={"type": "json_object"}
             )
-            # A resposta da OpenAI pode vir num formato ligeiramente diferente, ajuste se necessário
             return json.loads(response.choices[0].message.content)
 
     except Exception as e:
@@ -820,6 +788,10 @@ def generate_ai_risk_assessment(project_name, metrics_summary):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        return {"risk_level": "Erro", "risks": [f"Chave de IA para o provedor '{provider}' não configurada."]}
 
     prompt = f"""
     Aja como um Gestor de Projetos Sênior. Analise o seguinte resumo de métricas do projeto "{project_name}":
@@ -842,18 +814,12 @@ def generate_ai_risk_assessment(project_name, metrics_summary):
 
     try:
         if provider == "Google Gemini":
-            api_key = decrypt_token(user_data['encrypted_gemini_key'])
-            genai.configure(api_key=api_key)
-            model_name = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            response = model_client.generate_content(prompt)
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
             return json.loads(cleaned_response)
 
         elif provider == "OpenAI (ChatGPT)":
-            api_key = decrypt_token(user_data['encrypted_openai_key'])
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
+            response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "Responda apenas com um objeto JSON válido."},
@@ -866,7 +832,7 @@ def generate_ai_risk_assessment(project_name, metrics_summary):
     except Exception as e:
         st.error(f"Erro ao gerar análise de riscos: {e}")
         return {"risk_level": "Erro", "risks": [f"Erro na comunicação com a API: {e}"]}
-
+    
 def get_ai_rag_status(project_name, metrics_summary):
     """
     Usa a API de IA preferida do utilizador para analisar métricas e determinar
@@ -874,8 +840,11 @@ def get_ai_rag_status(project_name, metrics_summary):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    
     model_client = _get_ai_client_and_model(provider, user_data)
-    if not model_client: return "Análise indisponível. Verifique a configuração da sua chave de IA."
+    if not model_client: 
+        st.error("Análise indisponível. Verifique a configuração da sua chave de IA.")
+        return "⚪ Erro"
 
     prompt = f"""
     Aja como um Diretor de Projetos (PMO). Analise o seguinte resumo de métricas do projeto "{project_name}":
@@ -899,9 +868,7 @@ def get_ai_rag_status(project_name, metrics_summary):
             return response.text.strip()
 
         elif provider == "OpenAI (ChatGPT)":
-            api_key = decrypt_token(user_data['encrypted_openai_key'])
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
+            response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "Responda apenas com a string da categoria escolhida."},
@@ -1238,6 +1205,7 @@ def get_ai_strategic_diagnosis(project_name, client_name, issues_data, flow_metr
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    cleaned_response = "" # Inicializa para o bloco except
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
@@ -1247,23 +1215,34 @@ def get_ai_strategic_diagnosis(project_name, client_name, issues_data, flow_metr
     context_text = "\n".join([f"- {summary}" for summary in contextual_projects_summary]) if contextual_projects_summary else "Nenhum"
 
     prompt = f"""
-    Aja como um Diretor de Contas de uma consultoria de TI. A sua tarefa é analisar a saúde da conta do cliente "{client_name}", que está associada ao projeto "{project_name}", e gerar um diagnóstico estratégico em formato JSON.
+    Aja como um Diretor de Contas de uma consultoria de TI. Sua tarefa é analisar a saúde da conta do cliente "{client_name}", associada ao projeto "{project_name}", e gerar um diagnóstico estratégico em formato JSON.
 
-    **Contexto da Conta (Dados inseridos manualmente para este cliente):**
-    {project_profile_summary}
+    **DADOS PARA ANÁLISE:**
+    1.  **Perfil da Conta (Dados do Cliente):**
+        {project_profile_summary}
+    2.  **Métricas Operacionais (Performance do Projeto):**
+        {flow_metrics_summary}
+    3.  **Contexto de Gestão (Tarefas relacionadas de outros projetos):**
+        {context_text}
+    4.  **Amostra de Tarefas Recentes:**
+        {tasks_summary_text}
 
-    **Performance Operacional (Métricas do projeto principal para este cliente):**
-    {flow_metrics_summary}
-
-    **Contexto de Gestão (Tarefas de gestão relacionadas a este cliente, de outros projetos):**
-    {context_text}
-
-    **Amostra de Tarefas de Desenvolvimento Recentes:**
-    {tasks_summary_text}
-
-    **A sua análise deve cruzar todas estas fontes de dados e seguir estritamente a seguinte estrutura JSON:**
-
-    {{"diagnostico_estrategico": "(Resumo 2-3 frases a conectar os objetivos do negócio com a performance operacional)", "analise_natureza_trabalho": "(Análise da natureza do trabalho e alinhamento com a estratégia)", "plano_de_acao_recomendado": "(Sugestões de 2 ações estratégicas e práticas)"}}
+    **ESTRUTURA DA RESPOSTA (OBRIGATÓRIO):**
+    Sua resposta DEVE ser um objeto JSON válido, sem nenhuma outra palavra ou explicação. Siga esta estrutura:
+    {{
+      "diagnostico_estrategico": "(Escreva aqui um resumo de 2-3 frases conectando os objetivos do cliente com a performance operacional do projeto.)",
+      "analise_natureza_trabalho": "(Escreva aqui uma análise sobre o tipo de trabalho que está a ser feito e se está alinhado com a estratégia do cliente.)",
+      "plano_de_acao_recomendado": [
+        {{
+          "acao": "(Escreva aqui a primeira ação recomendada, clara e direta.)",
+          "justificativa": "(Justifique a primeira ação com base nos dados analisados.)"
+        }},
+        {{
+          "acao": "(Escreva aqui a segunda ação recomendada.)",
+          "justificativa": "(Justifique a segunda ação.)"
+        }}
+      ]
+    }}
     """
     try:
         if provider == "Google Gemini":
@@ -1276,10 +1255,13 @@ def get_ai_strategic_diagnosis(project_name, client_name, issues_data, flow_metr
                 response_format={"type": "json_object"}
             )
             cleaned_response = response.choices[0].message.content
+        
+        if not cleaned_response:
+            return {"error": "A IA retornou uma resposta vazia."}
 
         return json.loads(cleaned_response)
     except Exception as e:
-        return {"error": f"Ocorreu um erro ao gerar o diagnóstico: {e}"}
+        return {"error": f"Ocorreu um erro ao processar a resposta da IA: {e}. Resposta recebida: '{cleaned_response}'"}
 
 def get_ai_chat_response(initial_diagnosis, chat_history, user_question, issues_context):
     """
@@ -1333,35 +1315,30 @@ def get_ai_chat_response(initial_diagnosis, chat_history, user_question, issues_
     except Exception as e:
         return f"Ocorreu um erro ao processar a sua pergunta: {e}"
 
-
 def get_ai_user_story_from_figma(image_url, user_context, element_name):
     """
-    Usa a IA para analisar uma imagem e gerar uma Job Story completa com critérios
-    de aceitação e cenários de teste BDD.
+    Usa a IA para analisar uma imagem e gerar uma Job Story completa.
+    Esta função agora usa a configuração de IA centralizada.
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
 
     model_client = _get_ai_client_and_model(provider, user_data)
+
     if not model_client:
-        return {"error": "Análise indisponível."}
+        return {"error": "Análise indisponível. Verifique a sua chave de API."}
 
     prompt = f"""
     Aja como um Product Owner e um Analista de QA experientes. A sua tarefa é analisar a imagem de um elemento de interface chamado "{element_name}" e o contexto fornecido para criar uma História de Usuário completa em português, no formato JSON.
-
-    **Contexto Adicional:**
-    {user_context}
-
+    **Contexto Adicional:** {user_context}
     **Regras para a Geração:**
     1.  **Título (title):** Crie um título curto e descritivo.
-    2.  **Descrição (description):** Escreva a história no formato "Job Story": "Quando <situação>, Eu quero <motivação>, Então eu posso <resultado>."
+    2.  **Descrição (description):** Escreva a história no formato "Job Story", usando asteriscos para negrito nos marcadores e quebras de linha, exatamente assim: "*Quando* <situação>\\n*Quero* <motivação>\\n*Então* <resultado>."
     3.  **Critérios de Aceitação (acceptance_criteria):** Crie uma lista de 3 a 5 critérios de aceitação claros, separados por uma nova linha (\\n).
-    4.  **Cenários de Teste BDD (bdd_scenarios):** Crie 2 a 3 cenários de teste detalhados no formato BDD: "Cenário: <nome do cenário>\\nDado <contexto>\\nE <outro contexto>\\nQuando <ação>\\nEntão <resultado esperado>", com cada cenário separado por duas novas linhas (\\n\\n).
-
+    4.  **Cenários de Teste BDD (bdd_scenarios):** Crie 2 a 3 cenários de teste detalhados no formato BDD, usando asteriscos para negrito e quebras de linha, exatamente assim: "*Cenário:* <nome do cenário>\\n*Dado* <contexto>\\n*Quando* <ação>\\n*Então* <resultado esperado>", com cada cenário separado por duas novas linhas (\\n\\n).
     **Estrutura de Saída (Responda APENAS com o JSON):**
     {{"title": "...", "description": "...", "acceptance_criteria": "...", "bdd_scenarios": "..."}}
     """
-
     try:
         if provider == "Google Gemini":
             image_response = requests.get(image_url)
@@ -1372,19 +1349,10 @@ def get_ai_user_story_from_figma(image_url, user_context, element_name):
         else: # OpenAI
             response = model_client.chat.completions.create(
                 model="gpt-4o",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": image_url}}
-                        ]
-                    }
-                ],
+                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": image_url}}] }],
                 response_format={"type": "json_object"}
             )
             cleaned_response = response.choices[0].message.content
-
         return json.loads(cleaned_response)
     except Exception as e:
         return {"error": f"Ocorreu um erro ao gerar a história de usuário: {e}"}
@@ -1518,7 +1486,7 @@ def get_ai_os_from_context_and_contract(user_context, contract_text=None):
 def get_ai_user_story_from_text(user_context):
     """
     Usa a IA para analisar o contexto do utilizador e gerar uma história de usuário
-    estruturada em JSON, no formato Job Story.
+    estruturada em JSON, no formato Job Story, incluindo cenários BDD.
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
@@ -1528,20 +1496,16 @@ def get_ai_user_story_from_text(user_context):
         return {"error": "Análise indisponível. Verifique a configuração da sua chave de IA."}
 
     prompt = f"""
-    Aja como um Product Owner (PO) sênior, especialista em criar Job Stories claras e eficazes. A sua tarefa é analisar o contexto fornecido para criar uma História de Usuário completa, em português, no formato JSON.
-
-    **Contexto Fornecido pelo Utilizador:**
-    {user_context}
-
+    Aja como um Product Owner e um Analista de QA experientes. A sua tarefa é analisar o contexto fornecido para criar uma História de Usuário completa em português, no formato JSON.
+    **Contexto Fornecido pelo Utilizador:** {user_context}
     **Regras para a Geração:**
-    1.  **Título (title):** Crie um título curto e descritivo para a história, focado na ação principal do utilizador.
-    2.  **Descrição (description):** Escreva a história estritamente no formato "Job Story": "Quando <situação específica>, Eu quero <motivação particular>, Então eu posso <resultado desejado>."
-    3.  **Critérios de Aceitação (acceptance_criteria):** Crie uma lista de 3 a 5 critérios de aceitação claros e testáveis, no formato "Dado <contexto>, Quando <ação>, Então <resultado>.", separados por uma nova linha (\\n).
-
+    1.  **Título (title):** Crie um título curto e descritivo.
+    2.  **Descrição (description):** Escreva a história no formato "Job Story", usando asteriscos para negrito nos marcadores e quebras de linha, exatamente assim: "*Quando* <situação>\\n*Quero* <motivação>\\n*Então* <resultado>."
+    3.  **Critérios de Aceitação (acceptance_criteria):** Crie uma lista de 3 a 5 critérios de aceitação claros, separados por uma nova linha (\\n).
+    4.  **Cenários de Teste BDD (bdd_scenarios):** Crie 2 a 3 cenários de teste detalhados no formato BDD, usando asteriscos para negrito e quebras de linha, exatamente assim: "*Cenário:* <nome do cenário>\\n*Dado* <contexto>\\n*Quando* <ação>\\n*Então* <resultado esperado>", com cada cenário separado por duas novas linhas (\\n\\n).
     **Estrutura de Saída (Responda APENAS com o JSON):**
-    {{"title": "...", "description": "...", "acceptance_criteria": "..."}}
+    {{"title": "...", "description": "...", "acceptance_criteria": "...", "bdd_scenarios": "..."}}
     """
-
     try:
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
@@ -1553,11 +1517,9 @@ def get_ai_user_story_from_text(user_context):
                 response_format={"type": "json_object"}
             )
             cleaned_response = response.choices[0].message.content
-
         return json.loads(cleaned_response)
     except Exception as e:
         return {"error": f"Ocorreu um erro ao gerar a história de usuário: {e}"}
-
 def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     """
     Usa a IA para analisar um dicionário com todos os dados de uma issue do Jira
@@ -1565,37 +1527,73 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    cleaned_response = "" # Inicializa para o bloco except
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
         return {"error": "Análise indisponível. Verifique a configuração da sua chave de IA."}
 
-    # Prepara a lista de campos da OS para o prompt
     field_names = [field['field_name'] for field in layout_fields]
     json_structure_example = {field_name: "" for field_name in field_names}
+    
+    # --- INÍCIO DA CORREÇÃO DE CODIFICAÇÃO ---
+    # Sanitiza os dados da issue para remover caracteres problemáticos antes de enviar para a IA
+    sanitized_issue_dict = {}
+    for key, value in issue_data_dict.items():
+        if isinstance(value, str):
+            # Força a codificação para UTF-8, ignorando erros, e depois decodifica.
+            # Isso ajuda a limpar caracteres malformados.
+            sanitized_issue_dict[key] = value.encode('utf-8', 'ignore').decode('utf-8')
+        else:
+            sanitized_issue_dict[key] = value
+    issue_context = "\n".join([f"- {key}: {value}" for key, value in sanitized_issue_dict.items() if value])
+    # --- FIM DA CORREÇÃO DE CODIFICAÇÃO ---
 
-    # Converte o dicionário de dados da issue para uma string formatada
-    issue_context = "\n".join([f"- {key}: {value}" for key, value in issue_data_dict.items() if value])
-
+    # --- PROMPT FINAL, COM EXEMPLO (ONE-SHOT) ---
     prompt = f"""
-    Aja como um Gerente de Projetos sênior. A sua tarefa é criar uma Ordem de Serviço (OS) com base nos dados completos de uma tarefa do Jira. Retorne o resultado num formato JSON.
+    Aja como um robô de extração de dados. Sua única tarefa é preencher um formulário JSON usando as informações de uma tarefa.
 
-    **Dados Completos da Tarefa do Jira:**
+    **EXEMPLO:**
+    *INFORMAÇÕES DA TAREFA:*
+    - Resumo: Criar botão de login
+    - Descrição: O botão deve ser azul e levar para a página de login.
+    - Relator: Maria
+    *FORMULÁRIO JSON PARA PREENCHER:*
+    {{
+        "Título": "",
+        "Demandante": "",
+        "Escopo": ""
+    }}
+    *SUA RESPOSTA JSON:*
+    {{
+        "Título": "Criar botão de login",
+        "Demandante": "Maria",
+        "Escopo": "O botão deve ser azul e levar para a página de login."
+    }}
+    ---
+    **TAREFA REAL:**
+
+    **INFORMAÇÕES DA TAREFA:**
+    ```
     {issue_context}
+    ```
 
-    **Regras para a Extração e Geração:**
-    1.  Analise TODOS os dados da tarefa para preencher os campos do JSON da forma mais precisa possível. Use campos como 'Responsável', 'Relator', 'Labels' e campos personalizados para inferir informações.
-    2.  Para campos como "Justificativa & Objetivo" ou "Escopo Técnico", resuma a informação relevante do campo 'Descrição' e do 'Resumo' da tarefa.
-    3.  Se a informação para um campo específico não for encontrada em nenhum dos dados da tarefa, retorne uma string vazia "".
-
-    **Estrutura de Saída (Responda APENAS com o JSON. Siga esta estrutura):**
+    **FORMULÁRIO JSON PARA PREENCHER (Sua Resposta):**
+    ```json
     {json.dumps(json_structure_example, indent=2)}
+    ```
+    **REGRAS FINAIS:**
+    1.  As chaves no seu JSON devem ser **EXATAMENTE IGUAIS** às do formulário.
+    2.  Seja o mais **DETALHADO** possível ao preencher os valores.
+    3.  Responda **APENAS** com o código JSON final.
     """
 
     try:
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
-            cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
+            # Extrai o JSON da resposta de forma segura
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            cleaned_response = match.group(0) if match else "{}"
         else: # OpenAI
             response = model_client.chat.completions.create(
                 model="gpt-4o",
@@ -1603,11 +1601,16 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
                 response_format={"type": "json_object"}
             )
             cleaned_response = response.choices[0].message.content
-
+        
+        if not cleaned_response:
+            return {}
+            
         return json.loads(cleaned_response)
+        
     except Exception as e:
-        return {"error": f"Ocorreu um erro ao analisar a issue do Jira: {e}"}
-
+        # Retorna o erro e a resposta parcial da IA para depuração
+        return {"error": f"Ocorreu um erro ao processar a resposta da IA: {e}. Resposta recebida: '{cleaned_response}'"}
+    
 def load_local_css(file_path):
     """Lê um arquivo CSS e o injeta na aplicação Streamlit."""
     try:

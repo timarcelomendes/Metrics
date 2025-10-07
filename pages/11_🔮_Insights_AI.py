@@ -5,9 +5,10 @@ import pandas as pd
 import json
 from jira_connector import *
 from metrics_calculator import calculate_executive_summary_metrics
-from security import find_user, get_project_config, get_user_connections
+from security import *
 from utils import get_ai_strategic_diagnosis, get_ai_chat_response, load_and_process_project_data
 from pathlib import Path
+from config import SESSION_TIMEOUT_MINUTES
 
 st.set_page_config(page_title="Insights AI", page_icon="🔮", layout="wide")
 
@@ -16,6 +17,12 @@ st.header("🔮 Insights Estratégicos com Gauge AI", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
 
 # --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
@@ -155,60 +162,66 @@ if st.button("Gerar Diagnóstico com IA", use_container_width=True):
 if 'strategic_diagnosis' in st.session_state:
     st.divider()
     
-    tab_diag, tab_chat = st.tabs(["**🔮 Insights Estratégicos**", "**💬 Converse com a Análise**"])
+    diagnosis_data = st.session_state.strategic_diagnosis
+    
+    # --- LÓGICA DE VERIFICAÇÃO DE ERRO ---
+    if isinstance(diagnosis_data, dict) and "error" in diagnosis_data:
+        st.error(f"Ocorreu um erro ao gerar o diagnóstico da IA: {diagnosis_data['error']}")
+    
+    # Se não houver erro, exibe as abas com os resultados
+    else:
+        tab_diag, tab_chat = st.tabs(["**🔮 Insights Estratégicos**", "**💬 Converse com a Análise**"])
 
-    with tab_diag:
-        diagnosis_dict = st.session_state.strategic_diagnosis
-        
-        # Exibe o diagnóstico principal
-        st.subheader("Análise Geral")
-        st.markdown(diagnosis_dict.get('diagnostico_estrategico', 'N/A'))
-        
-        # Exibe a análise da natureza do trabalho
-        st.subheader("Análise da Natureza do Trabalho")
-        st.markdown(diagnosis_dict.get('analise_natureza_trabalho', 'N/A'))
-        
-        # Exibe o plano de ação de forma organizada
-        st.subheader("Plano de Ação Recomendado")
-        action_plan = diagnosis_dict.get('plano_de_acao_recomendado', [])
-        if isinstance(action_plan, list) and action_plan:
-            for i, item in enumerate(action_plan):
-                st.markdown(f"**{i+1}. {item.get('acao', 'Ação não especificada')}**")
-                with st.expander("Ver Justificativa"):
-                    st.markdown(f"**Justificativa:** {item.get('justificativa', 'Justificativa não especificada.')}")
-        else:
-            st.markdown("Nenhum plano de ação foi gerado pela IA.")
+        with tab_diag:
+            # Exibe o diagnóstico principal
+            st.subheader("Análise Geral")
+            st.markdown(diagnosis_data.get('diagnostico_estrategico', 'N/A'))
             
-    with tab_chat:
-        # Inicializa o histórico do chat na memória da sessão
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
-        
-        # Exibe as mensagens antigas
-        for message in st.session_state.chat_history:
-            role = message["role"]
-            display_name = "Você" if role == "user" else "Gauge AI"
-            avatar = "👤" if role == "user" else "🤖"
-            with st.chat_message(display_name, avatar=avatar):
-                st.markdown(message["content"])
-
-        # Input para a nova pergunta do utilizador
-        if prompt := st.chat_input("Faça uma pergunta sobre o diagnóstico..."):
-            # Adiciona e exibe a pergunta do utilizador
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            with st.chat_message("Você", avatar="👤"):
-                st.markdown(prompt)
+            # Exibe a análise da natureza do trabalho
+            st.subheader("Análise da Natureza do Trabalho")
+            st.markdown(diagnosis_data.get('analise_natureza_trabalho', 'N/A'))
+            
+            # Exibe o plano de ação de forma organizada
+            st.subheader("Plano de Ação Recomendado")
+            action_plan = diagnosis_data.get('plano_de_acao_recomendado', [])
+            if isinstance(action_plan, list) and action_plan:
+                for i, item in enumerate(action_plan):
+                    st.markdown(f"**{i+1}. {item.get('acao', 'Ação não especificada')}**")
+                    with st.expander("Ver Justificativa"):
+                        st.markdown(f"**Justificativa:** {item.get('justificativa', 'Justificativa não especificada.')}")
+            else:
+                st.markdown("Nenhum plano de ação foi gerado pela IA.")
                 
-            # Gera e exibe a resposta do Gauge AI
-            with st.chat_message("Gauge AI", avatar="🤖"):
-                with st.spinner("Gauge AI está a pensar..."):
-                    response = get_ai_chat_response(
-                        initial_diagnosis=st.session_state.strategic_diagnosis,
-                        chat_history=st.session_state.chat_history,
-                        user_question=prompt,
-                        issues_context=st.session_state.get('issues_for_chat', [])
-                    )
-                    st.markdown(response)
+        with tab_chat:
+            # Inicializa o histórico do chat na memória da sessão
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
             
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-            st.rerun()
+            # Exibe as mensagens antigas
+            for message in st.session_state.chat_history:
+                role = message["role"]
+                display_name = "Você" if role == "user" else "Gauge AI"
+                avatar = "👤" if role == "user" else "🤖"
+                with st.chat_message(display_name, avatar=avatar):
+                    st.markdown(message["content"])
+
+            # Input para a nova pergunta do utilizador
+            if prompt := st.chat_input("Faça uma pergunta sobre o diagnóstico..."):
+                # Adiciona e exibe a pergunta do utilizador
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                with st.chat_message("Você", avatar="👤"):
+                    st.markdown(prompt)
+                    
+                # Gera e exibe a resposta do Gauge AI
+                with st.chat_message("Gauge AI", avatar="🤖"):
+                    with st.spinner("Gauge AI está a pensar..."):
+                        response = get_ai_chat_response(
+                            initial_diagnosis=st.session_state.strategic_diagnosis,
+                            chat_history=st.session_state.chat_history,
+                            user_question=prompt,
+                            issues_context=st.session_state.get('issues_for_chat', [])
+                        )
+                        st.markdown(response)
+                
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                st.rerun()

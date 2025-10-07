@@ -286,18 +286,31 @@ def prepare_cfd_data(issues, start_date, end_date):
     return cfd_cumulative, wip_df
 
 def prepare_project_burnup_data(issues, unit, estimation_config, project_config):
-    """Prepara o burnup, agora ignorando issues canceladas."""
+    """Prepara o burnup, convertendo segundos para horas quando necessário."""
     valid_issues = get_filtered_issues(issues)
 
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
-        st.warning("Para análise por pontos, configure um 'Campo de Estimativa' para este projeto.")
+        st.warning("Para análise por pontos/horas, configure um 'Campo de Estimativa' para este projeto.")
         return pd.DataFrame()
 
+    # Verifica se a estimativa é baseada em tempo (e precisa de conversão)
+    is_time_based = estimation_config.get('source') == 'standard_time'
+
     data = []
-    for issue in valid_issues: # Usa a lista filtrada
+    for issue in valid_issues:
         created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
         completion_date = find_completion_date(issue, project_config)
-        value = get_issue_estimation(issue, estimation_config) if unit == 'points' else 1
+        
+        value = 0
+        if unit == 'count':
+            value = 1
+        elif unit == 'points':
+            raw_value = get_issue_estimation(issue, estimation_config) or 0
+            if is_time_based:
+                value = raw_value / 3600  # Converte segundos para horas
+            else:
+                value = raw_value # É story points, usa o valor como está
+        
         data.append({'created': created_date, 'resolved': completion_date, 'value': value})
 
     df = pd.DataFrame(data)

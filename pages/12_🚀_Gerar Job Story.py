@@ -7,9 +7,48 @@ import base64
 import re
 from jira import JIRAError
 from security import *
+from config import SESSION_TIMEOUT_MINUTES
 from jira_connector import get_project_issue_types
 from utils import get_ai_user_story_from_figma, get_ai_user_story_from_text
 from pathlib import Path
+
+def generate_adf_from_text(full_text):
+    """Converte uma string com markup do Jira (*bold*) e quebras de linha para o formato ADF."""
+    content_nodes = []
+    if not full_text:
+        return []
+
+    lines = full_text.split('\n')
+    for line in lines:
+        if not line.strip():
+            content_nodes.append({"type": "paragraph", "content": []}) # Adiciona parágrafo vazio para quebras de linha duplas
+            continue
+
+        text_nodes = []
+        # Divide o texto pelos marcadores de negrito (*...*)
+        parts = re.split(r'(\*.*?\*)', line)
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith('*') and part.endswith('*'):
+                # Parte em negrito
+                text_nodes.append({
+                    "type": "text",
+                    "text": part[1:-1], # Remove os asteriscos
+                    "marks": [{"type": "strong"}]
+                })
+            else:
+                # Parte com texto normal
+                text_nodes.append({
+                    "type": "text",
+                    "text": part
+                })
+
+        content_nodes.append({
+            "type": "paragraph",
+            "content": text_nodes
+        })
+    return content_nodes
 
 # --- Funções de Ajuda ---
 def parse_figma_url(url):
@@ -18,7 +57,6 @@ def parse_figma_url(url):
     if match:
         file_key = match.group(1)
         node_id_url = match.group(2)
-        # Converte o formato do URL (ex: 123-45) para o formato da API (ex: 123:45)
         node_id_api = node_id_url.replace('-', ':').replace('%3A', ':')
         return file_key, node_id_url, node_id_api
     return None, None, None
@@ -27,25 +65,47 @@ def create_jira_issue(jira_domain, jira_email, jira_token, jira_project_key, sto
     """Cria uma única issue no Jira, com a formatação BDD completa."""
     jira_url_endpoint = f"{jira_domain}/rest/api/3/issue"
     auth_string = f"{jira_email}:{jira_token}"
-    
+
     jira_headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "Authorization": f"Basic {base64.b64encode(auth_string.encode()).decode()}"
     }
-    
-    description_content = [
-        {"type": "paragraph", "content": [{"type": "text", "text": "Link para o Elemento no Figma: ", "marks": [{"type": "strong"}]}, {"type": "text", "text": story['figma_link']}]},
-        {"type": "rule"},
+
+    # Constrói o corpo da descrição dinamicamente usando o helper ADF
+    description_content = []
+
+    # Adiciona o link do Figma se existir
+    if story.get('figma_link') and story['figma_link'] != 'N/A':
+        description_content.extend([
+            {"type": "paragraph", "content": [{"type": "text", "text": "Link para o Elemento no Figma: ", "marks": [{"type": "strong"}]}, {"type": "text", "text": story['figma_link']}]},
+            {"type": "rule"}
+        ])
+
+    # Adiciona a Job Story
+    description_content.extend([
         {"type": "paragraph", "content": [{"type": "text", "text": "Job Story:", "marks": [{"type": "strong"}]}]},
-        {"type": "paragraph", "content": [{"type": "text", "text": story['description']}]},
-        {"type": "rule"},
-        {"type": "paragraph", "content": [{"type": "text", "text": "Critérios de Aceitação:", "marks": [{"type": "strong"}]}]},
-        {"type": "bulletList", "content": [{"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": criteria.strip()}]}]} for criteria in story['acceptance_criteria'].split('\n') if criteria.strip()]},
+        *generate_adf_from_text(story.get('description', ''))
+    ])
+
+    # Adiciona a regra e os Critérios de Aceitação
+    description_content.append({"type": "rule"})
+    description_content.append({"type": "paragraph", "content": [{"type": "text", "text": "Critérios de Aceitação:", "marks": [{"type": "strong"}]}]})
+
+    # Formata os critérios como uma lista de marcadores (bullet list)
+    acceptance_criteria_list = [
+        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": criteria.strip()}]}]}
+        for criteria in story.get('acceptance_criteria', '').split('\n') if criteria.strip()
+    ]
+    if acceptance_criteria_list:
+        description_content.append({"type": "bulletList", "content": acceptance_criteria_list})
+
+    # Adiciona a regra e os Cenários de Teste
+    description_content.extend([
         {"type": "rule"},
         {"type": "paragraph", "content": [{"type": "text", "text": "Cenários de Teste (BDD):", "marks": [{"type": "strong"}]}]},
-        {"type": "paragraph", "content": [{"type": "text", "text": story['bdd_scenarios']}]}
-    ]
+        *generate_adf_from_text(story.get('bdd_scenarios', ''))
+    ])
 
     jira_payload = {
         "fields": {
@@ -55,7 +115,7 @@ def create_jira_issue(jira_domain, jira_email, jira_token, jira_project_key, sto
             "issuetype": {"name": issuetype_name}
         }
     }
-    
+
     try:
         response = requests.post(jira_url_endpoint, headers=jira_headers, data=json.dumps(jira_payload))
         response.raise_for_status()
@@ -65,6 +125,12 @@ def create_jira_issue(jira_domain, jira_email, jira_token, jira_project_key, sto
         st.code(e.response.text, language="json")
         return None
 
+def reset_story_state():
+    """Função centralizada para limpar o estado da sessão e permitir uma nova geração."""
+    for key in ['screen_fetched', 'story_generated', 'generated_story', 'target_node_data', 'figma_full_url', 'figma_image_url']:
+        if key in st.session_state:
+            del st.session_state[key]
+
 # --- Configurações da Página e Autenticação ---
 st.set_page_config(page_title="Gerador de Histórias com IA", page_icon="🚀", layout="wide")
 st.header("🚀 Gerador de Histórias com IA")
@@ -73,62 +139,55 @@ st.markdown("Crie histórias de usuário a partir de uma tela do Figma ou de uma
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
+if check_session_timeout():
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
-    if not user_connections:
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
+    st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão Jira", icon="🔗"); st.stop()
 
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            logo_path, 
-            size="large")
+        st.logo(logo_path, size="large")
     except FileNotFoundError:
         st.write("Gauge Metrics") 
-    
     if st.session_state.get("email"):
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    else:
-        st.info("⚠️ Usuário não conectado!")
-        
     if st.button("Logout", use_container_width=True, type='secondary'):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
+
+# --- Inicialização robusta do Estado da Sessão ---
+if 'generated_story' not in st.session_state: st.session_state.generated_story = {}
+if 'story_generated' not in st.session_state: st.session_state.story_generated = False
+if 'screen_fetched' not in st.session_state: st.session_state.screen_fetched = False
 
 # --- Seleção de Modo ---
 creation_mode = st.radio(
     "Como deseja começar?",
     ["Analisar Elemento do Figma", "Descrever a Ideia"],
     horizontal=True,
-    key="creation_mode_selector"
+    key="creation_mode_selector",
+    on_change=reset_story_state # Limpa o estado ao mudar de modo para evitar conflitos
 )
 st.markdown("---")
 
+# --- Bloco de Feedback de Sucesso ---
+if 'issue_created_success_key' in st.session_state:
+    st.balloons()
+    st.success(f"🎉 Processo concluído! Issue '{st.session_state.issue_created_success_key}' criada com sucesso.")
+    del st.session_state.issue_created_success_key
+
 # --- MODO 1: FIGMA PARA JIRA ---
 if creation_mode == "Analisar Elemento do Figma":
-    
-    # --- VERIFICAÇÃO DE SEGURANÇA APRIMORADA ---
     user_figma_token = get_user_figma_token(st.session_state['email'])
     if not user_figma_token:
         st.warning("O seu Token de Acesso Pessoal do Figma não está configurado.", icon="🔑")
-        st.info("Para usar esta funcionalidade, por favor, adicione o seu token na página 'Minha Conta'.")
-        st.page_link("pages/7_👤_Minha_Conta.py", label="Configurar Token Agora", icon="🔑")
-        st.stop()
+        st.page_link("pages/9_👤_Minha_Conta.py", label="Configurar Token Agora", icon="🔑"); st.stop()
 
     st.header("1. Cole o Link do Elemento do Figma")
-    figma_url_input = st.text_input("URL do Elemento no Figma*", help="No Figma, selecione o elemento (tela, componente, etc.) e copie o URL do navegador.")
+    figma_url_input = st.text_input("URL do Elemento no Figma*", help="No Figma, selecione o elemento e copie o URL do navegador.")
 
     if st.button("Buscar Elemento", use_container_width=True):
         if not figma_url_input:
@@ -140,9 +199,7 @@ if creation_mode == "Analisar Elemento do Figma":
             else:
                 with st.spinner("A buscar no Figma..."):
                     try:
-                        # --- USA O TOKEN DO UTILIZADOR ---
                         figma_headers = {'X-Figma-Token': user_figma_token}
-                        
                         node_details_url = f"https://api.figma.com/v1/files/{file_key}/nodes?ids={url_node_id}"
                         response_details = requests.get(node_details_url, headers=figma_headers)
                         response_details.raise_for_status()
@@ -156,6 +213,7 @@ if creation_mode == "Analisar Elemento do Figma":
                         if not image_data.get('images') or not image_data['images'].get(api_node_id):
                             st.error(f"Não foi possível renderizar a imagem para o nó selecionado.", icon="🖼️")
                         else:
+                            reset_story_state() # Limpa o estado antes de carregar o novo
                             st.session_state.figma_image_url = image_data['images'][api_node_id]
                             st.session_state.target_node_data = node_data
                             st.session_state.figma_full_url = figma_url_input
@@ -177,9 +235,10 @@ elif creation_mode == "Descrever a Ideia":
                 generated_story = get_ai_user_story_from_text(user_context_text)
                 st.session_state.generated_story = generated_story
                 st.session_state.story_generated = True
+                st.rerun()
 
 # --- PASSO 2 (COMUM): GERAR HISTÓRIA ---
-if st.session_state.get('screen_fetched') and not st.session_state.get('story_generated'):
+if st.session_state.screen_fetched and not st.session_state.story_generated:
     st.header("2. Gerar História com IA")
     target_node = st.session_state.target_node_data
     
@@ -192,18 +251,17 @@ if st.session_state.get('screen_fetched') and not st.session_state.get('story_ge
         
         if st.button("Gerar História com Gauge AI", use_container_width=True):
             with st.spinner("Gauge AI está a analisar o elemento e a escrever a história..."):
-                generated_story = get_ai_user_story_from_figma(
-                    st.session_state.figma_image_url, 
-                    user_context_figma,
-                    target_node['name']
-                )
+                generated_story = get_ai_user_story_from_figma(st.session_state.figma_image_url, user_context_figma, target_node['name'])
                 st.session_state.generated_story = generated_story
                 st.session_state.story_generated = True
+                st.rerun()
 
-# --- PASSO 3 (FINAL): CRIAR ISSUE NO JIRA ---
-if st.session_state.get('story_generated'):
-    st.header("3. Criar Issue no Jira")
-    story_data = st.session_state.generated_story
+# --- PASSO FINAL: REVISAR E CRIAR ISSUE ---
+if st.session_state.story_generated:
+    st.header("2. Revise e Crie a Issue no Jira" if creation_mode == "Descrever a Ideia" else "3. Criar Issue no Jira")
+    
+    with st.expander("🔍 Ver Resposta da IA (para depuração)"):
+        st.json(st.session_state.generated_story)
     
     active_conn = st.session_state.get('active_connection', {})
     projects = st.session_state.get('projects', {})
@@ -218,8 +276,7 @@ if st.session_state.get('story_generated'):
             jira_issuetype = st.selectbox("Selecione o Tipo de Issue:", options=issue_types, key="jira_issuetype_selector")
     
     with st.form("jira_form"):
-        st.info("Revise a história de usuário gerada pela IA e crie a issue no Jira.")
-        
+        story_data = st.session_state.generated_story
         title = st.text_input("Título da História", value=story_data.get('title', ''))
         description = st.text_area("Descrição (Job Story)", value=story_data.get('description', ''), height=150)
         acceptance_criteria = st.text_area("Critérios de Aceitação", value=story_data.get('acceptance_criteria', ''), height=200)
@@ -229,16 +286,11 @@ if st.session_state.get('story_generated'):
 
     if create_button:
         jira_api_token = decrypt_token(active_conn.get('encrypted_token'))
-        
         final_story = {
-            'title': title,
-            'description': description,
-            'acceptance_criteria': acceptance_criteria,
-            'bdd_scenarios': bdd_scenarios,
-            'frame_name': st.session_state.get('target_node_data', {}).get('name', 'N/A'),
-            'figma_link': st.session_state.get('figma_full_url', 'N/A')
+            'title': title, 'description': description, 'acceptance_criteria': acceptance_criteria,
+            'bdd_scenarios': bdd_scenarios, 'figma_link': st.session_state.get('figma_full_url', 'N/A')
         }
-
+        
         with st.spinner("A criar a issue..."):
             issue_key = create_jira_issue(
                 jira_domain=active_conn.get('jira_url', ''),
@@ -250,7 +302,6 @@ if st.session_state.get('story_generated'):
             )
         
         if issue_key:
-            st.balloons()
-            st.success(f"🎉 Processo concluído! Issue '{issue_key}' criada com sucesso.")
-            for key in ['screen_fetched', 'story_generated', 'generated_story', 'target_node_data', 'figma_full_url']:
-                if key in st.session_state: del st.session_state[key]
+            reset_story_state() 
+            st.session_state.issue_created_success_key = issue_key
+            st.rerun()

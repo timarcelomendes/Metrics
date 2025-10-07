@@ -9,6 +9,7 @@ from metrics_calculator import *
 from security import *
 from pathlib import Path
 from utils import *
+from config import SESSION_TIMEOUT_MINUTES
 from security import get_global_configs, get_project_config, save_project_config # <--- CORREÇÃO APLICADA AQUI
 
 st.set_page_config(page_title="Resumo Executivo", page_icon="📈", layout="wide")
@@ -19,6 +20,12 @@ st.header("📈 Resumo Executivo do Portfólio", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
 
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados

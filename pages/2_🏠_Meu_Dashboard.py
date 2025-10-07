@@ -12,11 +12,14 @@ from config import *
 from utils import *
 from security import *
 from pathlib import Path
+import importlib
+import jira_connector
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Meu Dashboard", page_icon="🏠", layout="wide")
 
 # --- CABEÇALHO E CONTROLES ---
-st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Bem-vindo')}")
+st.header(f"🏠 Meu Dashboard: {st.session_state.get('project_name', 'Bem-vindo')}", divider='rainbow')
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
@@ -25,7 +28,7 @@ if 'email' not in st.session_state:
     st.stop()
 
 if check_session_timeout():
-    st.warning("Sua sessão expirou por inatividade. Por favor, faça login novamente.")
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
     st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
     
@@ -45,11 +48,6 @@ if 'jira_client' not in st.session_state:
 
 st.markdown("""
 <style>
-/* Adiciona um espaçamento mais seguro no topo da página */
-.block-container {
-    padding-top: 3rem;
-    padding-bottom: 2rem;
-}
 /* Alinha os itens nos controlos do cabeçalho verticalmente ao centro */
 [data-testid="stHorizontalBlock"] {
     align-items: center;
@@ -69,7 +67,7 @@ div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] {
     font-size: 4rem;
 }
 
-/* --- CORREÇÃO: REGRAS PARA BOTÕES QUADRADOS E COMPACTOS --- */
+/* --- REGRAS PARA BOTÕES QUADRADOS E COMPACTOS --- */
 div[data-testid="stAppViewContainer"] div[data-testid="stContainer"] > div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button {
     background-color: transparent;
     border: none;
@@ -94,19 +92,15 @@ div[data-testid="stAppViewContainer"] div[data-testid="stContainer"] > div[data-
 </style>
 """, unsafe_allow_html=True)
 
-
 def on_project_change():
-    """Limpa o estado relevante ao trocar de projeto."""
     if 'dynamic_df' in st.session_state: st.session_state.pop('dynamic_df', None)
     if 'loaded_project_key' in st.session_state: st.session_state.pop('loaded_project_key', None)
 
 def on_layout_change():
-    """Callback que lê o estado do radio e chama a função para guardar a preferência."""
     num_cols = st.session_state.dashboard_layout_radio
     save_dashboard_column_preference(st.session_state.project_key, num_cols)
 
 def move_item(items_list, from_index, to_index):
-    """Move um item dentro de uma lista de uma posição para outra."""
     if 0 <= from_index < len(items_list) and 0 <= to_index < len(items_list):
         item = items_list.pop(from_index)
         items_list.insert(to_index, item)
@@ -133,20 +127,31 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_dashboard", index=default_index, on_change=on_project_change, placeholder="Escolha um projeto...")
     
     if selected_project_name:
-        if st.button("Visualizar Dashboard", use_container_width=True, type="primary"):
+        if st.button("Visualizar Dashboard", width='stretch', type="primary"):
+            importlib.reload(jira_connector)
             project_key = projects[selected_project_name]
             save_last_project(st.session_state['email'], project_key)
             st.session_state.project_key = project_key
             st.session_state.project_name = selected_project_name
             
-            df = load_and_process_project_data(st.session_state.jira_client, project_key)
+            df = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
             st.session_state.dynamic_df = df
             st.session_state.loaded_project_key = project_key
             st.rerun()
     
     st.divider()
-    if st.button("Logout", use_container_width=True, type='secondary'):
-        for key in list(st.session_state.keys()): del st.session_state[key]
+    if st.button("Logout", width='stretch', type='secondary'):
+        # Guarda o valor de 'remember_email' antes de limpar a sessão
+        email_to_remember = st.session_state.get('remember_email', '')
+        
+        # Limpa todas as chaves da sessão
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+            
+        # Restaura a chave 'remember_email' se ela existia
+        if email_to_remember:
+            st.session_state['remember_email'] = email_to_remember
+            
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
@@ -203,7 +208,7 @@ with cols[2]:
     organize_mode = st.toggle("Organizar", help="Ative para gerir dashboards e abas.")
 
 with cols[3]:
-    if st.button("🤖 Análise AI", help="Gerar análise do dashboard com IA", use_container_width=True):
+    if st.button("🤖 Análise AI", help="Gerar análise do dashboard com IA", width='stretch'):
         with st.spinner("A Gauge AI está a analisar os dados de todos os gráficos..."):
             summaries = [summarize_chart_data(c, df) for c in all_charts]
             provider = user_data.get('ai_provider_preference', 'Google Gemini')
@@ -211,7 +216,7 @@ with cols[3]:
             st.session_state.ai_dashboard_insights = insights
 
 with cols[4]:
-    if st.button("➕ Gráfico", use_container_width=True, type="primary"):
+    if st.button("➕ Gráfico", width='stretch', type="primary"):
         st.switch_page("pages/5_🏗️_Construir Gráficos.py")
 
 st.divider()
@@ -257,7 +262,7 @@ if organize_mode:
         with d_col1:
             with st.form("new_dashboard_form"):
                 new_dashboard_name = st.text_input("Nome do Novo Dashboard")
-                if st.form_submit_button("➕ Criar Novo Dashboard", use_container_width=True):
+                if st.form_submit_button("➕ Criar Novo Dashboard", width='stretch'):
                     if new_dashboard_name:
                         new_id = str(uuid.uuid4())
                         layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
@@ -273,7 +278,7 @@ if organize_mode:
         with d_col2:
             with st.form("rename_dashboard_form"):
                 renamed_dashboard_name = st.text_input("Renomear Dashboard Atual", value=active_dashboard_name)
-                if st.form_submit_button("✏️ Renomear", use_container_width=True):
+                if st.form_submit_button("✏️ Renomear", width='stretch'):
                     if renamed_dashboard_name:
                         layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
                         layouts[current_project_key]['dashboards'][active_dashboard_id]['name'] = renamed_dashboard_name
@@ -283,7 +288,7 @@ if organize_mode:
         
         st.divider()
         if len(available_dashboards) > 1:
-            if st.button("❌ Apagar Dashboard Atual", use_container_width=True, type="secondary"):
+            if st.button("❌ Apagar Dashboard Atual", width='stretch', type="secondary"):
                 layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
                 del layouts[current_project_key]['dashboards'][active_dashboard_id]
                 layouts[current_project_key]['active_dashboard_id'] = next(iter(layouts[current_project_key]['dashboards']))
@@ -291,12 +296,11 @@ if organize_mode:
                 st.success("Dashboard apagado!")
                 st.rerun()
         else:
-            st.button("❌ Apagar Dashboard Atual", use_container_width=True, disabled=True, help="Não pode apagar o seu último dashboard.")
+            st.button("❌ Apagar Dashboard Atual", width='stretch', disabled=True, help="Não pode apagar o seu último dashboard.")
 
     with st.container(border=True):
         st.markdown("**2. Gerir Abas e Gráficos do Dashboard Atual**")
         
-        # --- INÍCIO DA CORREÇÃO: GERIR ABAS COM ORDENAÇÃO ---
         st.markdown("###### Gerir Abas")
         tab_names = list(tabs_layout.keys())
 
@@ -304,8 +308,7 @@ if organize_mode:
             cols = st.columns([0.7, 0.1, 0.1, 0.1])
             new_name = cols[0].text_input("Nome da Aba", value=tab_name, key=f"tab_name_{i}")
             
-            # Botão para mover para cima
-            if cols[1].button("🔼", key=f"up_tab_{i}", help="Mover para cima", use_container_width=True, disabled=(i == 0)):
+            if cols[1].button("🔼", key=f"up_tab_{i}", help="Mover para cima", width='stretch', disabled=(i == 0)):
                 current_items = list(tabs_layout.items())
                 moved_items = move_item(current_items, i, i - 1)
                 project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
@@ -313,8 +316,7 @@ if organize_mode:
                 save_user_dashboard(st.session_state['email'], all_layouts)
                 st.rerun()
 
-            # Botão para mover para baixo
-            if cols[2].button("🔽", key=f"down_tab_{i}", help="Mover para baixo", use_container_width=True, disabled=(i == len(tab_names) - 1)):
+            if cols[2].button("🔽", key=f"down_tab_{i}", help="Mover para baixo", width='stretch', disabled=(i == len(tab_names) - 1)):
                 current_items = list(tabs_layout.items())
                 moved_items = move_item(current_items, i, i + 1)
                 project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
@@ -322,10 +324,8 @@ if organize_mode:
                 save_user_dashboard(st.session_state['email'], all_layouts)
                 st.rerun()
 
-            # Botão para apagar
-            if cols[3].button("❌", key=f"del_tab_{i}", help="Apagar aba", use_container_width=True, disabled=(len(tab_names) <= 1)):
+            if cols[3].button("❌", key=f"del_tab_{i}", help="Apagar aba", width='stretch', disabled=(len(tab_names) <= 1)):
                 if tab_name in tabs_layout:
-                    # Move os gráficos da aba apagada para a primeira aba
                     charts_to_move = tabs_layout.pop(tab_name)
                     first_tab_name = next(iter(tabs_layout))
                     tabs_layout[first_tab_name].extend(charts_to_move)
@@ -335,16 +335,13 @@ if organize_mode:
                     save_user_dashboard(st.session_state['email'], all_layouts)
                     st.rerun()
             
-            # Lógica para renomear
             if new_name != tab_name:
                 items = list(tabs_layout.items())
                 items[i] = (new_name, items[i][1])
                 tabs_layout = dict(items)
-                # Guarda a alteração no estado da sessão para ser salva com o botão principal
                 st.session_state.updated_tabs_layout = tabs_layout
 
-
-        if st.button("➕ Adicionar Nova Aba", use_container_width=True):
+        if st.button("➕ Adicionar Nova Aba", width='stretch'):
             new_tab_name = f"Nova Aba {len(tab_names) + 1}"
             tabs_layout[new_tab_name] = []
             project_layouts['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
@@ -353,7 +350,6 @@ if organize_mode:
             st.rerun()
         
         st.divider()
-        # --- Atribuir Gráficos ---
         st.markdown("###### Atribuir Gráficos às Abas")
         if not all_charts:
             st.info("Nenhum gráfico neste dashboard. Adicione um para começar a organizar.")
@@ -363,10 +359,7 @@ if organize_mode:
                 chart_id = chart['id']
                 current_tab = next((tab for tab, charts in tabs_layout.items() if chart_id in [c['id'] for c in charts]), None)
                 
-                # --- INÍCIO DA CORREÇÃO ---
-                # A lista de opções de abas agora vem diretamente de 'tab_names'
                 tab_options = tab_names
-                # --- FIM DA CORREÇÃO ---
                 
                 if current_tab and current_tab not in tab_options:
                     tab_options.insert(0, current_tab)
@@ -384,7 +377,7 @@ if organize_mode:
                 updated_chart_assignments[chart_id] = new_tab
 
         st.divider()
-        if st.button("Salvar Alterações de Organização", type="primary", use_container_width=True):
+        if st.button("Salvar Alterações de Organização", type="primary", width='stretch'):
             if 'updated_tabs_layout' in st.session_state:
                 tabs_layout = st.session_state.pop('updated_tabs_layout')
 
@@ -405,13 +398,7 @@ else:
     tabs_with_charts = {name: charts for name, charts in tabs_layout.items() if charts}
     
     if not any(tabs_with_charts.values()):
-        st.markdown("""
-        <div id="empty-state-container">
-            <div class="icon">📊</div>
-            <h3>Seu dashboard está vazio!</h3>
-            <p>Comece a adicionar visualizações para analisar seus dados.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("""<div id="empty-state-container">...</div>""", unsafe_allow_html=True)
         if st.button("➕ Adicionar seu primeiro gráfico", type="primary"):
             st.switch_page("pages/5_🏗️_Construir Gráficos.py")
     else:
@@ -424,14 +411,16 @@ else:
                 for j, chart_to_render in enumerate(dashboard_items_in_tab):
                     with cols[j % default_cols]:
                         with st.container(border=True):
-                            # --- CORREÇÃO: Proporção das colunas ajustada para botões compactos ---
+                            
                             header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
                             
-                            with header_cols[0]:
-                                st.markdown(f"**{chart_to_render.get('icon', '📊')} {chart_to_render.get('title', 'Visualização')}**")
+                            if chart_to_render.get('type') != 'indicator':
+                                with header_cols[0]:
+                                    st.markdown(f"**{chart_to_render.get('icon', '📊')} {chart_to_render.get('title', 'Visualização')}**")
                             
+                            # A lógica dos botões agora usa header_cols, que sempre existe
                             with header_cols[1]:
-                                if st.button("🔼", key=f"up_{chart_to_render['id']}", help="Mover para cima", use_container_width=True, disabled=(j == 0)):
+                                if st.button("🔼", key=f"up_{chart_to_render['id']}", help="Mover para cima", width='stretch', disabled=(j == 0)):
                                     new_order = move_item(dashboard_items_in_tab, j, j - 1)
                                     tabs_layout[tab_name] = new_order
                                     all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
@@ -439,7 +428,7 @@ else:
                                     st.rerun()
 
                             with header_cols[2]:
-                                if st.button("🔽", key=f"down_{chart_to_render['id']}", help="Mover para baixo", use_container_width=True, disabled=(j == len(dashboard_items_in_tab) - 1)):
+                                if st.button("🔽", key=f"down_{chart_to_render['id']}", help="Mover para baixo", width='stretch', disabled=(j == len(dashboard_items_in_tab) - 1)):
                                     new_order = move_item(dashboard_items_in_tab, j, j + 1)
                                     tabs_layout[tab_name] = new_order
                                     all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
@@ -447,11 +436,11 @@ else:
                                     st.rerun()
                             
                             with header_cols[3]:
-                                if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Gráfico", use_container_width=True):
+                                if st.button("✏️", key=f"edit_{chart_to_render['id']}", help="Editar Gráfico", width='stretch'):
                                     st.session_state['chart_to_edit'] = chart_to_render; st.switch_page("pages/5_🏗️_Construir Gráficos.py")
                             
                             with header_cols[4]:
-                                if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Gráfico", use_container_width=True):
+                                if st.button("❌", key=f"del_{chart_to_render['id']}", help="Remover Gráfico", width='stretch'):
                                     tabs_layout[tab_name] = [item for item in dashboard_items_in_tab if item['id'] != chart_to_render['id']]
                                     all_layouts[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
                                     save_user_dashboard(st.session_state['email'], all_layouts)

@@ -52,7 +52,7 @@ if 'email' in st.session_state:
     st.header(f"Bem-vindo de volta!", divider='rainbow')
     st.markdown(f"Você já está logado como **{st.session_state['email']}**.")
     st.info("Pode agora navegar para as páginas de análise na barra lateral esquerda.")
-    if st.button("Logout", use_container_width=True):
+    if st.button("Logout", width='stretch'):
         keys_to_keep = ['remember_email']
         keys_to_delete = [key for key in st.session_state.keys() if key not in keys_to_keep]
         for key in keys_to_delete:
@@ -89,7 +89,7 @@ else:
                     password = st.text_input("Senha", type="password", placeholder="Digite a sua senha")
                     remember_me = st.checkbox("Lembrar-me", value=bool(st.session_state.get('remember_email', '')))
 
-                    if st.form_submit_button("Entrar", use_container_width=True, type="primary"):
+                    if st.form_submit_button("Entrar", width='stretch', type="primary"):
                         if email and password:
                             user = find_user(email)
 
@@ -135,7 +135,7 @@ else:
                     new_password = st.text_input("Crie uma Senha", type="password", key="reg_pass")
                     confirm_password = st.text_input("Confirme a Senha", type="password", key="reg_confirm")
 
-                    if st.form_submit_button("Registrar", use_container_width=True, type="primary"):
+                    if st.form_submit_button("Registrar", width='stretch', type="primary"):
                         if not all([new_email, new_password, confirm_password]):
                             st.warning("Por favor, preencha todos os campos.")
                         elif find_user(new_email):
@@ -157,7 +157,7 @@ else:
                     st.markdown("##### Recuperação de Senha")
                     st.info("Por favor, insira o seu e-mail. Se estiver registrado, enviaremos uma senha temporária para si.")
                     recover_email = st.text_input("Email", placeholder="email@exemplo.com")
-                    if st.form_submit_button("Enviar E-mail de Recuperação", use_container_width=True, type="primary"):
+                    if st.form_submit_button("Enviar E-mail de Recuperação", width='stretch', type="primary"):
                         if recover_email:
                             user = find_user(recover_email)
                             if user:

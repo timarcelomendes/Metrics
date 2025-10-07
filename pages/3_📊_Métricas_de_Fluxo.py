@@ -79,15 +79,23 @@ with st.sidebar:
             st.session_state.start_date_fluxo, st.session_state.end_date_fluxo = date_range[0], date_range[1]
         
         is_data_loaded = 'dynamic_df' in st.session_state and st.session_state.dynamic_df is not None
-        with st.expander("Carregar Dados", expanded=not is_data_loaded):
-            if st.button("Analisar / Atualizar Dados", use_container_width=True, type="primary"):
-                df_loaded = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
-                st.session_state.dynamic_df = df_loaded
-                st.rerun()
+        if st.button("Carregar Dados", width='stretch', type="primary"):
+            df_loaded = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+            st.session_state.dynamic_df = df_loaded
+            st.rerun()
  
-    if st.button("Logout", use_container_width=True, type='secondary'):
+    if st.button("Logout", width='stretch', type='secondary'):
+        # Guarda o valor de 'remember_email' antes de limpar a sessão
+        email_to_remember = st.session_state.get('remember_email', '')
+        
+        # Limpa todas as chaves da sessão
         for key in list(st.session_state.keys()):
             del st.session_state[key]
+            
+        # Restaura a chave 'remember_email' se ela existia
+        if email_to_remember:
+            st.session_state['remember_email'] = email_to_remember
+            
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
@@ -149,7 +157,7 @@ with st.expander("Filtros da Análise", expanded=True):
                     else:
                         value = st.number_input("Valor", key=f"flow_val_single_num_{i}", value=f.get('value', 0.0))
             st.session_state.flow_filters[i]['value'] = value
-        cols[3].button("❌", key=f"flow_remove_{i}", on_click=lambda i=i: st.session_state.flow_filters.pop(i), use_container_width=True)
+        cols[3].button("❌", key=f"flow_remove_{i}", on_click=lambda i=i: st.session_state.flow_filters.pop(i), width='stretch')
     
     st.button("➕ Adicionar Filtro", on_click=lambda: st.session_state.flow_filters.append({}))
 
@@ -191,7 +199,6 @@ completed_issues_in_period = [i for i in filtered_issues if (cd := find_completi
 completed_issue_keys = [i.key for i in completed_issues_in_period]
 df_completed = filtered_df[filtered_df['Issue'].isin(completed_issue_keys)]
 
-# --- CÁLCULO CORRIGIDO E EXPLÍCITO DOS TEMPOS ---
 times_data = []
 for issue in completed_issues_in_period:
     completion_date = find_completion_date(issue, project_config)
@@ -206,7 +213,6 @@ for issue in completed_issues_in_period:
 
 df_times = pd.DataFrame(times_data)
 if not df_times.empty:
-    # Remove quaisquer linhas onde o Cycle Time não pôde ser calculado (None)
     df_times.dropna(subset=['Cycle Time (dias)'], inplace=True)
 
 wip_issues = [i for i in filtered_issues if i.fields.status.name.lower() in [s.lower() for s in in_progress_statuses]]
@@ -335,7 +341,10 @@ with tab_performance:
     estimation_config = project_config.get('estimation_field', {})
     if not estimation_config.get('id'):
         st.warning("Nenhum campo de estimativa configurado. As métricas de acurácia não podem ser calculadas.", icon="⚠️")
-        st.page_link("pages/6_⚙️_Configurações.py", label="Configurar Campo de Estimativa", icon="⚙️")
+        
+        # --- INÍCIO DA CORREÇÃO ---
+        st.page_link("pages/7_⚙️_Configurações.py", label="Configurar Campo de Estimativa", icon="⚙️")
+        # --- FIM DA CORREÇÃO ---
     else:
         st.markdown("**Acurácia da Estimativa (Estimado vs. Realizado)**")
         st.caption("Compara o esforço estimado com o tempo real gasto nas tarefas concluídas no período.")

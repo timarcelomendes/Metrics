@@ -3,6 +3,10 @@
 import streamlit as st
 import toml
 from pathlib import Path
+import plotly.express as px
+
+# --- Parâmetro de Timeout da Sessão ---
+SESSION_TIMEOUT_MINUTES = 10
 
 # --- Constantes Padrão ---
 DASHBOARD_CHART_LIMIT = 20
@@ -15,6 +19,15 @@ DEFAULT_COLORS = {
     'type_colors': {
         'bug': '#d73a49', 'melhoria': '#28a745', 'tarefa': '#007bff'
     }
+}
+
+# --- Esquemas de Cores para Gráficos ---
+COLOR_THEMES = {
+    "Padrão Gauge (Vibrante)": px.colors.qualitative.Vivid,
+    "Tons de Azul (Sequencial)": px.colors.sequential.Blues_r,
+    "Tons Pasteis (Delicado)": px.colors.qualitative.Pastel,
+    "Alto Contraste (Escuro)": px.colors.qualitative.Plotly,
+    "Monocromático (Cinzento)": px.colors.sequential.Greys_r,
 }
 
 # --- Função de Carregamento Central ---

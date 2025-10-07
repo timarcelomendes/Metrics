@@ -15,3 +15,5 @@ openai
 matplotlib
 sendgrid
 pymupdf
+stqdm
+streamlit-quill

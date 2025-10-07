@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import os
+from config import SESSION_TIMEOUT_MINUTES
 from jira_connector import *
 from metrics_calculator import *
 from security import *
@@ -20,6 +21,12 @@ st.header("📈 Forecast & Planeamento de Entregas", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.stop()
 
 if 'jira_client' not in st.session_state:
     user_connections = get_user_connections(st.session_state['email'])
