@@ -60,7 +60,7 @@ with st.sidebar:
         st.switch_page("1_🔑_Autenticação.py")
 
 # --- Interface Principal com Abas Reorganizadas ---
-main_tab_content, main_tab_system = st.tabs(["** Gestão de Conteúdo**", "**⚙️ Configurações do Sistema**"])
+main_tab_content, main_tab_system = st.tabs(["**📄 Gestão de Conteúdo**", "**⚙️ Configurações do Sistema**"])
 
 with main_tab_content:
     st.subheader("Gestão de Conteúdo do Product Hub")
@@ -68,7 +68,7 @@ with main_tab_content:
     content_tab_playbooks, content_tab_competencies, content_tab_roles = st.tabs([
         "📖 Playbooks", 
         "💎 Competências", 
-        "👨‍🔬Papéis"
+        "👨‍🔬 Papéis"
     ])
 
     with content_tab_playbooks:
@@ -223,8 +223,8 @@ with main_tab_content:
 with main_tab_system:
     st.subheader("Configurações Gerais do Sistema")
     
-    system_tab_domains, system_tab_users, system_tab_kpis, system_tab_email = st.tabs([
-        "🌐 Domínios", "👥 Utilizadores", "🎯 Metas", "📧 E-mail"
+    system_tab_domains, system_tab_users, system_tab_kpis, system_tab_email, tab_link = st.tabs([
+        "🌐 Domínios", "👥 Utilizadores", "🎯 Metas", "📧 E-mail", "🔗 Link de Avaliação"
     ])
 
     with system_tab_domains:
@@ -327,3 +327,38 @@ with main_tab_system:
                         st.error(message)
                 else:
                     st.error("Por favor, preencha todos os campos para validar e salvar.")
+
+with tab_link:
+    st.subheader("Configurações Gerais da Aplicação")
+    
+    configs = get_global_configs()
+    
+    with st.form("general_configs_form"):
+        st.markdown("#### URL Base da Aplicação")
+        st.info("Esta URL é usada para gerar links partilháveis, como os de autoavaliação.")
+        
+        base_url_input = st.text_input(
+            "URL Base", 
+            value=configs.get("app_base_url", ""),
+            placeholder="https://seu-app.streamlit.app"
+        )
+
+        st.divider()
+
+        # A sua funcionalidade original de domínios
+        st.markdown("#### Domínios Permitidos para Cadastro")
+        st.info("Defina os domínios de e-mail que podem se cadastrar na aplicação. Separe múltiplos domínios por vírgula.")
+        
+        allowed_domains_input = st.text_area(
+            "Domínios de E-mail Permitidos",
+            value=", ".join(configs.get("allowed_domains", [])), # Usa a chave 'allowed_domains'
+            placeholder="exemplo.com, outrodominio.com.br"
+        )
+        
+        if st.form_submit_button("Salvar Configurações Gerais", type="primary", use_container_width=True):
+            configs['app_base_url'] = base_url_input
+            configs['allowed_domains'] = [domain.strip() for domain in allowed_domains_input.split(',') if domain.strip()]
+            
+            save_global_configs(configs)
+            st.success("Configurações gerais salvas com sucesso!")
+            st.rerun()

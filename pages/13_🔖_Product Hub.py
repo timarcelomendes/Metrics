@@ -1,4 +1,4 @@
-# pages/13_🔖_Product Hub.py - CÓDIGO COMPLETO E ATUALIZADO
+# pages/13_🔖_Product Hub.py - CÓDIGO COMPLETO E CORRIGIDO
 
 import streamlit as st
 import pandas as pd
@@ -13,7 +13,7 @@ import uuid
 st.set_page_config(page_title="Gauge Product Hub", page_icon="🚀", layout="wide")
 
 # ==============================================================================
-# --- DEFINIÇÕES ESTRUTURANTIS (CONTEÚDO ESTÁTICO) ---
+# --- DEFINIÇÕES ESTRUTURANTIS E FUNÇÕES AUXILIARES ---
 # ==============================================================================
 SKILL_LEVELS = {
     0: {"name": "Não Avaliado", "desc": "Ainda não foi definido um nível para esta competência."},
@@ -23,10 +23,6 @@ SKILL_LEVELS = {
     4: {"name": "Avançado", "desc": "Domina a competência em cenários complexos. É uma referência para o time e propõe melhorias nos processos."},
     5: {"name": "Especialista", "desc": "É uma referência na empresa. Inova, cria novas práticas e mentora outros, influenciando a estratégia."}
 }
-
-# ==============================================================================
-# --- FUNÇÕES AUXILIARES ---
-# ==============================================================================
 
 def get_all_competencies_from_framework(framework):
     all_competencies = []
@@ -45,18 +41,18 @@ def sync_evaluations_with_framework():
         if member_name not in st.session_state.avaliacoes:
             st.session_state.avaliacoes[member_name] = {}
         
-        evaluations = st.session_state.avaliacoes[member_name]
-        
+        eval_data_container = st.session_state.avaliacoes[member_name]
+        eval_data = eval_data_container.get('data', eval_data_container)
+
         for comp_name in current_competency_names:
-            if comp_name not in evaluations:
-                evaluations[comp_name] = {"leader": {"level": 0, "pdi": ""}, "member": {"level": 0, "pdi": ""}}
+            if comp_name not in eval_data:
+                eval_data[comp_name] = {"leader": {"level": 0, "pdi": ""}, "member": {"level": 0, "pdi": ""}}
         
-        for comp_name in list(evaluations.keys()):
+        for comp_name in list(eval_data.keys()):
             if comp_name not in current_competency_names:
-                del evaluations[comp_name]
+                del eval_data[comp_name]
 
 def save_and_rerun():
-    # Salva apenas os dados relevantes para o hub do utilizador
     user_hub_data = {
         'membros': st.session_state.membros.to_dict('records'),
         'avaliacoes': st.session_state.avaliacoes,
@@ -75,26 +71,15 @@ def load_data():
         pass
     
     global_configs = get_global_configs() or {}
-    
     st.session_state.playbooks = global_configs.get('playbooks', {})
     st.session_state.competency_framework = global_configs.get('competency_framework', {})
     
-    # Carrega os papéis da Administração
     user_roles_raw = global_configs.get('user_roles', [])
-    migrated_roles = []
-    for role in user_roles_raw:
-        if isinstance(role, str): # Lógica de migração de dados antigos
-            migrated_roles.append({"id": str(uuid.uuid4()), "name": role, "description": ""})
-        elif isinstance(role, dict) and 'id' in role:
-            migrated_roles.append(role)
+    migrated_roles = [{"id": str(uuid.uuid4()), "name": role, "description": ""} if isinstance(role, str) else role for role in user_roles_raw if (isinstance(role, dict) and 'id' in role) or isinstance(role, str)]
     st.session_state.user_roles = migrated_roles
 
-    # Carrega os dados específicos do utilizador
     user_hub_data = get_user_product_hub_data(st.session_state['email'])
-    
-    membros_data = user_hub_data.get('membros', [])
-    st.session_state.membros = pd.DataFrame(membros_data, columns=["Nome", "Papel"])
-    
+    st.session_state.membros = pd.DataFrame(user_hub_data.get('membros', []), columns=["Nome", "Papel"])
     st.session_state.avaliacoes = user_hub_data.get('avaliacoes', {})
     st.session_state.one_on_ones = user_hub_data.get('one_on_ones', {})
           
@@ -202,11 +187,9 @@ with tab_competencias:
 
 with tab_gestao:
     st.markdown('<p class="section-header">Gestão de Pessoas (Chapter)</p>', unsafe_allow_html=True)
-    # --- INÍCIO DA ALTERAÇÃO ---
     sub_tab_membros, sub_tab_matriz, sub_tab_1on1s, sub_tab_assessment = st.tabs([
         "**👥 Time**", "**📊 Matriz de Competências**", "**💬 Registro de 1-on-1s**", "**🚀 Enviar Avaliação**"
     ])
-    # --- FIM DA ALTERAÇÃO ---
     
     with sub_tab_membros:
         role_names = [role['name'] for role in st.session_state.get('user_roles', [])]
@@ -233,6 +216,16 @@ with tab_gestao:
                 
                 if membro_selecionado:
                     sync_evaluations_with_framework()
+                    
+                    member_full_evaluation = st.session_state.avaliacoes.get(membro_selecionado, {})
+                    
+                    if 'data' in member_full_evaluation and 'responder_name' in member_full_evaluation:
+                        dados_para_ui = member_full_evaluation.get('data', {})
+                        st.success(f"Avaliação preenchida por **{member_full_evaluation.get('responder_name')}** em {pd.to_datetime(member_full_evaluation.get('submission_date')).strftime('%d/%m/%Y')}.")
+                    else:
+                        dados_para_ui = member_full_evaluation
+                        st.info("Esta é uma avaliação em rascunho. Para enviar um link de avaliação formal, use a aba 'Enviar Avaliação'.")
+
                     aval_lider, aval_membro, aval_comp = st.tabs(["Avaliação do Líder", "Autoavaliação", "Comparativo & PDI"])
                     
                     framework = st.session_state.competency_framework
@@ -244,15 +237,16 @@ with tab_gestao:
                         with st.container(border=True):
                             for skill in skills_list:
                                 comp = skill['Competência']
+                                comp_data = dados_para_ui.get(comp, {"leader": {"level": 0, "pdi": ""}, "member": {"level": 0, "pdi": ""}})
+                                eval_data = comp_data.get(eval_type, {"level": 0, "pdi": ""})
+
                                 st.markdown(f"**{comp}**")
-                                level = st.slider("Nível", 0, 5, value=st.session_state.avaliacoes[member_name][comp][eval_type]['level'], key=f"level_{eval_type}_{member_name}_{comp}")
+                                level = st.slider("Nível", 0, 5, value=eval_data.get('level', 0), key=f"level_{eval_type}_{member_name}_{comp}")
                                 st.info(f"**{SKILL_LEVELS[level]['name']}:** {SKILL_LEVELS[level]['desc']}")
-                                pdi_text = "Plano de Desenvolvimento (Líder)" if eval_type == 'leader' else "Comentários / Autoavaliação (Membro)"
-                                pdi = st.text_area(pdi_text, value=st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'], key=f"pdi_{eval_type}_{member_name}_{comp}", height=100)
-                                st.session_state.avaliacoes[member_name][comp][eval_type]['level'] = level
-                                st.session_state.avaliacoes[member_name][comp][eval_type]['pdi'] = pdi
-                                st.markdown("---")
-                    
+                                pdi = st.text_area("Plano de Desenvolvimento / Comentários", value=eval_data.get('pdi', ''), key=f"pdi_{eval_type}_{member_name}_{comp}", height=100)
+                                
+                                dados_para_ui.setdefault(comp, {})[eval_type] = {'level': level, 'pdi': pdi}
+
                     with aval_lider:
                         lider_hard, lider_soft = st.tabs(["🛠️ Hard Skills", "🧠 Soft Skills"])
                         with lider_hard: render_evaluation_ui('leader', hard_skills, membro_selecionado)
@@ -263,51 +257,88 @@ with tab_gestao:
                         with membro_hard: render_evaluation_ui('member', hard_skills, membro_selecionado)
                         with membro_soft: render_evaluation_ui('member', soft_skills, membro_selecionado)
                     
-                    with aval_comp:
-                        st.subheader(f"Comparativo de Avaliações: {membro_selecionado}")
-                        dados_avaliacoes = st.session_state.avaliacoes[membro_selecionado]
-                        all_competencies = get_all_competencies_from_framework(framework)
-                        competencies_list = [c['Competência'] for c in all_competencies]
-                        levels_leader = [dados_avaliacoes.get(comp, {}).get('leader', {}).get('level', 0) for comp in competencies_list]
-                        levels_member = [dados_avaliacoes.get(comp, {}).get('member', {}).get('level', 0) for comp in competencies_list]
-                        
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatterpolar(r=levels_leader, theta=competencies_list, fill='toself', name='Avaliação do Líder'))
-                        fig.add_trace(go.Scatterpolar(r=levels_member, theta=competencies_list, fill='toself', name='Autoavaliação'))
-                        st.plotly_chart(fig, use_container_width=True)
+with aval_comp:
+    st.subheader(f"Comparativo de Avaliações: {membro_selecionado}")
+    all_competencies = get_all_competencies_from_framework(framework)
 
-                    if st.button("Salvar Avaliações", use_container_width=True, type="primary", key="save_eval_button"):
-                        save_and_rerun()
+    if not all_competencies:
+        st.info("Nenhuma competência para exibir.")
+    else:
+        # Usar 'dados_para_ui' diretamente, que já está definido com a estrutura correta (seja rascunho ou formal).
+        competencies_list = [c['Competência'] for c in all_competencies]
+        levels_leader = [dados_para_ui.get(comp, {}).get('leader', {}).get('level', 0) for comp in competencies_list]
+        levels_member = [dados_para_ui.get(comp, {}).get('member', {}).get('level', 0) for comp in competencies_list]
+
+        # --- Gráfico Radar ---
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(r=levels_leader, theta=competencies_list, fill='toself', name='Avaliação do Líder'))
+        fig.add_trace(go.Scatterpolar(r=levels_member, theta=competencies_list, fill='toself', name='Autoavaliação'))
+        fig.update_layout(
+            polar=dict(radialaxis=dict(visible=True, range=[0, 5])),
+            showlegend=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+
+        # --- Secção para exibir PDI e Comentários, usando a mesma variável 'dados_para_ui' ---
+        st.subheader("Plano de Desenvolvimento Individual (PDI) e Comentários")
+
+        for comp_name in competencies_list:
+            # Acede diretamente aos dados da competência a partir da variável correta.
+            comp_data = dados_para_ui.get(comp_name)
+
+            if comp_data: # Procede apenas se houver dados para esta competência
+                with st.expander(f"**{comp_name}**"):
+                    leader_data = comp_data.get('leader', {})
+                    member_data = comp_data.get('member', {})
+
+                    st.markdown("##### Comentários do Líder")
+                    pdi_leader = leader_data.get('pdi', '').strip()
+                    if pdi_leader:
+                        st.info(pdi_leader)
+                    else:
+                        st.caption("Nenhum comentário do líder.")
+
+                    st.markdown("##### Comentários do Membro (Autoavaliação)")
+                    pdi_member = member_data.get('pdi', '').strip()
+                    if pdi_member:
+                        st.warning(pdi_member)
+                    else:
+                        st.caption("Nenhum comentário do membro.")
+
+        with sub_tab_dash:
+            st.subheader("Dashboard de Competências do Time")
+            dados_completos = []
+            for membro, avaliacao_completa in st.session_state.avaliacoes.items():
+                avaliacoes = avaliacao_completa.get('data', avaliacao_completa)
+                for comp, data in avaliacoes.items():
+                    if 'leader' in data:
+                        dados_completos.append({"Membro": membro, "Competência": comp, "Nível": data['leader']['level']})
             
-            with sub_tab_dash:
-                st.subheader("Dashboard de Competências do Time")
-                dados_completos = []
-                for membro, avaliacoes in st.session_state.avaliacoes.items():
-                    for comp, data in avaliacoes.items():
-                        if 'leader' in data:
-                            dados_completos.append({"Membro": membro, "Competência": comp, "Nível": data['leader']['level']})
+            if not dados_completos:
+                st.info("Nenhuma avaliação registrada ainda.")
+            else:
+                df_completo = pd.DataFrame(dados_completos)
+                st.markdown("#### Distribuição de Níveis por Competência")
+                all_competencies_df = pd.DataFrame(get_all_competencies_from_framework(st.session_state.competency_framework))
+                competencias_list = all_competencies_df['Competência'].unique().tolist() if not all_competencies_df.empty else []
                 
-                if not dados_completos:
-                    st.info("Nenhuma avaliação registrada ainda.")
-                else:
-                    df_completo = pd.DataFrame(dados_completos)
-                    st.markdown("#### Distribuição de Níveis por Competência")
-                    all_competencies_df = pd.DataFrame(get_all_competencies_from_framework(st.session_state.competency_framework))
-                    competencias_list = all_competencies_df['Competência'].unique().tolist() if not all_competencies_df.empty else []
-                    comp_selecionada = st.selectbox("Selecione a Competência", competencias_list)
-                    
-                    if comp_selecionada:
-                        dados_filtrados = df_completo[df_completo['Competência'] == comp_selecionada]
-                        niveis_contagem = dados_filtrados['Nível'].value_counts().sort_index()
-                        niveis_contagem.index = niveis_contagem.index.map(lambda x: SKILL_LEVELS.get(x, {}).get('name', 'N/A'))
-                        fig_bar = px.bar(niveis_contagem, x=niveis_contagem.index, y=niveis_contagem.values, labels={"x": "Nível", "y": "Nº de Pessoas"}, text_auto=True)
-                        st.plotly_chart(fig_bar, use_container_width=True)
-                    
-                    st.markdown("#### Mapa de Calor de Competências")
-                    if not df_completo.empty:
-                        df_pivot = df_completo.pivot_table(index="Membro", columns="Competência", values="Nível")
-                        fig_heatmap = go.Figure(data=go.Heatmap(z=df_pivot.values, x=df_pivot.columns, y=df_pivot.index, colorscale='Viridis'))
-                        st.plotly_chart(fig_heatmap, use_container_width=True)
+                # Adiciona uma chave única para este selectbox para resolver o conflito
+                comp_selecionada = st.selectbox("Selecione a Competência", competencias_list, key="dashboard_competency_select")
+                
+                if comp_selecionada:
+                    dados_filtrados = df_completo[df_completo['Competência'] == comp_selecionada]
+                    niveis_contagem = dados_filtrados['Nível'].value_counts().sort_index()
+                    niveis_contagem.index = niveis_contagem.index.map(lambda x: SKILL_LEVELS.get(x, {}).get('name', 'N/A'))
+                    fig_bar = px.bar(niveis_contagem, x=niveis_contagem.index, y=niveis_contagem.values, labels={"x": "Nível", "y": "Nº de Pessoas"}, text_auto=True)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                
+                st.markdown("#### Mapa de Calor de Competências")
+                if not df_completo.empty:
+                    df_pivot = df_completo.pivot_table(index="Membro", columns="Competência", values="Nível")
+                    fig_heatmap = go.Figure(data=go.Heatmap(z=df_pivot.values, x=df_pivot.columns, y=df_pivot.index, colorscale='Viridis'))
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
 
     with sub_tab_1on1s:
         st.subheader("Acompanhamento Individual")
@@ -335,40 +366,31 @@ with tab_gestao:
         else:
             st.warning("Adicione membros ao time primeiro.")
             
-    with sub_tab_assessment:
-        st.subheader("Gerar e Enviar Links para Autoavaliação")
-        st.info("Selecione os membros da equipa para quem deseja gerar um link de avaliação. Os links são de uso único e expiram em 72 horas.")
+with sub_tab_assessment:
+    st.subheader("Gerar e Enviar Links para Autoavaliação")
+    st.info("Selecione os membros da equipa para quem deseja gerar um link de avaliação. Os links são de uso único e expiram em 72 horas.")
 
-        if st.session_state.membros.empty:
-            st.warning("Nenhum membro encontrado. Adicione membros na aba 'Time' primeiro.")
-        else:
-            member_names = st.session_state.membros['Nome'].tolist()
+    if st.session_state.membros.empty:
+        st.warning("Nenhum membro encontrado. Adicione membros na aba 'Time' primeiro.")
+    else:
+        member_names = st.session_state.membros['Nome'].tolist()
+        selected_members = st.multiselect("Selecione um ou mais membros:", options=member_names)
 
-            selected_members = st.multiselect(
-                "Selecione um ou mais membros:",
-                options=member_names
-            )
+        if st.button("Gerar Links de Avaliação", type="primary", use_container_width=True, disabled=not selected_members):
+            global_configs = get_global_configs()
+            base_url = global_configs.get("app_base_url")
 
-            if st.button("Gerar Links de Avaliação", type="primary", use_container_width=True, disabled=not selected_members):
-                base_url = ""
-                try:
-                    # Tenta obter a URL base da aplicação
-                    base_url = st.get_option("server.baseUrlPath")
-                except Exception:
-                    pass # Ignora o erro se a opção não estiver disponível (ex: localmente)
-
-                if not base_url or base_url == "/":
-                     st.warning("A URL base da aplicação não foi detectada automaticamente.")
-                     base_url = st.text_input("Por favor, insira a URL completa da sua aplicação (ex: https://meu-app.streamlit.app)")
-
-                if base_url:
-                    with st.spinner("A gerar links..."):
-                        for name in selected_members:
-                            token = generate_assessment_token(name)
-                            # Constrói a URL completa para a página de avaliação
-                            assessment_url = f"{base_url.rstrip('/')}/15_📝_Auto_Avaliação?token={token}"
-                            
-                            st.markdown(f"**Link para {name}:**")
-                            st.code(assessment_url, language=None)
-                    
-                    st.success("Links gerados com sucesso! Copie e envie os links para os respetivos utilizadores.")
+            if not base_url:
+                st.error("A URL base da aplicação não está configurada. Por favor, vá a '👑 Administração' > '⚙️ Configurações Gerais' e guarde a URL.")
+            else:
+                with st.spinner("A gerar links..."):
+                    # O dono do Hub é o utilizador que está logado
+                    hub_owner_email = st.session_state['email']
+                    for member_name in selected_members:
+                        token = generate_assessment_token(hub_owner_email=hub_owner_email, evaluated_email=member_name)
+                        
+                        assessment_url = f"{base_url.rstrip('/')}/Avaliacao?token={token}"
+                        
+                        st.markdown(f"**Link para {member_name}:**")
+                        st.code(assessment_url, language=None)
+                st.success("Links gerados com sucesso!")

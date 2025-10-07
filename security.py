@@ -64,43 +64,33 @@ def save_config(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
 
-# --- Configuração de Hashing de Senha ---
+# --- Configuração de Hashing e Criptografia ---
+# Utiliza as chaves definidas nos seus secrets do Streamlit
 cipher_suite = Fernet(st.secrets["SECRET_KEY"].encode())
 
 def verify_password(plain_password, hashed_password):
-    """
-    Verifica se uma senha em texto simples corresponde a uma senha com hash
-    usando a biblioteca bcrypt diretamente.
-    """
+    """Verifica uma senha usando bcrypt."""
     password_bytes = plain_password.encode('utf-8')
-    # O bcrypt lida internamente com a limitação de 72 bytes.
     hashed_password_bytes = hashed_password.encode('utf-8')
     return bcrypt.checkpw(password_bytes, hashed_password_bytes)
 
 def get_password_hash(password):
-    """
-    Cria um hash de uma senha em texto simples usando a biblioteca bcrypt diretamente.
-    """
+    """Cria um hash de uma senha usando bcrypt."""
     password_bytes = password.encode('utf-8')
-    # Trunca a senha para 72 bytes para garantir compatibilidade.
     truncated_bytes = password_bytes[:72]
-    # Gera um "sal" e cria o hash
     salt = bcrypt.gensalt()
     hashed_bytes = bcrypt.hashpw(truncated_bytes, salt)
     return hashed_bytes.decode('utf-8')
 
-# --- Funções de Criptografia de Token ---
-@st.cache_resource
-def get_cipher():
-    key = st.secrets["ENCRYPTION_KEY"]
-    return Fernet(key.encode())
-
 def encrypt_token(token):
+    """Encripta um token/senha de API."""
     return cipher_suite.encrypt(token.encode()).decode()
 
 def decrypt_token(encrypted_token):
+    """Desencripta um token/senha de API."""
+    if not encrypted_token:
+        return ""
     return cipher_suite.decrypt(encrypted_token.encode()).decode()
-
 
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
@@ -125,8 +115,14 @@ def get_app_configs_collection():
 def get_project_configs_collection():
     return get_db().get_collection("project_configs")
 
-# --- Funções de Gestão de Utilizadores ---
+def get_tokens_collection():
+    """Retorna a coleção para os tokens de avaliação."""
+    return get_db().get_collection("assessment_tokens")
+
+
+# --- Funções de Gestão de Utilizadores (Preservadas) ---
 def find_user(email):
+    # (Sua função find_user original, com a lógica de migração, permanece aqui)
     user = get_users_collection().find_one({'email': email})
     if user and 'dashboard_layout' in user:
         needs_update = False
@@ -206,6 +202,7 @@ def save_last_project(email, project_key):
 
 @st.cache_data
 def get_global_configs():
+    """Obtém as configurações globais, com lógica de fallback e migração."""
     collection = get_app_configs_collection()
     configs = collection.find_one({'_id': 'global_settings'})
     
@@ -213,25 +210,26 @@ def get_global_configs():
         configs = {
             '_id': 'global_settings',
             'playbooks': DEFAULT_PLAYBOOKS,
-            'admin_emails': ["seu-email-admin@dominio.com"],
+            'admin_emails': [],
         }
         collection.insert_one(configs)
-        return configs
     
     if 'playbooks' not in configs:
         configs['playbooks'] = DEFAULT_PLAYBOOKS
-        save_global_configs(configs)
 
     return configs
 
-def save_global_configs(configs_data):
-    if '_id' in configs_data: del configs_data['_id']
+def save_global_configs(config_data):
+    """Guarda ou atualiza as configurações globais e limpa o cache da função de leitura."""
     get_app_configs_collection().update_one(
-        {'_id': 'global_settings'}, 
-        {'$set': configs_data}, 
+        {"_id": "global_settings"}, # Usa o mesmo ID da função de leitura
+        {"$set": config_data},
         upsert=True
     )
     get_global_configs.clear()
+    
+    if 'global_configs' in st.session_state:
+        st.session_state['global_configs'] = config_data
 
 # --- Funções de Gestão de Dados do Product Hub (Simplificadas) ---
 def get_user_product_hub_data(user_email):
@@ -530,75 +528,55 @@ def validate_smtp_connection(provider, from_email, credential):
             
     return False, "Provedor desconhecido."
 
-def generate_assessment_token(email, valid_for_hours=72):
-    """
-    Gera um token único para um e-mail e armazena-o com uma data de validade.
-    """
+def generate_assessment_token(hub_owner_email, evaluated_email, valid_for_hours=72):
     token = secrets.token_urlsafe(32)
     expiration_date = datetime.utcnow() + timedelta(hours=valid_for_hours)
-    
-    # Armazena o token na coleção de tokens
-    token.insert_one({
+    get_tokens_collection().insert_one({
         "token": token,
-        "email": email,
+        "hub_owner_email": hub_owner_email,
+        "evaluated_email": evaluated_email,
         "expires_at": expiration_date,
         "used": False
     })
     return token
 
 def validate_assessment_token(token):
-    """
-    Verifica se um token é válido, não foi usado e não expirou.
-    Retorna o e-mail associado se for válido, caso contrário, retorna None.
-    """
-    token_data = token.find_one({"token": token})
+    """Verifica se um token é válido, não foi usado e não expirou."""
+    token_data = get_tokens_collection().find_one({"token": token})
     
-    if not token_data:
-        return None # Token não existe
+    if not token_data or token_data.get("used") or token_data["expires_at"] < datetime.utcnow():
+        return None
         
-    if token_data.get("used"):
-        return None # Token já foi usado
-        
-    if token_data["expires_at"] < datetime.utcnow():
-        return None # Token expirou
-        
-    return token_data["email"]
+    return {
+        "hub_owner_email": token_data["hub_owner_email"],
+        "evaluated_email": token_data["evaluated_email"]
+    }
 
-def save_assessment_response(email, assessment_data):
+def save_assessment_response(hub_owner_email, evaluated_email, assessment_data):
     """
-    Guarda as respostas da avaliação no registo do utilizador correspondente.
+    Guarda as respostas da avaliação (incluindo metadados) no registo do dono do hub.
+    'assessment_data' é agora um dicionário que contém o nome do respondente e os dados da avaliação.
     """
-    # Procura o utilizador pelo e-mail associado ao token
-    user = get_user_connections.find_one({"email": email})
-    if not user:
-        # Se o utilizador não existir, podemos criá-lo ou registar a resposta de forma anónima
-        # Por agora, vamos assumir que o utilizador já deve existir na lista de membros.
-        # Vamos procurar na lista de membros do Product Hub
-        update_filter = {"product_hub_data.membros.Nome": email}
-        update_operation = {"$set": {f"product_hub_data.avaliacoes.{email}": assessment_data}}
-        
-        # Esta operação atualiza a avaliação dentro do documento do admin que contém a lista de membros
-        # Assumindo que a estrutura de dados centraliza as avaliações.
-        # Seria necessário um ajuste se cada membro tivesse o seu próprio documento.
-        # Por simplicidade, vamos focar em encontrar um utilizador existente por e-mail.
-        
-        # A lógica mais robusta seria procurar o documento do utilizador pelo e-mail.
-        get_user_connections.update_one(
-            {"email": email},
-            {"$set": {f"product_hub_data.avaliacoes.{email}": assessment_data}},
-            upsert=True # Cria o registo se o e-mail não for encontrado
-        )
-        return True
+    # Acessa a coleção de utilizadores
+    users_collection = get_users_collection()
+    
+    # Procura pelo dono do hub para garantir que ele existe
+    hub_owner = users_collection.find_one({"email": hub_owner_email})
+    if not hub_owner:
+        return False
 
-    # Atualiza o campo de avaliações dentro do 'product_hub_data' do utilizador
-    get_user_connections.update_one(
-        {"_id": user["_id"]},
-        {"$set": {f"product_hub_data.avaliacoes.{email}": assessment_data}}
+    # O caminho para a avaliação na base de dados
+    path_to_assessment = f"product_hub_data.avaliacoes.{evaluated_email}"
+
+    # Executa a atualização na base de dados
+    result = users_collection.update_one(
+        {"email": hub_owner_email},
+        {"$set": {path_to_assessment: assessment_data}}
     )
-    return True
+    
+    # Retorna True se a operação modificou algum documento
+    return result.modified_count > 0
 
 def mark_token_as_used(token):
-    """
-    Marca um token como utilizado após a submissão da avaliação.
-    """
-    token.update_one({"token": token}, {"$set": {"used": True}})
+    """Marca um token como utilizado após a submissão da avaliação."""
+    get_tokens_collection().update_one({"token": token}, {"$set": {"used": True}})
