@@ -20,6 +20,9 @@ from datetime import datetime, timedelta
 import bcrypt
 import secrets
 from datetime import datetime, timedelta
+from sendgrid.helpers.mail import Mail, To, From, Content
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # --- CONSTANTES PADRÃO ---
 AVAILABLE_STANDARD_FIELDS = {
@@ -540,43 +543,65 @@ def generate_assessment_token(hub_owner_email, evaluated_email, valid_for_hours=
     })
     return token
 
-def validate_assessment_token(token):
-    """Verifica se um token é válido, não foi usado e não expirou."""
+def verify_assessment_token(token):
     token_data = get_tokens_collection().find_one({"token": token})
-    
     if not token_data or token_data.get("used") or token_data["expires_at"] < datetime.utcnow():
         return None
-        
-    return {
-        "hub_owner_email": token_data["hub_owner_email"],
-        "evaluated_email": token_data["evaluated_email"]
-    }
-
-def save_assessment_response(hub_owner_email, evaluated_email, assessment_data):
-    """
-    Guarda as respostas da avaliação (incluindo metadados) no registo do dono do hub.
-    'assessment_data' é agora um dicionário que contém o nome do respondente e os dados da avaliação.
-    """
-    # Acessa a coleção de utilizadores
-    users_collection = get_users_collection()
-    
-    # Procura pelo dono do hub para garantir que ele existe
-    hub_owner = users_collection.find_one({"email": hub_owner_email})
-    if not hub_owner:
-        return False
-
-    # O caminho para a avaliação na base de dados
-    path_to_assessment = f"product_hub_data.avaliacoes.{evaluated_email}"
-
-    # Executa a atualização na base de dados
-    result = users_collection.update_one(
-        {"email": hub_owner_email},
-        {"$set": {path_to_assessment: assessment_data}}
-    )
-    
-    # Retorna True se a operação modificou algum documento
-    return result.modified_count > 0
+    return {"hub_owner_email": token_data["hub_owner_email"], "evaluated_email": token_data["evaluated_email"]}
 
 def mark_token_as_used(token):
-    """Marca um token como utilizado após a submissão da avaliação."""
     get_tokens_collection().update_one({"token": token}, {"$set": {"used": True}})
+
+def send_assessment_email(recipient_email, recipient_name, sender_name, assessment_url, smtp_configs):
+    provider = smtp_configs.get('provider')
+    from_email = smtp_configs.get('from_email')
+    if not from_email:
+        st.error("O 'E-mail de Origem' não está configurado.")
+        return False
+
+    html_body = f"""
+    <html>
+    <body>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+            <h2 style="color: #262730; text-align: center;">🚀 Avaliação de Competências</h2>
+            <p>Olá, {recipient_name},</p>
+            <p><strong>{sender_name}</strong> convidou você para preencher a sua autoavaliação de competências.</p>
+            <p>A sua perspetiva é muito importante para o nosso crescimento conjunto.</p>
+            <p style="text-align: center;">
+                <a href="{assessment_url}" style="background-color: #007bff; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; display: inline-block;">Iniciar Autoavaliação</a>
+            </p>
+            <p>Se o botão não funcionar, copie e cole o seguinte link no seu navegador:</p>
+            <p><a href="{assessment_url}">{assessment_url}</a></p>
+            <p>Obrigado pela sua colaboração!</p>
+        </div>
+    </body>
+    </html>
+    """
+    subject = f"🚀 Convite para Avaliação de Competências de {sender_name}"
+
+    try:
+        if provider == 'SendGrid':
+            api_key = decrypt_token(smtp_configs.get('api_key_encrypted', ''))
+            sg = sendgrid.SendGridAPIClient(api_key=api_key)
+            from_sg = From(email=from_email, name=sender_name)
+            to_sg = To(email=recipient_email)
+            message = Mail(from_email=from_sg, to_emails=to_sg, subject=subject, html_content=html_body)
+            response = sg.client.mail.send.post(request_body=message.get())
+            return 200 <= response.status_code < 300
+        elif provider == 'Gmail (SMTP)':
+            app_password = decrypt_token(smtp_configs.get('app_password_encrypted', ''))
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = f"{sender_name} <{from_email}>"
+            msg['To'] = recipient_email
+            msg.attach(MIMEText(html_body, 'html'))
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(from_email, app_password)
+                server.sendmail(from_email, recipient_email, msg.as_string())
+            return True
+        else:
+            st.error(f"Provedor de e-mail desconhecido: '{provider}'")
+            return False
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao enviar o e-mail: {e}")
+        return False

@@ -293,7 +293,7 @@ with main_tab_system:
     with system_tab_email:
         st.markdown("##### Configuração Global de Envio de E-mail")
         st.caption("Estas credenciais serão usadas por toda a aplicação para enviar e-mails.")
-        current_smtp_configs = get_global_smtp_configs() or {}
+        current_smtp_configs = configs.get('smtp_settings', {})
         current_provider = current_smtp_configs.get('provider', 'SendGrid')
         provider_options = ["SendGrid", "Gmail (SMTP)"]
         provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
@@ -316,11 +316,27 @@ with main_tab_system:
                         is_valid, message = validate_smtp_connection(email_provider, from_email, credential)
                     if is_valid:
                         encrypted_credential = encrypt_token(credential)
+                        # Cria o dicionário com as configurações de e-mail
+                        smtp_data_to_save = {}
                         if email_provider == 'SendGrid':
-                            configs_to_save = {'provider': 'SendGrid', 'from_email': from_email, 'api_key_encrypted': encrypted_credential}
-                        else:
-                            configs_to_save = {'provider': 'Gmail (SMTP)', 'from_email': from_email, 'app_password_encrypted': encrypted_credential}
-                        save_global_smtp_configs(configs_to_save)
+                            smtp_data_to_save = {
+                                'provider': 'SendGrid', 
+                                'from_email': from_email, 
+                                'api_key_encrypted': encrypted_credential
+                            }
+                        else: # Gmail (SMTP)
+                            smtp_data_to_save = {
+                                'provider': 'Gmail (SMTP)', 
+                                'from_email': from_email, 
+                                'app_password_encrypted': encrypted_credential
+                            }
+
+                        # Adiciona o dicionário ao objeto de configurações principal
+                        configs['smtp_settings'] = smtp_data_to_save
+                        
+                        # Salva o objeto de configurações principal
+                        save_global_configs(configs) 
+                        
                         st.success(message + " As credenciais globais foram salvas com sucesso!")
                         st.rerun()
                     else:

@@ -17,3 +17,4 @@ sendgrid
 pymupdf
 stqdm
 streamlit-quill
+streamlit-option-menu

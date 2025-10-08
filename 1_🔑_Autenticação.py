@@ -41,12 +41,27 @@ if 'remember_email' not in st.session_state:
 
 # --- CONTROLO DE ACESSO E SIDEBAR ---
 if 'email' not in st.session_state:
-    st.markdown('<style>[data-testid="stSidebar"] { display: none; }</style>', unsafe_allow_html=True)
+    # Injeta o CSS robusto para ocultar o menu e corrigir o layout
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {
+                display: none !important;
+            }
+            div[data-testid="stAppViewContainer"] {
+                margin-left: 0px !important;
+            }
+            section[data-testid="main-block"] {
+                padding-left: 2rem !important;
+                padding-right: 2rem !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 else:
+    # Mantém a sua lógica original para ocultar o link de Administração
     ADMIN_EMAILS = st.secrets.get("app_settings", {}).get("ADMIN_EMAILS", [])
     if st.session_state['email'] not in ADMIN_EMAILS:
         st.markdown('<style>a[href*="Administra"] { display: none; }</style>', unsafe_allow_html=True)
-
+        
 # --- LÓGICA DA PÁGINA ---
 if 'email' in st.session_state:
     st.header(f"Bem-vindo de volta!", divider='rainbow')

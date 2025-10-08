@@ -1618,3 +1618,61 @@ def load_local_css(file_path):
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
         st.error(f"Arquivo CSS não encontrado: {file_path}")
+
+def get_ai_team_performance_analysis(team_performance_df):
+    """
+    Usa a IA para analisar um DataFrame de competências da equipa (incluindo comentários)
+    e gerar uma análise de performance detalhada.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        return "### 🔮 Análise Indisponível\nPara usar esta funcionalidade, por favor, configure a sua chave de API."
+
+    # Remove colunas com comentários vazios para um prompt mais limpo
+    df_clean = team_performance_df.dropna(axis=1, how='all')
+    dados_csv = df_clean.to_csv(index=False)
+    
+    prompt = f"""
+    Aja como um Diretor de RH (People & Culture Director) especialista em análise de performance. A sua tarefa é analisar os dados de uma matriz de competências que inclui tanto a avaliação quantitativa (níveis) quanto a qualitativa (comentários), e fornecer uma análise estratégica profunda em Português.
+
+    **Dados da Matriz de Competências (formato CSV):**
+    (Níveis de 0 a 5; Comentários do Plano de Desenvolvimento Individual - PDI)
+    ```csv
+    {dados_csv}
+    ```
+
+    **Estrutura da Análise (Obrigatório):**
+    A sua resposta DEVE ser formatada em Markdown, ser perspicaz e usar tanto os níveis quanto os comentários para justificar as suas conclusões. Siga estritamente esta estrutura:
+
+    ### 📈 Resumo Executivo
+    * Forneça um parágrafo com uma visão geral do perfil da equipa. Conecte os níveis de competência com os temas recorrentes nos comentários. (Ex: "A equipa demonstra alta proficiência técnica em [Competência X], mas os comentários, tanto dos líderes quanto dos próprios membros, apontam para uma necessidade de desenvolver a comunicação com stakeholders.")
+
+    ### ✅ Pontos Fortes e Sinergias
+    * Identifique os pontos fortes com base nos níveis altos. **Use os comentários para dar profundidade.** (Ex: "A proficiência em 'Metodologias Ágeis' é evidente, e o comentário do líder para [Membro Y] sobre 'propor melhorias no processo de sprint' confirma esta senioridade.")
+    * Aponte sinergias ou discrepâncias positivas entre a autoavaliação e a avaliação do líder.
+
+    ### 🎯 Oportunidades Estratégicas de Desenvolvimento
+    * Aponte as competências com níveis mais baixos. **Use os comentários para identificar a causa-raiz.** (Ex: "A baixa avaliação em 'Gestão de Stakeholders' é corroborada por vários PDIs que mencionam 'melhorar a clareza nas apresentações' e 'antecipar as necessidades do cliente'.")
+    * Identifique temas comuns nos PDIs que representem uma oportunidade de treino em grupo.
+
+    ### 🤝 Plano de Ação e Mentoria
+    * Com base em toda a análise (níveis e comentários), sugira um plano de ação prático.
+    * Sugira mentorias internas, justificando a escolha com base nos dados. (Ex: "O(A) **[Nome do Mentor(a)]** é um(a) especialista em **[Competência Z]** e o seu PDI demonstra interesse em liderança. Ele(a) poderia mentorar o(a) **[Nome do Mentorado(a)]**, cujo PDI expressa a necessidade de 'ganhar autonomia' nesta área.")
+    """
+
+    try:
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            return response.text
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
+        return "Ocorreu uma falha ao tentar gerar a análise. Por favor, tente novamente."
