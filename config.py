@@ -6,7 +6,7 @@ from pathlib import Path
 import plotly.express as px
 
 # --- Parâmetro de Timeout da Sessão ---
-SESSION_TIMEOUT_MINUTES = 10
+SESSION_TIMEOUT_MINUTES = 30
 
 # --- Constantes Padrão ---
 DASHBOARD_CHART_LIMIT = 20
@@ -23,11 +23,12 @@ DEFAULT_COLORS = {
 
 # --- Esquemas de Cores para Gráficos ---
 COLOR_THEMES = {
-    "Padrão Gauge (Vibrante)": px.colors.qualitative.Vivid,
-    "Tons de Azul (Sequencial)": px.colors.sequential.Blues_r,
-    "Tons Pasteis (Delicado)": px.colors.qualitative.Pastel,
-    "Alto Contraste (Escuro)": px.colors.qualitative.Plotly,
-    "Monocromático (Cinzento)": px.colors.sequential.Greys_r,
+    "Padrão Gauge": ["#FF4B4B", "#3D3D3D", "#FFD700", "#6A5ACD", "#20B2AA", "#FF69B4", "#ADD8E6", "#F0E68C"],
+    "Azuis e Cinzas": px.colors.sequential.Blues_r + px.colors.sequential.Greys_r,
+    "Verdes e Amarelos": px.colors.sequential.YlGn_r,
+    "Espectro de Cores Vivas": px.colors.qualitative.Plotly,
+    "Pastel": px.colors.qualitative.Pastel,
+    "Alto Contraste": px.colors.qualitative.Bold,
 }
 
 # --- Função de Carregamento Central ---

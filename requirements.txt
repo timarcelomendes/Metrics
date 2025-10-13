@@ -18,3 +18,4 @@ pymupdf
 stqdm
 streamlit-quill
 streamlit-option-menu
+scipy
