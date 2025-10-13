@@ -9,7 +9,7 @@ from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from security import *
 
 # --- Funções Auxiliares de Data ---
-def find_completion_date(issue):
+def find_completion_date(issue, project_config):
     """
     Encontra a data de conclusão real de uma issue analisando seu histórico (changelog).
     Retorna a data da última transição para um status da categoria 'Done'.
@@ -18,8 +18,6 @@ def find_completion_date(issue):
     if not issue or not hasattr(issue, 'changelog') or not issue.changelog:
         return None
 
-    project_key = issue.key.split('-')[0]
-    project_config = get_project_config(project_key)
     done_statuses = project_config.get('status_mapping', {}).get('Done', [])
 
     if not done_statuses:
@@ -344,7 +342,7 @@ def prepare_cfd_data(issues, start_date, end_date):
     return cfd_cumulative, wip_df
 
 def prepare_project_burnup_data(issues, unit, estimation_config, project_config):
-    """Prepara o burnup, convertendo segundos para horas quando necessário."""
+    """Prepara o burnup, com a correção de tipo de data."""
     valid_issues = get_filtered_issues(issues)
 
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
@@ -363,23 +361,27 @@ def prepare_project_burnup_data(issues, unit, estimation_config, project_config)
             value = 1
         elif unit == 'points':
             raw_value = get_issue_estimation(issue, estimation_config) or 0
-            if is_time_based:
-                value = raw_value / 3600
-            else:
-                value = raw_value
+            value = (raw_value / 3600) if is_time_based else raw_value
         
         data.append({'created': created_date, 'resolved': completion_date, 'value': value})
 
     df = pd.DataFrame(data)
     if df.empty or df['created'].dropna().empty: return pd.DataFrame()
 
-    start_date = df['created'].min(); end_date = pd.Timestamp.now(tz=None).normalize()
+    df['resolved'] = pd.to_datetime(df['resolved'])
+
+    start_date = df['created'].min()
+    end_date = pd.Timestamp.now(tz=None).normalize()
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
 
     scope_over_time = [df[df['created'] <= day]['value'].sum() for day in date_range]
     completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
 
-    return pd.DataFrame({'Data': date_range, 'Escopo Total': scope_over_time, 'Trabalho Concluído': completed_over_time}).set_index('Data')
+    return pd.DataFrame({
+        'Data': date_range, 
+        'Escopo Total': scope_over_time, 
+        'Trabalho Concluído': completed_over_time
+    }).set_index('Data')
 
 def calculate_trend_and_forecast(burnup_df, trend_weeks):
     """

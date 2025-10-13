@@ -137,6 +137,7 @@ def move_item(items_list, from_index, to_index):
 # --- BLOCO 3: CSS E BARRA LATERAL ---
 st.markdown("""
 <style>
+/* ... todo o CSS da resposta anterior ... */
 /* Alinha os itens nos controlos do cabeçalho verticalmente ao centro */
 [data-testid="stHorizontalBlock"] { align-items: center; }
 /* Aumenta o espaço entre os gráficos */
@@ -145,45 +146,75 @@ div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] { gap: 1.5
 #empty-state-container { text-align: center; padding: 3rem; background-color: #f8f9fa; border-radius: 0.5rem; }
 #empty-state-container .icon { font-size: 4rem; }
 
-/* REGRAS ESPECÍFICAS PARA BOTÕES DE ÍCONE (Ação do Gráfico) - FIX PARA EXCLUIR BOTÕES DO SIDEBAR */
-/* Target: Botões dentro de contêineres aninhados (os st.container(border=True) dos gráficos). */
-/* Este seletor exclui os botões da barra lateral. */
-div[data-testid="stContainer"] div[data-testid="stContainer"] div[data-testid="stButton"] > button { 
-    background-color: transparent !important; 
-    border: none !important; /* Remove a borda padrão */
-    box-shadow: none !important; /* Remove qualquer sombra simulando borda */
-    color: #4a4a4a; 
-    /* Permite que o Streamlit defina a largura, mas força a altura e remove padding/margin */
-    height: 30px !important; 
-    padding: 0; 
-    margin: 0; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
+/* --- REGRAS PARA BOTÕES DE AÇÃO DOS GRÁFICOS (NOVO) --- */
+
+/* Contêiner que alinha os botões de ação */
+.card-actions {
+    display: flex;
+    justify-content: flex-end; /* Alinha os ícones à direita */
+    align-items: center;
+    gap: 0.5rem; /* Espaço entre os ícones */
 }
 
-/* Força a remoção de borda e sombra no estado 'ativo' e 'foco' dos botões de ícone */
-div[data-testid="stContainer"] div[data-testid="stContainer"] div[data-testid="stButton"] > button:active,
-div[data-testid="stContainer"] div[data-testid="stContainer"] div[data-testid="stButton"] > button:focus {
+/* Estilo base para os botões de ícone dentro do contêiner */
+.card-actions [data-testid="stButton"] > button {
+    background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    outline: none !important; 
-    transform: none !important; 
-}
-
-/* Diminui o tamanho da fonte do ícone (emoji) para que caiba */
-div[data-testid="stContainer"] div[data-testid="stContainer"] div[data-testid="stButton"] > button > span {
-    font-size: 0.9rem !important; /* Tamanho do ícone menor */
+    padding: 0.25rem !important; /* Padding para área de clique */
+    margin: 0 !important;
+    color: #4a4a4a;
+    height: auto !important;
+    min-width: auto !important;
     line-height: 1 !important;
+    border-radius: 0.35rem; /* Bordas arredondadas no hover */
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-/* Mantém o efeito de hover com background e bordas suaves */
-div[data-testid="stContainer"] div[data-testid="stContainer"] div[data-testid="stButton"] > button:hover { 
-    background-color: #f0f2f6 !important; 
-    color: #1c1c1c; 
-    border-radius: 0.25rem; 
+/* Efeito de hover */
+.card-actions [data-testid="stButton"] > button:hover {
+    background-color: #f0f2f6 !important;
+    color: #1c1c1c;
 }
 
+/* Remove efeitos indesejados de clique/foco */
+.card-actions [data-testid="stButton"] > button:active,
+.card-actions [data-testid="stButton"] > button:focus {
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    transform: none !important;
+}
+
+/* Tamanho da fonte do ícone */
+.card-actions [data-testid="stButton"] > button > span {
+    font-size: 0.9rem !important;
+}
+
+/* --- REGRAS DE ANULAÇÃO E RESTAURAÇÃO PARA BOTÕES NA BARRA LATERAL (SEM ALTERAÇÕES) --- */
+div[data-testid="stSidebarContent"] [data-testid="stButton"] > button {
+    padding: 0.375rem 0.75rem !important;
+    height: auto !important;
+    min-width: 100% !important;
+    box-shadow: none !important;
+    border-radius: 0.5rem !important;
+}
+div[data-testid="stSidebarContent"] [kind="primary"] > button {
+    background-color: var(--primary-color) !important;
+    color: white !important;
+    border: 1px solid var(--primary-color) !important;
+}
+div[data-testid="stSidebarContent"] [kind="secondary"] > button {
+    background-color: transparent !important;
+    border: 1px solid rgb(210, 210, 210) !important;
+    color: rgb(73, 80, 87) !important;
+}
+div[data-testid="stSidebarContent"] [data-testid="stButton"] > button > span {
+    font-size: 1rem !important;
+    color: inherit !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -472,12 +503,18 @@ else:
                         with cols[idx]:
                             original_index = charts_in_tab.index(chart_config)
                             with st.container(border=True):
-                                btn_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
-                                btn_cols[1].button("🔼", key=f"indicator_up_{tab_name}_{chart_config['id']}", help="Mover para cima", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0), use_container_width=True)
-                                btn_cols[2].button("🔽", key=f"indicator_down_{tab_name}_{chart_config['id']}", help="Mover para baixo", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1), use_container_width=True)
-                                if btn_cols[3].button("✏️", key=f"indicator_edit_{tab_name}_{chart_config['id']}", help="Editar", use_container_width=True):
+                                # Container para os botões de ação
+                                st.markdown('<div class="card-actions">', unsafe_allow_html=True)
+                                # Colunas para organizar os botões dentro do container flex
+                                b_cols = st.columns(4)
+                                b_cols[0].button("🔼", key=f"indicator_up_{tab_name}_{chart_config['id']}", help="Mover para cima", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0), use_container_width=True)
+                                b_cols[1].button("🔽", key=f"indicator_down_{tab_name}_{chart_config['id']}", help="Mover para baixo", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1), use_container_width=True)
+                                if b_cols[2].button("✏️", key=f"indicator_edit_{tab_name}_{chart_config['id']}", help="Editar", use_container_width=True):
                                     edit_chart_callback(chart_config)
-                                btn_cols[4].button("❌", key=f"indicator_del_{tab_name}_{chart_config['id']}", help="Remover", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts), use_container_width=True)
+                                b_cols[3].button("❌", key=f"indicator_del_{tab_name}_{chart_config['id']}", help="Remover", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts), use_container_width=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
+
+                                # Renderiza o gráfico logo abaixo dos botões
                                 render_chart(chart_config, filtered_df, f"chart_indicator_{tab_name}_{chart_config['id']}")
                     if other_charts:
                         st.divider()
