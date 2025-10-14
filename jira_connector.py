@@ -61,13 +61,16 @@ def get_boards(jira_client, project_key):
         print(f"Erro ao buscar quadros para o projeto {project_key}: {e}")
         return []
 
-@st.cache_data(ttl=3600, show_spinner="A buscar os dados da sprint...")
-def get_sprint_issues(_jira_client, sprint_id, expand='changelog'):
+@st.cache_data(ttl=3600, show_spinner="A buscar issues da sprint...")
+def get_sprint_issues(_client, sprint_id):
+    """Busca todas as issues de uma sprint específica."""
     try:
-        return _jira_client.search_issues(f'sprint = {sprint_id}', maxResults=False, expand=expand)
+        jql = f"'Sprint' = {sprint_id}"
+        return _client.search_issues(jql, maxResults=False, expand="changelog")
     except Exception as e:
         st.error(f"Erro ao buscar issues da sprint {sprint_id}: {e}")
         return []
+
 
 def get_issues_by_date_range(jira_client, project_key, start_date=None, end_date=None):
     """Busca issues ATUALIZADAS dentro de um intervalo de datas."""
@@ -110,33 +113,27 @@ def get_issues_by_fix_version(jira_client, project_key, version_id):
         print(f"Erro ao buscar issues para a versão {version_id}: {e}")
         return []
 
-def get_sprints_in_range(client: JIRA, project_key: str, start_date, end_date):
-    """Busca sprints ativas e concluídas num período, buscando apenas em quadros Scrum."""
+@st.cache_data(ttl=3600)
+def get_sprints_in_range(_client, project_key, start_date, end_date):
+    """Busca sprints (ativas ou fechadas) de um projeto que se sobrepõem ao intervalo de datas."""
     try:
-        boards = client.boards(projectKeyOrID=project_key)
+        boards = _client.boards(projectKeyOrID=project_key)
         all_sprints = []
-        added_sprint_ids = set()
-
         for board in boards:
-            if board.type == 'scrum':
-                try:
-                    sprints = client.sprints(board_id=board.id, state='closed,active')
-                    for sprint in sprints:
-                        if sprint.id not in added_sprint_ids:
-                            if sprint.state == 'closed' and hasattr(sprint, 'completeDate'):
-                                complete_date = pd.to_datetime(sprint.completeDate).date()
-                                if start_date <= complete_date <= end_date:
-                                    all_sprints.append(sprint)
-                                    added_sprint_ids.add(sprint.id)
-                            elif sprint.state == 'active':
-                                all_sprints.append(sprint)
-                                added_sprint_ids.add(sprint.id)
-                except Exception:
-                    continue
-                        
-        return sorted(all_sprints, key=lambda s: (getattr(s, 'completeDate', '9999-12-31'), s.name), reverse=True)
+            try:
+                sprints = _client.sprints(board.id, state='closed,active')
+                for sprint in sprints:
+                    sprint_start = pd.to_datetime(sprint.startDate).date() if hasattr(sprint, 'startDate') else None
+                    sprint_end = pd.to_datetime(sprint.endDate).date() if hasattr(sprint, 'endDate') else None
+                    
+                    if sprint_start and sprint_end:
+                        if max(start_date, sprint_start) <= min(end_date, sprint_end):
+                            all_sprints.append(sprint)
+            except Exception:
+                continue
+        return all_sprints
     except Exception as e:
-        st.error(f"Erro ao buscar quadros (boards) do projeto: {e}")
+        st.error(f"Erro ao buscar sprints: {e}")
         return []
 
 @st.cache_data(show_spinner="A validar campo no Jira...")
@@ -201,43 +198,26 @@ def get_project_boards(jira_client, project_key):
         print(f"ERRO ao buscar quadros para o projeto {project_key}: {e}")
         return []
     
-@st.cache_data(ttl=3600, show_spinner="A buscar as issues do projeto... Isso pode demorar.")
-def get_project_issues(_jira_client, project_key, user_custom_fields=None, expand='changelog'):
+@st.cache_data(ttl=3600, show_spinner="A buscar issues do projeto no Jira...")
+def get_project_issues(_client, project_key, jql_filter="", user_custom_fields=None):
     """
-    Busca todas as issues de um projeto, incluindo campos customizados especificados pelo usuário.
+    Busca todas as issues de um projeto específico, com opção de filtro JQL adicional
+    e agora sem o filtro de status fixo.
     """
+    if not _client or not project_key:
+        return []
+    
     try:
+        jql = f"project = '{project_key}'"
 
-        # 1. Mapeia os nomes dos campos customizados para os seus IDs internos do Jira.
-        all_jira_fields = _jira_client.fields()
-        field_name_to_id_map = {field['name']: field['id'] for field in all_jira_fields}
-
-        # 2. Constrói a lista de campos que queremos buscar.
-        #    O '*all' é um atalho para buscar todos os campos padrão.
-        fields_to_query = ['*all'] 
-        
-        if user_custom_fields:
-            for field_name in user_custom_fields:
-                if field_name in field_name_to_id_map:
-                    # Adiciona o ID do campo customizado à lista
-                    fields_to_query.append(field_name_to_id_map[field_name])
-                else:
-                    st.warning(f"O campo '{field_name}' está habilitado na sua conta, mas não foi encontrado neste projeto Jira.")
-        
-        # Remove duplicados para garantir uma lista limpa
-        fields_to_query = list(set(fields_to_query))
-
-        all_issues = _jira_client.search_issues(
-            f'project = "{project_key}" ORDER BY created DESC',
-            maxResults=False,
-            # Passa a lista de campos construída dinamicamente
-            fields=fields_to_query,
-            expand=expand
-        )
-        return all_issues
+        if jql_filter:
+            jql += f" AND {jql_filter}"
+            
+        issues = _client.search_issues(jql, maxResults=False, expand="changelog")
+        return issues
         
     except Exception as e:
-        st.error(f"Erro ao buscar issues do projeto '{project_key}': {e}")
+        st.error(f"Erro ao buscar issues do Jira para o projeto '{project_key}': {e}")
         return []
 
 def get_issues_by_board(jira_client, board_id):
@@ -433,18 +413,20 @@ def load_and_process_project_data(jira_client, project_key):
     return df
 
 @st.cache_data(ttl=86400, show_spinner="A carregar metadados dos campos do Jira...")
-def get_jira_fields(_jira_client):
-    """Busca a lista de todos os campos disponíveis na instância Jira."""
+def get_jira_fields(_client):
+    """Retorna uma lista de todos os campos (padrão e customizados) do Jira."""
     try:
-        return _jira_client.fields()
+        return _client.fields()
     except Exception as e:
-        st.error(f"Não foi possível buscar a lista de campos do Jira: {e}")
+        st.error(f"Não foi possível carregar os campos do Jira: {e}")
         return []
 
-def get_jql_issue_count(jira_client, jql):
-    """Retorna o número de issues para uma consulta JQL."""
+def get_jql_issue_count(_client, jql):
+    """Executa uma consulta JQL e retorna apenas a contagem de resultados."""
+    if not jql:
+        return 0
     try:
-        issues_result = jira_client.search_issues(jql, maxResults=0, fields="key")
-        return issues_result.total
+        search_result = _client.search_issues(jql, maxResults=0)
+        return search_result.total
     except Exception as e:
-        return f"Erro na consulta JQL: {e}"
+        return f"Erro na JQL: {e}"

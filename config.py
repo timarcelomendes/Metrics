@@ -5,31 +5,70 @@ import toml
 from pathlib import Path
 import plotly.express as px
 
-# --- Parâmetro de Timeout da Sessão ---
-SESSION_TIMEOUT_MINUTES = 30
-
-# --- Constantes Padrão ---
+# --- Configurações da Aplicação ---
+APP_VERSION = "1.5.0"
+SESSION_TIMEOUT_MINUTES = 60
 DASHBOARD_CHART_LIMIT = 20
-DEFAULT_INITIAL_STATES = ['a fazer', 'to do', 'backlog']
-DEFAULT_DONE_STATES = ['concluído', 'done', 'resolvido', 'closed']
+
+# --- Constantes de Estado Padrão ---
+DEFAULT_INITIAL_STATES = ['Aberto', 'A Fazer', 'Backlog', 'To Do', 'Open']
+DEFAULT_DONE_STATES = ['Concluído', 'Fechado', 'Resolvido', 'Done', 'Closed', 'Resolved']
 DEFAULT_COLORS = {
-    'status_colors': {
-        'a fazer': '#808080', 'em andamento': '#007bff', 'concluído': '#28a745'
+    "status_colors": {
+        "Aberto": "#FF5733",       # Vermelho
+        "A Fazer": "#FFC300",      # Amarelo
+        "Em Progresso": "#33C1FF", # Azul
+        "Concluído": "#28A745",    # Verde
+        "Fechado": "#6C757D",      # Cinza
+        "Resolvido": "#17A2B8",    # Ciano
+        "Reaberto": "#FF33A8"      # Rosa
     },
-    'type_colors': {
-        'bug': '#d73a49', 'melhoria': '#28a745', 'tarefa': '#007bff'
+    "type_colors": {
+        "Bug": "#E74C3C",          # Vermelho Escuro
+        "Tarefa": "#3498DB",       # Azul
+        "Melhoria": "#2ECC71",     # Verde
+        "História": "#9B59B6",     # Roxo
+        "Épico": "#F39C12"         # Laranja
+    }
+}
+# --- Esquemas de Cores para Gráficos ---
+COLOR_THEMES = {
+    "Padrão Gauge": {
+        "primary_color": "#0068C9",    # Azul Gauge
+        "secondary_color": "#83C9FF",  # Azul Claro
+        "title_color": "#3D3D3D",      # Cinza Escuro
+        "color_sequence": ["#0068C9", "#83C9FF", "#0A2943", "#FF4B4B", "#3D3D3D"]
+    },
+    "Oceano Profundo": {
+        "primary_color": "#0A2943",    # Azul Escuro
+        "secondary_color": "#0068C9",  # Azul Médio
+        "title_color": "#E0E0E0",      # Cinza Claro
+        "color_sequence": ["#0A2943", "#0068C9", "#83C9FF", "#FF4B4B", "#3D3D3D"]
+    },
+    "Vulcão": {
+        "primary_color": "#E24E42",    # Vermelho Principal
+        "secondary_color": "#FF9B54",  # Laranja
+        "title_color": "#4F4A45",      # Cinza Escuro
+        "color_sequence": ["#E24E42", "#FF9B54", "#4F4A45", "#C84B31", "#2D2424"]
+    },
+    "Floresta": {
+        "primary_color": "#2E7D32",    # Verde Escuro
+        "secondary_color": "#66BB6A",  # Verde Claro
+        "title_color": "#3E2723",      # Marrom Escuro
+        "color_sequence": ["#2E7D32", "#66BB6A", "#AED581", "#4CAF50", "#81C784"]
+    },
+    "Pôr do Sol": {
+        "primary_color": "#FF8F00",    # Laranja Escuro
+        "secondary_color": "#FFCA28",  # Amarelo
+        "title_color": "#D84315",      # Laranja Queimado
+        "color_sequence": ["#FF8F00", "#FFCA28", "#FFA726", "#FF7043", "#F57C00"]
     }
 }
 
-# --- Esquemas de Cores para Gráficos ---
-COLOR_THEMES = {
-    "Padrão Gauge": ["#FF4B4B", "#3D3D3D", "#FFD700", "#6A5ACD", "#20B2AA", "#FF69B4", "#ADD8E6", "#F0E68C"],
-    "Azuis e Cinzas": px.colors.sequential.Blues_r + px.colors.sequential.Greys_r,
-    "Verdes e Amarelos": px.colors.sequential.YlGn_r,
-    "Espectro de Cores Vivas": px.colors.qualitative.Plotly,
-    "Pastel": px.colors.qualitative.Pastel,
-    "Alto Contraste": px.colors.qualitative.Bold,
-}
+# --- Constantes Padrão ---
+DEFAULT_INITIAL_STATES = ['a fazer', 'to do', 'backlog']
+DEFAULT_DONE_STATES = ['concluído', 'done', 'resolvido', 'closed']
+
 
 # --- Função de Carregamento Central ---
 @st.cache_data

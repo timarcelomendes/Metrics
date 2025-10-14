@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from security import *
+from datetime import datetime, timedelta, date
 
 # --- Funções Auxiliares de Data ---
 def find_completion_date(issue, project_config):
@@ -14,24 +15,22 @@ def find_completion_date(issue, project_config):
     Encontra a data de conclusão real de uma issue analisando seu histórico (changelog).
     Retorna a data da última transição para um status da categoria 'Done'.
     """
-    # VERIFICAÇÃO DE SEGURANÇA: Retorna None se a issue for inválida
     if not issue or not hasattr(issue, 'changelog') or not issue.changelog:
         return None
 
-    done_statuses = project_config.get('status_mapping', {}).get('Done', [])
+    # Usa a chave 'done' (minúscula) para consistência
+    done_statuses = [s.lower() for s in project_config.get('status_mapping', {}).get('done', [])]
 
     if not done_statuses:
-        # Fallback: se não houver mapeamento, usa a data de resolução padrão.
-        return pd.to_datetime(getattr(issue.fields, 'resolutiondate', None)).date() if getattr(issue.fields, 'resolutiondate', None) else None
+        resolution_date = getattr(issue.fields, 'resolutiondate', None)
+        return pd.to_datetime(resolution_date).date() if resolution_date else None
 
     completion_dates = []
     for history in issue.changelog.histories:
         for item in history.items:
-            if item.field == 'status' and item.toString in done_statuses:
-                # Converte a data do histórico para o formato de data
+            if item.field == 'status' and item.toString.lower() in done_statuses:
                 completion_dates.append(pd.to_datetime(history.created).date())
 
-    # Retorna a data mais recente em que a issue entrou em um status "Done"
     return max(completion_dates) if completion_dates else None
 
 def find_start_date(issue):
@@ -53,13 +52,22 @@ def calculate_lead_time(issue, completion_date):
     """Calcula o Lead Time em dias."""
     if completion_date:
         creation_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+        if isinstance(completion_date, date) and not isinstance(completion_date, datetime):
+            completion_date = pd.to_datetime(completion_date)
         return (completion_date - creation_date).days
     return None
 
 def calculate_cycle_time(issue, completion_date, project_config):
-    """Calcula o Cycle Time em dias."""
+    """Calcula o Cycle Time em dias, com conversão de data robusta."""
     if not completion_date:
         return None
+
+    # Garante que a data de conclusão seja um objeto datetime para a subtração
+    if isinstance(completion_date, date) and not isinstance(completion_date, datetime):
+        completion_date = pd.to_datetime(completion_date).tz_localize(None)
+    elif isinstance(completion_date, datetime) and completion_date.tzinfo is None:
+        completion_date = completion_date.tz_localize(None)
+
     status_mapping = project_config.get('status_mapping', {})
     in_progress_statuses = [s.lower() for s in status_mapping.get('in_progress', [])]
     first_start_date = None
@@ -71,8 +79,10 @@ def calculate_cycle_time(issue, completion_date, project_config):
                     start_dates.append(pd.to_datetime(history.created).tz_localize(None))
         if start_dates:
             first_start_date = min(start_dates)
+            
     if first_start_date is None:
         first_start_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+
     time_delta = completion_date - first_start_date
     return max(0, time_delta.total_seconds() / (24 * 3600))
 
@@ -342,7 +352,7 @@ def prepare_cfd_data(issues, start_date, end_date):
     return cfd_cumulative, wip_df
 
 def prepare_project_burnup_data(issues, unit, estimation_config, project_config):
-    """Prepara o burnup, com a correção de tipo de data."""
+    """Prepara o burnup, com o tipo de data."""
     valid_issues = get_filtered_issues(issues)
 
     if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
@@ -497,19 +507,50 @@ def calculate_time_in_status(issue, all_statuses, completion_date):
     return time_in_status
 
 def calculate_flow_efficiency(issue, project_config):
-    completion_date = find_completion_date(issue, project_config)
-    cycle_time_days = calculate_cycle_time(issue, completion_date, project_config)
+    """Calcula a eficiência do fluxo, garantindo a conversão de tipos de data."""
+    completion_date_obj = find_completion_date(issue, project_config)
+    if not completion_date_obj:
+        return None
+
+    completion_datetime = pd.to_datetime(completion_date_obj)
+    cycle_time_days = calculate_cycle_time(issue, completion_datetime, project_config)
 
     if not cycle_time_days or cycle_time_days <= 0:
         return None
 
     time_spent_seconds = issue.fields.timespent or 0
-    touch_time_days = time_spent_seconds / 3600 / 8
+    touch_time_days = (time_spent_seconds / 3600) / 8
 
     if touch_time_days > cycle_time_days:
         return 100.0
-
+        
     return (touch_time_days / cycle_time_days) * 100
+
+def calculate_aggregated_metric(df, dimension, measure, agg):
+    if not dimension or dimension not in df.columns:
+        return pd.DataFrame({'Dimensão': [], 'Medida': []})
+
+    if measure and measure.startswith('Tempo em: '):
+        if measure not in df.columns:
+            return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        agg_df = df.groupby(dimension)[measure].mean().reset_index(name='Medida')
+
+    elif measure == 'Contagem de Issues':
+        agg_df = df.groupby(dimension).size().reset_index(name='Medida')
+
+    elif agg == 'Contagem Distinta':
+        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        agg_df = df.groupby(dimension)[measure].nunique().reset_index(name='Medida')
+
+    else:
+        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
+        numeric_series = pd.to_numeric(df[measure], errors='coerce')
+        grouped_data = numeric_series.groupby(df[dimension])
+        if agg == 'Soma': agg_df = grouped_data.sum().reset_index(name='Medida')
+        elif agg == 'Média': agg_df = grouped_data.mean().reset_index(name='Medida')
+        else: agg_df = grouped_data.count().reset_index(name='Medida')
+
+    return agg_df.rename(columns={dimension: 'Dimensão'})
 
 def get_aging_wip(issues):
     global_configs = st.session_state.get('global_configs', {})

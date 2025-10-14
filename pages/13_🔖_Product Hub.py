@@ -436,7 +436,6 @@ elif selected_main_tab == "Gestão de Pessoas":
         if st.session_state.membros.empty:
             st.warning("Adicione membros e realize avaliações para visualizar os dados.")
         else:
-            # --- INÍCIO DA CORREÇÃO: A linha que define as abas foi restaurada ---
             analise_ind, analise_time = st.tabs(["Análise Individual", "Visão Geral do Time"])
 
             with analise_ind:
@@ -605,13 +604,11 @@ elif selected_main_tab == "Gestão de Pessoas":
                     if not base_url or not smtp_config:
                         st.error("A URL base ou as configurações de SMTP não estão definidas. Verifique em '👑 Administração'.")
                     else:
-                        # --- INÍCIO DA CORREÇÃO ---
                         hub_owner_email = st.session_state['email']
                         # Busca os dados do utilizador para obter o nome mais recente
                         user_data = find_user(hub_owner_email) 
                         # Usa o nome se existir, caso contrário, usa o e-mail
                         hub_owner_name = user_data.get('name', hub_owner_email) if user_data else hub_owner_email
-                        # --- FIM DA CORREÇÃO ---
 
                         with st.spinner("A gerar links e a enviar e-mails..."):
                             success_count = 0

@@ -1,4 +1,4 @@
-# utils.py
+# utils.py (VERSÃO CORRIGIDA)
 
 import streamlit as st
 import json, os, pandas as pd
@@ -168,8 +168,16 @@ def calculate_trendline(df, x_col, y_col):
     return df_cleaned[x_col], trend_y
 
 def apply_chart_theme(fig, theme_name="Padrão Gauge"):
+    """Aplica um tema de cores a uma figura Plotly, extraindo a sequência de cores correta."""
     default_theme_key = list(COLOR_THEMES.keys())[0]
-    color_sequence = COLOR_THEMES.get(theme_name, COLOR_THEMES[default_theme_key])
+    theme_dict = COLOR_THEMES.get(theme_name, COLOR_THEMES[default_theme_key])
+    
+    # Fallback de segurança se a configuração do tema estiver incorreta (e.g., uma lista em vez de um dict)
+    if not isinstance(theme_dict, dict):
+        theme_dict = COLOR_THEMES[default_theme_key]
+
+    # Extrai a lista de cores para o 'colorway'
+    color_sequence = theme_dict.get('color_sequence', [])
     
     fig.update_layout(
         colorway=color_sequence,
@@ -182,38 +190,14 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     )
     return fig
 
-def calculate_kpi_value(op, field, df):
-    """
-    Calcula um valor de KPI (Soma, Média, Contagem) a partir de um DataFrame.
-    Esta função reside em utils.py para evitar importações circulares.
-    """
-    if op == 'Contagem':
-        return len(df)
-    
-    if not field or field == "Contagem de Issues":
-        return len(df)
-
-    if field not in df.columns:
-        st.warning(f"O campo '{field}' usado no KPI não foi encontrado nos dados atuais.")
-        return 0 
-
-    numeric_series = pd.to_numeric(df[field], errors='coerce').dropna()
-    
-    if numeric_series.empty:
-        return 0
-
-    if op == 'Soma':
-        return numeric_series.sum()
-    if op == 'Média':
-        return numeric_series.mean()
-    
-    return 0
-
 def render_chart(chart_config, df, chart_key):
-    """Renderiza um gráfico com base na configuração, com validação robusta."""
+    """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
+        # Validação inicial para garantir que a configuração é um dicionário
         if not isinstance(chart_config, dict):
-            st.error(f"Erro: A configuração deste gráfico está corrompida e não pode ser renderizada. Por favor, remova e crie o gráfico novamente.")
+            st.error(f"Erro: A configuração deste gráfico é inválida (não é um dicionário) e não pode ser renderizada.")
+            with st.expander("Ver dados corrompidos"):
+                st.json(chart_config)
             return
 
         chart_key = f"chart_{chart_config.get('id', uuid.uuid4())}"
@@ -269,6 +253,10 @@ def render_chart(chart_config, df, chart_key):
                 if total > 0: agg_df[agg_col] = (agg_df[agg_col] / total) * 100
             
             fig = None
+            theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
+            if not isinstance(theme_colors, dict):
+                theme_colors = COLOR_THEMES[default_theme]
+
             if chart_type == 'barra': fig = px.bar(agg_df, x=dimension, y=agg_col, color=secondary_dimension)
             elif chart_type == 'barra_horizontal': fig = px.bar(agg_df, y=dimension, x=agg_col, orientation='h', color=secondary_dimension)
             elif chart_type == 'linha_agregada': fig = px.line(agg_df, x=dimension, y=agg_col, markers=True, color=secondary_dimension)
@@ -279,21 +267,29 @@ def render_chart(chart_config, df, chart_key):
                 fig = px.treemap(agg_df, path=path, values=agg_col)
             elif chart_type == 'funil': fig = px.funnel(agg_df, x=agg_col, y=dimension)
             elif chart_type == 'tabela':
-                header_values = list(agg_df.columns)
-                cell_values = [agg_df[col] for col in header_values]
-                fig = go.Figure(data=[go.Table(header=dict(values=header_values, fill_color='paleturquoise', align='left'), cells=dict(values=cell_values, fill_color='lavender', align='left'))])
+                header_color = theme_colors.get('primary_color', '#1f77b4')
+                fig = go.Figure(data=[go.Table(
+                    header=dict(values=list(agg_df.columns), fill_color=header_color, align='left', font=dict(color='white')), 
+                    cells=dict(values=[agg_df[col] for col in agg_df.columns], fill_color='#f0f2f6', align='left')
+                )])
             
             if fig:
-                fig.update_layout(title_text=None) # Garante que o título interno seja removido
+                fig = apply_chart_theme(fig, color_theme)
+                fig.update_layout(title_text=None)
                 if chart_config.get('y_axis_format') == 'hours':
                     fig.update_layout(yaxis_title=y_axis_title_text) if chart_type != 'barra_horizontal' else fig.update_layout(xaxis_title=y_axis_title_text)
+                
                 if chart_config.get('show_data_labels') and chart_type not in ['tabela', 'pizza', 'treemap']:
-                    text_template_y = '%{y:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{y:.2s}'
-                    text_template_x = '%{x:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{x:.2s}'
+                    text_template = '%{value:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{value:.2s}'
+                    
                     if chart_type in ['barra', 'barra_horizontal']:
-                        fig.update_traces(texttemplate=text_template_y if chart_type == 'barra' else text_template_x, textposition='auto')
-                    elif chart_type in ['linha_agregada', 'funil']:
-                        fig.update_traces(texttemplate=text_template_y if chart_type == 'linha_agregada' else text_template_x, textposition='top center')
+                        fig.update_traces(texttemplate=text_template, textposition='auto')
+                    elif chart_type == 'linha_agregada':
+                        fig.update_traces(texttemplate=text_template, textposition='top center')
+                    elif chart_type == 'funil':
+                        # Funil tem posições de texto diferentes
+                        fig.update_traces(texttemplate=text_template, textposition='auto')
+
                 if chart_config.get('show_as_percentage'):
                     if chart_type == 'pizza': fig.update_traces(texttemplate='%{value:.1f}%')
                     else: fig.update_layout(yaxis_ticksuffix="%")
@@ -305,17 +301,17 @@ def render_chart(chart_config, df, chart_key):
             size_by = chart_config.get('size_by')
             color_by = chart_config.get('color_by')
 
-            if not x or not isinstance(x, str) or not y or not isinstance(y, str):
+            if not x or not y:
                 st.warning("Configuração de gráfico X-Y inválida: Eixos X e Y são obrigatórios.")
                 return
 
             required_cols = [x, y]
-            if size_by and isinstance(size_by, str) and size_by != "Nenhum": required_cols.append(size_by)
-            if color_by and isinstance(color_by, str) and color_by != "Nenhum": required_cols.append(color_by)
+            if size_by and size_by != "Nenhum": required_cols.append(size_by)
+            if color_by and color_by != "Nenhum": required_cols.append(color_by)
             
-            missing_cols = [col for col in required_cols if col not in df_chart_filtered.columns]
-            if missing_cols:
-                st.warning(f"Não foi possível renderizar o gráfico. Coluna(s) não encontrada(s): {', '.join(missing_cols)}")
+            if not all(col in df.columns for col in required_cols):
+                missing = [col for col in required_cols if col not in df.columns]
+                st.warning(f"Não foi possível renderizar o gráfico. Coluna(s) não encontrada(s): {', '.join(missing)}")
                 return
 
             plot_df = df_chart_filtered.copy().dropna(subset=required_cols)
@@ -323,21 +319,73 @@ def render_chart(chart_config, df, chart_key):
                 st.warning("Não há dados para exibir com as colunas e filtros selecionados.")
                 return
 
+            x_axis_col_for_plotting = x 
+            date_aggregation = chart_config.get('date_aggregation')
+            if date_aggregation and date_aggregation != 'Nenhum' and x in plot_df.columns:
+                plot_df[x] = pd.to_datetime(plot_df[x], errors='coerce')
+                plot_df.dropna(subset=[x], inplace=True)
+
+                if pd.api.types.is_datetime64_any_dtype(plot_df[x]):
+                    freq_map = {'Dia': 'D', 'Semana': 'W-MON', 'Mês': 'MS', 'Trimestre': 'QS', 'Ano': 'AS'}
+                    freq = freq_map.get(date_aggregation)
+
+                    if freq:
+                        y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
+                        agg_map = {'soma': 'sum', 'média': 'mean'}
+                        
+                        grouping_cols = [pd.Grouper(key=x, freq=freq)]
+                        if color_by and color_by != "Nenhum": grouping_cols.append(color_by)
+
+                        agg_dict = {y: agg_map.get(y_agg_func, 'mean')}
+                        if size_by and size_by != "Nenhum": agg_dict[size_by] = 'mean'
+
+                        plot_df = plot_df.groupby(grouping_cols, as_index=False).agg(agg_dict)
+                        plot_df = plot_df.sort_values(by=x)
+
+                        x_axis_col_for_plotting = f"{x} ({date_aggregation})"
+                        if date_aggregation == 'Dia':
+                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('%Y-%m-%d')
+                        elif date_aggregation == 'Semana':
+                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('Semana %U (%Y)')
+                        elif date_aggregation == 'Mês':
+                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('%Y-%m')
+                        elif date_aggregation == 'Trimestre':
+                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str) + '-T' + plot_df[x].dt.quarter.astype(str)
+                        elif date_aggregation == 'Ano':
+                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str)
+
             y_axis_title = chart_config.get('y_axis_title', y)
             if chart_config.get('y_axis_format') == 'hours' and y in plot_df.columns:
                 plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 3600.0
                 y_axis_title = y_axis_title.replace(y, f"{y} (horas)") if y in y_axis_title else f"{y} (horas)"
             
-            if color_by == "Nenhum": color_by = None
-            if size_by == "Nenhum": size_by = None
-            
-            text_param = y if chart_config.get('show_data_labels') else None
-            plot_kwargs = { 'x': x, 'y': y, 'color': color_by, 'text': text_param }
-            if chart_type == 'dispersão':
-                plot_kwargs['size'] = size_by
-            
+            plot_args = {
+                "data_frame": plot_df, "x": x_axis_col_for_plotting, "y": y,
+                "color": color_by if color_by and color_by != "Nenhum" else None,
+                "text": y if chart_config.get('show_data_labels') else None,
+            }
+
             fig_func = px.line if chart_type == 'linha' else px.scatter
-            fig = fig_func(plot_df, **plot_kwargs)
+
+            if chart_type == 'dispersão':
+                size_col = size_by if size_by and size_by != "Nenhum" else None
+                if size_col and size_col in plot_df.columns:
+                    plot_df[size_col] = pd.to_numeric(plot_df[size_col], errors='coerce').dropna()
+                    
+                    original_rows = len(plot_df)
+                    plot_df = plot_df[plot_df[size_col] >= 0].copy()
+                    if len(plot_df) < original_rows:
+                        st.caption(f"ℹ️ {original_rows - len(plot_df)} pontos de dados foram removidos da visualização porque tinham valores negativos no campo de tamanho ('{size_col}').")
+                    
+                    plot_args['size'] = size_col
+                    plot_args['data_frame'] = plot_df
+
+            if plot_df.empty:
+                st.warning("Não restaram dados para exibir após a remoção de valores inválidos.")
+                return
+
+            fig = fig_func(**plot_args)
+            fig = apply_chart_theme(fig, color_theme)
             
             if chart_config.get('show_data_labels'):
                 text_template = '%{text:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{text:.2s}'
@@ -348,12 +396,15 @@ def render_chart(chart_config, df, chart_key):
 
         # --- Indicador (KPI) ---
         elif chart_type == 'indicator':
-            theme_name = chart_config.get('color_theme', 'Padrão')
-            theme_colors = COLOR_THEMES.get(theme_name, {})
-            title_color = theme_colors.get('title_color', '#333333')
-            number_color = theme_colors.get('primary_color', '#000000')
-            delta_color = theme_colors.get('secondary_color', '#555555')
+            theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
+            if not isinstance(theme_colors, dict):
+                theme_colors = COLOR_THEMES[default_theme]
+            
+            title_color = theme_colors.get('title_color', '#3D3D3D')
+            number_color = theme_colors.get('primary_color', '#0068C9')
+            delta_color = theme_colors.get('secondary_color', '#83C9FF')
             fig = None
+            
             if chart_config.get('source_type') == 'jql':
                 from jira_connector import get_jql_issue_count
                 jql_a = chart_config.get('jql_a', '')
@@ -409,6 +460,7 @@ def render_chart(chart_config, df, chart_key):
                     title={"text": chart_config.get('title'), "font": {"color": title_color}},
                     number={'suffix': suffix, "font": {"color": number_color}}
                 ))
+            
             if fig:
                 fig.update_layout(margin=dict(l=0, r=0, t=40, b=10), height=150, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
@@ -419,12 +471,31 @@ def render_chart(chart_config, df, chart_key):
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
                 pivot_df = pd.pivot_table(df_chart_filtered, values=values, index=rows, columns=cols, aggfunc=agg_map.get(aggfunc, 'sum')).reset_index()
-                fig = go.Figure(data=[go.Table(header=dict(values=list(pivot_df.columns), fill_color='paleturquoise', align='left'), cells=dict(values=[pivot_df[col] for col in pivot_df.columns], fill_color='lavender', align='left'))])
+
+                theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
+                if not isinstance(theme_colors, dict):
+                    theme_colors = COLOR_THEMES[default_theme]
+                header_color = theme_colors.get('primary_color', '#1f77b4')
+                fig = go.Figure(data=[go.Table(
+                    header=dict(values=list(pivot_df.columns), fill_color=header_color, align='left', font=dict(color='white')), 
+                    cells=dict(values=[pivot_df[col] for col in pivot_df.columns], fill_color='#f0f2f6', align='left')
+                )])
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_pivot")
             else: st.warning("Para a Tabela Dinâmica, 'Linhas' e 'Valores' são obrigatórios.")
 
     except Exception as e:
-        st.error(f"Ocorreu um erro ao renderizar o gráfico '{chart_config.get('title', 'Desconhecido')}': {e}")
+        import traceback
+        title = chart_config.get('title', 'Desconhecido') if isinstance(chart_config, dict) else 'Desconhecido'
+        st.error(f"Ocorreu um erro ao renderizar o gráfico '{title}'.")
+        with st.expander("Ver detalhes técnicos do erro"):
+            st.error(f"**Tipo de Erro:** {type(e).__name__}")
+            st.error(f"**Mensagem:** {e}")
+            st.code(traceback.format_exc())
+        with st.expander("Ver dados do gráfico com erro"):
+            try:
+                st.json(chart_config)
+            except:
+                st.write(chart_config)
 
 def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
     st.markdown("###### **Criar Dimensão Combinada**")
@@ -1222,38 +1293,47 @@ def is_valid_email(email):
     regex = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
     return re.fullmatch(regex, email)
 
-# Substitua a sua função em utils.py por esta versão final e robusta:
-
 def load_and_process_project_data(jira_client, project_key):
     """
     Carrega, processa, enriquece e armazena em cache os dados de um projeto Jira.
-    Esta versão inclui o processamento de campos customizados e o cálculo correto da data de conclusão.
+    Esta versão agora calcula e inclui o Cycle Time no DataFrame principal.
     """
     from jira_connector import get_project_issues, get_jira_fields
-    from metrics_calculator import find_completion_date # Importação local
+    from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time
 
-    # --- ETAPA 1: BUSCAR DADOS E METADADOS ---
     user_data = find_user(st.session_state['email'])
+    project_config = get_project_config(project_key) or {}
     user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
-    issues = get_project_issues(jira_client, project_key, user_custom_fields=user_enabled_custom_fields)
+    
+    raw_issues_list = get_project_issues(jira_client, project_key, user_custom_fields=user_enabled_custom_fields)
+    issues = filter_ignored_issues(raw_issues_list, project_config)
+    
     if not issues:
-        st.warning("Nenhuma issue foi retornada do Jira para este projeto.")
-        return pd.DataFrame()
+        st.warning("Nenhuma issue foi encontrada para este projeto (ou todas foram ignoradas pela sua configuração de status).")
+        return pd.DataFrame(), []
 
     all_jira_fields = get_jira_fields(jira_client)
     field_id_to_name_map = {field['id']: field['name'] for field in all_jira_fields}
 
-    # --- ETAPA 2: PROCESSAR CADA ISSUE INDIVIDUALMENTE ---
     processed_issues_data = []
     for issue in issues:
         fields_data = issue.raw['fields'].copy()
         fields_data['key'] = issue.key
-        fields_data['calculated_completion_date'] = find_completion_date(issue)
+        
+        completion_date = find_completion_date(issue, project_config)
+        fields_data['calculated_completion_date'] = completion_date
+        
+        # Calcula o Cycle Time se houver data de conclusão
+        if completion_date:
+            completion_datetime = pd.to_datetime(completion_date)
+            fields_data['calculated_cycle_time'] = calculate_cycle_time(issue, completion_datetime, project_config)
+        else:
+            fields_data['calculated_cycle_time'] = None
+            
         processed_issues_data.append(fields_data)
 
     df = pd.DataFrame(processed_issues_data)
 
-    # --- ETAPA 3: PROCESSAR CAMPOS CUSTOMIZADOS E PADRÃO NO DATAFRAME ---
     global_configs = st.session_state.get('global_configs', {})
     available_custom_fields = global_configs.get('custom_fields', [])
     enabled_field_name_to_type_map = {
@@ -1273,7 +1353,6 @@ def load_and_process_project_data(jira_client, project_key):
                 elif field_type == 'Data':
                     df[field_name] = pd.to_datetime(df[field_name], errors='coerce').dt.date
 
-    # Renomeia e formata colunas padrão
     df.rename(columns={'summary': 'Issue', 'key': 'ID'}, inplace=True)
     df['Tipo de Issue'] = df['issuetype'].apply(lambda x: x['name'] if x else None)
     df['Status'] = df['status'].apply(lambda x: x['name'] if x else None)
@@ -1281,26 +1360,22 @@ def load_and_process_project_data(jira_client, project_key):
     df['Prioridade'] = df['priority'].apply(lambda x: x['name'] if x else None)
     df['Categoria de Status'] = df['status'].apply(lambda x: x['statusCategory']['name'] if x and 'statusCategory' in x else None)
     
-    # --- INÍCIO DA CORREÇÃO ---
-    # Mantém as colunas como datetime completos para o cálculo
     data_criacao_dt = pd.to_datetime(df['created']).dt.tz_localize(None)
     data_conclusao_dt = pd.to_datetime(df['calculated_completion_date'], errors='coerce').dt.tz_localize(None)
 
-    # Calcula o Lead Time. O Pandas irá ignorar automaticamente as linhas onde a data de conclusão é NaT.
     df['Lead Time (dias)'] = (data_conclusao_dt - data_criacao_dt).dt.days
+    df['Cycle Time (dias)'] = df['calculated_cycle_time'] # Adiciona a nova coluna
     
-    # Agora, converte as colunas de data para o formato de exibição (sem a hora)
     df['Data de Criação'] = data_criacao_dt.dt.date
     df['Data de Conclusão'] = data_conclusao_dt.dt.date
-    # --- FIM DA CORREÇÃO ---
 
-    # --- ETAPA 4: LIMPEZA FINAL ---
-    final_columns = ['ID', 'Issue', 'Tipo de Issue', 'Status', 'Responsável', 'Prioridade', 'Categoria de Status', 'Data de Criação', 'Data de Conclusão', 'Lead Time (dias)']
+    final_columns = ['ID', 'Issue', 'Tipo de Issue', 'Status', 'Responsável', 'Prioridade', 'Categoria de Status', 'Data de Criação', 'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)']
+    
     final_columns.extend([name for name in enabled_field_name_to_type_map.keys() if name in df.columns])
     
     df_final = df[[col for col in final_columns if col in df.columns]].copy()
 
-    return df_final
+    return df_final, issues
 
 def get_ai_product_vision(project_name, issues_data):
     """
@@ -1692,7 +1767,6 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     field_names = [field['field_name'] for field in layout_fields]
     json_structure_example = {field_name: "" for field_name in field_names}
     
-    # --- INÍCIO DA CORREÇÃO DE CODIFICAÇÃO ---
     # Sanitiza os dados da issue para remover caracteres problemáticos antes de enviar para a IA
     sanitized_issue_dict = {}
     for key, value in issue_data_dict.items():
@@ -1703,7 +1777,6 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
         else:
             sanitized_issue_dict[key] = value
     issue_context = "\n".join([f"- {key}: {value}" for key, value in sanitized_issue_dict.items() if value])
-    # --- FIM DA CORREÇÃO DE CODIFICAÇÃO ---
 
     # --- PROMPT FINAL, COM EXEMPLO (ONE-SHOT) ---
     prompt = f"""
@@ -1832,3 +1905,30 @@ def get_ai_team_performance_analysis(team_performance_df):
     except Exception as e:
         st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
         return "Ocorreu uma falha ao tentar gerar a análise. Por favor, tente novamente."
+    
+def calculate_kpi_value(op, field, df):
+    """
+    Calcula um valor de KPI (Soma, Média, Contagem) a partir de um DataFrame.
+    Esta função reside em utils.py para evitar importações circulares.
+    """
+    if op == 'Contagem':
+        return len(df)
+    
+    if not field or field == "Contagem de Issues":
+        return len(df)
+
+    if field not in df.columns:
+        st.warning(f"O campo '{field}' usado no KPI não foi encontrado nos dados atuais.")
+        return 0 
+
+    numeric_series = pd.to_numeric(df[field], errors='coerce').dropna()
+    
+    if numeric_series.empty:
+        return 0
+
+    if op == 'Soma':
+        return numeric_series.sum()
+    if op == 'Média':
+        return numeric_series.mean()
+    
+    return 0

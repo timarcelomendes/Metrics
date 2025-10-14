@@ -1,4 +1,4 @@
-# pages/5_🏗️_Construir Gráficos.py (VERSÃO FINAL E CORRIGIDA)
+# pages/5_🏗️_Construir Gráficos.py (VERSÃO CORRIGIDA E FINAL)
 
 import streamlit as st
 import pandas as pd
@@ -15,35 +15,40 @@ from metrics_calculator import *
 
 st.set_page_config(page_title="Personalizar Gráficos", page_icon="🏗️", layout="wide")
 
-# --- BLOCO 1: INICIALIZAÇÃO E AUTENTICAÇÃO (VERSÃO CORRIGIDA) ---
+# --- BLOCO 1: INICIALIZAÇÃO E AUTENTICAÇÃO ---
 
-# Determina se estamos em modo de edição e obtém os dados do gráfico
+# Validação robusta e função de callback para limpar o estado ao trocar de tipo de gráfico
+if 'new_chart_config' not in st.session_state or not isinstance(st.session_state.new_chart_config, dict):
+    st.session_state.new_chart_config = {}
+
+def on_chart_type_change():
+    """Limpa a configuração específica do gráfico ao trocar o tipo no construtor visual."""
+    # Preserva o título e o ID se estiverem em modo de edição, mas limpa o resto
+    current_config = st.session_state.new_chart_config
+    st.session_state.new_chart_config = {
+        'creator_type': st.session_state.visual_creator_type,
+        'title': current_config.get('title', ''),
+        'id': current_config.get('id')
+    }
+
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
 
-# Lógica CRÍTICA para carregar os dados do gráfico e dos filtros no modo de edição
 if editing_mode:
-    # Se o estado principal ('new_chart_config') ainda não foi populado com os dados de edição, faz a cópia.
-    if 'new_chart_config' not in st.session_state or st.session_state.new_chart_config.get('id') != chart_data.get('id'):
+    if st.session_state.new_chart_config.get('id') != chart_data.get('id'):
         st.session_state.new_chart_config = chart_data.copy()
-        # Carrega os filtros do gráfico para o estado da sessão. Essencial para a edição.
         st.session_state.creator_filters = parse_dates_in_filters(chart_data.get('filters', []))
 else:
-    # Se estiver a criar um novo gráfico, garante que ambos os estados começam vazios.
-    if 'new_chart_config' not in st.session_state or st.session_state.new_chart_config:
-        st.session_state.new_chart_config = {}
-    if 'creator_filters' not in st.session_state or st.session_state.creator_filters:
+    if 'creator_filters' not in st.session_state:
         st.session_state.creator_filters = []
 
 
-# Define o cabeçalho da página com base no modo (usando o estado agora correto)
 if editing_mode:
     st.header(f"✏️ Editando: {st.session_state.new_chart_config.get('title', 'Visualização')}", divider='orange')
 else:
     st.header("🏗️ Laboratório de Criação de Gráficos", divider='rainbow')
 
 
-# Verificações de segurança e sessão (sem alterações)
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if check_session_timeout():
@@ -54,7 +59,6 @@ if 'jira_client' not in st.session_state:
     st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
     st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
     st.stop()
-
 
 # --- BLOCO 2: CSS E BARRA LATERAL ---
 st.markdown("""<style> button[data-testid="stButton"][kind="primary"] span svg { fill: white; } [data-testid="stHorizontalBlock"] { align-items: flex-end; } </style>""", unsafe_allow_html=True)
@@ -75,11 +79,11 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, placeholder="Escolha um projeto...")
     if selected_project_name:
         st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
-        if st.button("Construir Gráficos", use_container_width=True, type="primary"):
-            df = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
-            st.session_state.dynamic_df = df
+        if st.button("Construir Gráficos", width='stretch', type="primary"):
+            df_loaded, _ = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+            st.session_state.dynamic_df = df_loaded
             st.rerun()
-        if st.button("Logout", use_container_width=True, type='secondary'):
+        if st.button("Logout", width='stretch', type='secondary'):
             email_to_remember = st.session_state.get('remember_email', '')
             for key in list(st.session_state.keys()): del st.session_state[key]
             if email_to_remember: st.session_state['remember_email'] = email_to_remember
@@ -99,6 +103,7 @@ global_configs = st.session_state.get('global_configs', {}); user_data = find_us
 user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
+
 master_field_list = []
 for field in all_available_custom:
     if field.get('name') in user_enabled_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
@@ -108,12 +113,27 @@ for field_name in user_enabled_standard_fields:
 if project_estimation_field and project_estimation_field.get('name') not in [f['name'] for f in master_field_list]:
     est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
-base_numeric_cols = [col for col in ['Lead Time (dias)', 'Cycle Time (dias)'] if col in df.columns]
-base_date_cols = [col for col in ['Data de Criação', 'Data de Conclusão'] if col in df.columns]
-base_categorical_cols = [col for col in ['Issue', 'Tipo de Issue', 'Responsável', 'Status', 'Prioridade', 'Categoria de Status'] if col in df.columns]
-numeric_cols = sorted(list(set(base_numeric_cols + [f['name'] for f in master_field_list if f['type'] in ['Numérico', 'Horas'] and f['name'] in df.columns])))
-date_cols = sorted(list(set(base_date_cols + [f['name'] for f in master_field_list if f['type'] == 'Data' and f['name'] in df.columns])))
-categorical_cols = sorted(list(set(base_categorical_cols + [f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto'] and f['name'] in df.columns])))
+
+# Lógica de deteção automática para garantir que todos os campos sejam apanhados
+auto_numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+auto_date_cols = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col]) or 'Data' in col]
+auto_categorical_cols = [col for col in df.columns if pd.api.types.is_object_dtype(df[col]) and col not in auto_date_cols]
+
+# Combina a lógica manual com a automática para criar as listas finais
+numeric_cols_from_master = [f['name'] for f in master_field_list if f['type'] in ['Numérico', 'Horas'] and f['name'] in df.columns]
+numeric_cols = sorted(list(set(auto_numeric_cols + numeric_cols_from_master)))
+
+date_cols_from_master = [f['name'] for f in master_field_list if f['type'] == 'Data' and f['name'] in df.columns]
+date_cols = sorted(list(set(auto_date_cols + date_cols_from_master)))
+
+categorical_cols_from_master = [f['name'] for f in master_field_list if f['type'] in ['Texto (Alfanumérico)', 'Texto'] and f['name'] in df.columns]
+categorical_cols = sorted(list(set(auto_categorical_cols + categorical_cols_from_master)))
+
+# Garante que os campos calculados estejam sempre presentes se existirem
+for col in ['Lead Time (dias)', 'Cycle Time (dias)']:
+    if col in df.columns and col not in numeric_cols:
+        numeric_cols.append(col)
+
 status_time_cols = sorted([col for col in df.columns if col.startswith('Tempo em: ')])
 measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols
 if project_config.get('calculate_time_in_status', False) and status_time_cols:
@@ -195,7 +215,6 @@ def add_new_filter():
 st.button("➕ Adicionar Filtro", on_click=add_new_filter, width='stretch')
 st.divider()
 
-
 # --- BLOCO 5: INTERFACE DE CRIAÇÃO DE GRÁFICOS E PRÉ-VISUALIZAÇÃO (COMPLETO E CORRIGIDO) ---
 st.subheader("Configuração da Visualização")
 creation_mode = st.radio("Como deseja criar a sua visualização?", ["Construtor Visual", "Gerar com IA ✨"], horizontal=True, key="creation_mode_selector")
@@ -204,7 +223,6 @@ df_for_preview = df.copy()
 new_measure_col = None
 
 if creation_mode == "Construtor Visual":
-    # Lê os valores do estado da sessão para definir os padrões
     config = st.session_state.new_chart_config
     
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
@@ -229,9 +247,20 @@ if creation_mode == "Construtor Visual":
             config['type'] = c3.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
             
             if config['x'] in date_cols:
-                agg_options = ['Dia', 'Semana', 'Mês', 'Trimestre', 'Ano']
-                default_agg_index = agg_options.index(config.get('date_aggregation')) if config.get('date_aggregation') in agg_options else 2
-                config['date_aggregation'] = st.selectbox("Agrupar data do Eixo X por:", agg_options, index=default_agg_index)
+                agg_c1, agg_c2 = st.columns(2)
+                agg_options = ['Nenhum'] + ['Dia', 'Semana', 'Mês', 'Trimestre', 'Ano']
+                default_agg_index = agg_options.index(config.get('date_aggregation')) if config.get('date_aggregation') in agg_options else 0
+                config['date_aggregation'] = agg_c1.selectbox("Agrupar data do Eixo X por:", agg_options, index=default_agg_index)
+
+                if config['date_aggregation'] != 'Nenhum':
+                    y_agg_options = ['Média', 'Soma']
+                    default_y_agg_index = y_agg_options.index(config.get('y_axis_aggregation')) if config.get('y_axis_aggregation') in y_agg_options else 0
+                    config['y_axis_aggregation'] = agg_c2.selectbox("Calcular Eixo Y por:", y_agg_options, index=default_y_agg_index)
+                else:
+                    config['y_axis_aggregation'] = None
+            else:
+                config['date_aggregation'] = None
+                config['y_axis_aggregation'] = None
             st.divider()
             
             adv_c1, adv_c2 = st.columns(2)
@@ -266,7 +295,6 @@ if creation_mode == "Construtor Visual":
             y_field_details = next((item for item in master_field_list if item['name'] == config.get('y')), None)
             config['y_axis_format'] = 'hours' if y_field_details and y_field_details.get('type') == 'Horas' else None
             
-            # Atualiza o chart_config final com os valores do estado
             chart_config = config.copy()
             if chart_config.get('size_by') == "Nenhum": chart_config['size_by'] = None
 
@@ -372,6 +400,10 @@ if creation_mode == "Construtor Visual":
             config['type'] = 'indicator' # Definido para referência interna
             
             title = st.text_input("Título do Indicador", config.get('title', ''))
+
+            theme_options = list(COLOR_THEMES.keys())
+            default_theme_name = config.get('color_theme', theme_options[0])
+            color_theme = st.selectbox("Esquema de Cores", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="kpi_color_theme")
             
             source_type = st.radio("Fonte de Dados para o KPI", ["Dados do Dashboard", "Consulta JQL"], horizontal=True, key='kpi_source_type', index=0 if config.get('source_type', 'visual') == 'visual' else 1)
             source_type_value = 'jql' if source_type == "Consulta JQL" else 'visual'
@@ -431,14 +463,12 @@ if creation_mode == "Construtor Visual":
                     else:
                         den_field = col4.selectbox("Campo do Denominador", numeric_cols, key="den_field_numeric", index=numeric_cols.index(config.get('den_field')) if config.get('den_field') in numeric_cols else 0)
             
-            # --- FIM da lógica de construção da UI ---
 
             # Lógica de validação e criação do chart_config
             if source_type_value == "jql" and not (jql_a and jql_a.strip()):
                 chart_config = {}
                 st.warning("Por favor, preencha a 'Consulta JQL 1 (Valor A)' para gerar a pré-visualização.")
             else:
-                # --- INÍCIO DA CORREÇÃO ---
                 # Cria um dicionário de configuração limpo, contendo apenas as chaves relevantes para o KPI
                 kpi_config = {
                     'creator_type': 'Indicador (KPI)',
@@ -480,6 +510,10 @@ if creation_mode == "Construtor Visual":
             st.markdown("###### **Configuração da Tabela Dinâmica**")
 
             title = st.text_input("Título da Tabela", config.get('title', 'Tabela Dinâmica'))
+
+            theme_options = list(COLOR_THEMES.keys())
+            default_theme_name = config.get('color_theme', theme_options[0])
+            color_theme = st.selectbox("Esquema de Cores do Cabeçalho", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="pivot_color_theme")
             
             all_row_col_options = [str(col) for col in (categorical_cols + date_cols)]
             rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=config.get('rows', []))
