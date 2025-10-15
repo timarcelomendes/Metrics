@@ -7,12 +7,13 @@ from io import StringIO
 import base64
 from datetime import datetime
 from security import find_user, get_project_config, save_project_config
-from jira_connector import get_projects, get_issue_as_dict 
+from jira_connector import get_projects, get_issue_as_dict
 from utils import create_os_pdf, get_ai_os_from_jira_issue
 from pathlib import Path
 import uuid
 import json
 import copy
+from streamlit_jodit import st_jodit
 
 st.set_page_config(page_title="Valoração Comercial", page_icon="💰", layout="wide")
 
@@ -22,58 +23,67 @@ def render_os_field(field, custom_field_data, index):
     field_name = field.get('field_name')
     field_type = field.get('field_type')
     if not field_name or not field_type: return
-    
-    if field_type == "Valor Calculado": return
-    
-    widget_key = f"{field_name}_{index}"
-    ai_value = st.session_state.ai_prefilled_data.get(field_name, '')
 
-    if field_type == "Texto Curto":
-        custom_field_data[field_name] = st.text_input(field_name, value=ai_value, key=widget_key)
+    widget_key = f"{field_name}_{index}"
+    ai_value = st.session_state.ai_prefilled_data.get(field_name, {})
+    
+    field_data = {}
+    
+    if field_type == "Valor Calculado":
+        value_to_display = ai_value.get('value', '') if isinstance(ai_value, dict) else ai_value
+        field_data['value'] = st.text_input(field_name, value=value_to_display, key=widget_key, disabled=True, help="Este valor é calculado automaticamente.")
+    elif field_type == "Texto Curto":
+        value_to_display = ai_value.get('value', '') if isinstance(ai_value, dict) else ai_value
+        field_data['value'] = st.text_input(field_name, value=value_to_display, key=widget_key)
     elif field_type == "Texto Longo":
-        text_area = st.text_area(f"{field_name} (suporta Markdown)", value=ai_value, key=f"text_{widget_key}")
-        images_uploader = None
-        if field.get('allow_images', False):
-            images_uploader = st.file_uploader(f"Adicionar imagens para '{field_name}'", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=f"img_uploader_{widget_key}")
-        custom_field_data[field_name] = {"text": text_area, "images": images_uploader}
+        value_to_display = ai_value.get('value', '') if isinstance(ai_value, dict) else ai_value
+        st.write(f"**{field_name}**")
+        field_data['value'] = st_jodit(
+            value=value_to_display,
+            key=f"jodit_{widget_key}",
+            config={
+                'minHeight': 300,
+                'buttons': [
+                    'source', '|',
+                    'bold', 'italic', 'underline', 'strikethrough', '|',
+                    'ul', 'ol', '|',
+                    'font', 'fontsize', 'brush', 'paragraph', '|',
+                    'image', 'table', 'link', '|',
+                    'align', 'undo', 'redo', '|',
+                    'hr', 'eraser', 'fullsize'
+                ]
+            }
+        )
     elif field_type == "Data":
+        value_to_display = ai_value.get('value', None) if isinstance(ai_value, dict) else ai_value
         date_val = None
-        if isinstance(ai_value, str) and ai_value:
-            try: date_val = datetime.fromisoformat(ai_value.replace("Z", "")).date()
-            except: date_val = None # Mantém None se a conversão falhar
-        elif isinstance(ai_value, datetime):
-            date_val = ai_value.date()
-        custom_field_data[field_name] = st.date_input(field_name, value=date_val, key=widget_key)
+        if isinstance(value_to_display, str) and value_to_display:
+            try: date_val = datetime.fromisoformat(value_to_display.replace("Z", "")).date()
+            except: date_val = None
+        elif isinstance(value_to_display, datetime):
+            date_val = value_to_display.date()
+        field_data['value'] = st.date_input(field_name, value=date_val, key=widget_key)
     elif field_type == "Toggle (Sim/Não)":
-        custom_field_data[field_name] = st.toggle(field_name, value=bool(ai_value), key=widget_key)
+        value_to_display = ai_value.get('value', False) if isinstance(ai_value, dict) else ai_value
+        field_data['value'] = st.toggle(field_name, value=bool(value_to_display), key=widget_key)
     elif field_type == "Seleção Única":
         options = [opt.strip() for opt in field.get('options', '').split(',')]
-        custom_field_data[field_name] = st.radio(field_name, options=options, index=options.index(ai_value) if ai_value in options else 0, key=widget_key)
+        value_to_display = ai_value.get('value', '') if isinstance(ai_value, dict) else ai_value
+        field_data['value'] = st.radio(field_name, options=options, index=options.index(value_to_display) if value_to_display in options else 0, key=widget_key)
     elif field_type == "Seleção Múltipla":
         options = [opt.strip() for opt in field.get('options', '').split(',')]
-        default_values = [v for v in ai_value if v in options] if isinstance(ai_value, list) else []
-        custom_field_data[field_name] = st.multiselect(field_name, options=options, default=default_values, key=widget_key)
+        value_to_display = ai_value.get('value', []) if isinstance(ai_value, dict) else ai_value
+        default_values = [v for v in value_to_display if v in options] if isinstance(value_to_display, list) else []
+        field_data['value'] = st.multiselect(field_name, options=options, default=default_values, key=widget_key)
     elif field_type == "Tabela":
         cols = [col.strip() for col in field.get('options', 'Coluna 1').split(',')]
-        df_val = pd.DataFrame(ai_value) if isinstance(ai_value, list) and ai_value else pd.DataFrame([{}], columns=cols)
-        custom_field_data[field_name] = st.data_editor(df_val, num_rows="dynamic", use_container_width=True, key=widget_key)
-    elif field_type == "Número":
-        num_type = field.get('number_type', 'Inteiro')
-        num_val = None
-        try:
-            if ai_value and str(ai_value).strip(): num_val = float(ai_value)
-        except (ValueError, TypeError): num_val = None
-
-        if num_type == 'Inteiro':
-            default_int = int(num_val) if num_val is not None else 0
-            custom_field_data[field_name] = st.number_input(field_name, value=default_int, step=1, format="%d", key=widget_key)
-        else: # Decimal
-            precision = field.get('precision', 2)
-            step = 1 / (10 ** precision)
-            default_float = num_val if num_val is not None else 0.0
-            custom_field_data[field_name] = st.number_input(field_name, value=default_float, step=step, format=f"%.{precision}f", key=widget_key)
+        table_data = ai_value.get('value', [{}]) if isinstance(ai_value, dict) else ai_value
+        df_val = pd.DataFrame(table_data) if isinstance(table_data, list) and table_data else pd.DataFrame([{}], columns=cols)
+        field_data['value'] = st.data_editor(df_val, num_rows="dynamic", use_container_width=True, key=widget_key)
     elif field_type == "Imagem":
-        custom_field_data[field_name] = st.file_uploader(f"{field_name} (máx. 5)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=widget_key)
+        field_data['value'] = st.file_uploader(f"Imagens para '{field_name}'", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key=widget_key)
+        
+    custom_field_data[field_name] = field_data
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 st.header("💰 Valoração Comercial e Geração de OS", divider='rainbow')
@@ -87,8 +97,8 @@ with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try: st.logo(str(logo_path), size="large")
-    except: st.write("Gauge Metrics") 
-    
+    except: st.write("Gauge Metrics")
+
     if st.session_state.get("email"): st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
     else: st.info("⚠️ Usuário não conectado!")
 
@@ -96,19 +106,18 @@ with st.sidebar:
     projects = st.session_state.get('projects', {})
     project_names = list(projects.keys())
     last_project_key = find_user(st.session_state['email']).get('last_project_key')
-    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and projects else 0
-    
+    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and projects and last_project_key in projects.values() else 0
+
     selected_project_name = st.selectbox("Selecione um Projeto para gerir o catálogo:", options=project_names, index=default_index)
-    
+
     if st.button("Logout", width='stretch', type='secondary'):
-        keys_to_keep = ['remember_email']
         email_to_remember = st.session_state.get('remember_email', '')
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         if email_to_remember:
             st.session_state['remember_email'] = email_to_remember
         st.switch_page("1_🔑_Autenticação.py")
-        
+
 if not selected_project_name:
     st.info("⬅️ Na barra lateral, selecione um projeto para começar.")
     st.stop()
@@ -121,9 +130,21 @@ os_layouts = project_config.get('os_layouts', {})
 if 'editing_field_key' not in st.session_state: st.session_state.editing_field_key = None
 if 'ai_prefilled_data' not in st.session_state: st.session_state.ai_prefilled_data = {}
 
-tab_config, tab_os = st.tabs(["**⚙️ Configurações**", "**📄 Gerar OS**"])
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "⚙️ Configurações"
 
-with tab_config:
+def set_active_tab(tab_name):
+    st.session_state.active_tab = tab_name
+
+tab_options = ["⚙️ Configurações", "📄 Gerar OS"]
+cols = st.columns(len(tab_options))
+for i, tab_name in enumerate(tab_options):
+    button_type = "primary" if st.session_state.active_tab == tab_name else "secondary"
+    cols[i].button(tab_name, key=f"tab_{i}", on_click=set_active_tab, args=(tab_name,), use_container_width=True, type=button_type)
+
+st.markdown("---") 
+
+if st.session_state.active_tab == "⚙️ Configurações":
     st.subheader(f"Configurações para o Projeto: {selected_project_name}")
     sub_tab_catalogo, sub_tab_layouts = st.tabs(["**Catálogo de Serviços**", "**Construtor de Layouts de OS**"])
 
@@ -132,7 +153,7 @@ with tab_config:
             st.markdown("#### Catálogo de Serviços e Moeda")
             with st.expander("⬇️ Importar Catálogo de Serviços (CSV)"):
                 import_source = st.radio("Selecione a fonte de importação:", ["Carregar Ficheiro CSV", "Via Link do SharePoint", "Via Link do Google Planilhas"], horizontal=True)
-                
+
                 if import_source == "Carregar Ficheiro CSV":
                     uploaded_file = st.file_uploader("Selecione o seu ficheiro CSV local:", type="csv")
                     if st.button("Processar Ficheiro"):
@@ -219,7 +240,7 @@ with tab_config:
                     }
                     save_project_config(project_key, project_config)
                     if 'imported_catalog_items' in st.session_state:
-                        del st.session_state['imported_catalog_items']
+                        del st.session_state.imported_catalog_items
                     st.success("Configurações de valoração salvas com sucesso!")
                     st.rerun()
 
@@ -227,7 +248,7 @@ with tab_config:
         with st.container(border=True):
             st.markdown("#### Construtor de Layouts de Ordem de Serviço")
             st.info("Crie modelos para as suas Ordens de Serviço.")
-            
+
             with st.expander("➕ Criar Novo Layout de OS"):
                 with st.form("new_layout_form", clear_on_submit=True):
                     new_layout_name = st.text_input("Nome do Novo Layout*")
@@ -240,7 +261,7 @@ with tab_config:
                             st.rerun()
 
             st.divider()
-            
+
             if not os_layouts:
                 st.warning("Nenhum layout de OS foi criado ainda.")
             else:
@@ -255,10 +276,10 @@ with tab_config:
                             save_project_config(project_key, project_config)
                             st.success(f"Layout '{selected_layout_to_edit}' excluído com sucesso!")
                             st.rerun()
-                
+
                 if selected_layout_to_edit and selected_layout_to_edit in os_layouts:
                     st.markdown(f"**Editando os campos do layout:** `{selected_layout_to_edit}`")
-                    
+
                     current_layout_fields = os_layouts.get(selected_layout_to_edit, [])
                     field_types_options = ["Texto Curto", "Texto Longo", "Data", "Toggle (Sim/Não)", "Seleção Única", "Seleção Múltipla", "Tabela", "Número", "Imagem", "Valor Calculado"]
                     for i, field in enumerate(current_layout_fields):
@@ -267,38 +288,38 @@ with tab_config:
                             if st.session_state.editing_field_key == field_key:
                                 with st.form(f"edit_field_form_{field_key}"):
                                     st.markdown("**Editando Campo**")
-                                    c1, c2 = st.columns([3, 1])
-                                    edited_name = c1.text_input("Nome do Campo*", value=field['field_name'])
-                                    edited_two_cols = c2.toggle("Duas Colunas", value=field.get('two_columns', False), key=f"edit_twocols_{field_key}")
+                                    edited_name = st.text_input("Nome do Campo*", value=field['field_name'])
                                     edited_type = st.selectbox("Tipo de Campo*", options=field_types_options, index=field_types_options.index(field['field_type']))
                                     
                                     edited_num_type = field.get('number_type', 'Inteiro')
                                     edited_precision = field.get('precision', 2)
+                                    edited_options = field.get('options', '')
+                                    edited_two_cols = field.get('two_columns', False)
+
                                     if edited_type == "Número":
                                         edited_num_type = st.radio("Formato do Número", ["Inteiro", "Decimal"], key=f"edit_num_type_{field_key}", horizontal=True, index=["Inteiro", "Decimal"].index(edited_num_type))
                                         if edited_num_type == "Decimal":
                                             edited_precision = st.number_input("Casas Decimais", min_value=1, max_value=4, value=edited_precision, step=1, key=f"edit_precision_{field_key}")
                                     
-                                    allow_images = field.get('allow_images', False)
-                                    if edited_type == "Texto Longo":
-                                        allow_images = st.checkbox("Permitir upload de imagens", value=allow_images)
-                                    
-                                    edited_options = ""
-                                    if edited_type in ["Seleção Única", "Seleção Múltipla", "Tabela"]:
-                                        edited_options = st.text_area("Opções (separadas por vírgula)", value=field.get('options', ''))
+                                    if edited_type in ["Seleção Única", "Seleção Múltipla"]:
+                                        edited_options = st.text_area("Opções (separadas por vírgula)", value=edited_options, key=f"edit_options_{field_key}")
+                                    elif edited_type == "Tabela":
+                                        edited_options = st.text_area("Nomes das Colunas (separados por vírgula)", value=edited_options, key=f"edit_table_cols_{field_key}")
+
+                                    st.markdown("---")
+                                    edited_two_cols = st.toggle("Duas Colunas", value=edited_two_cols, key=f"edit_twocols_{field_key}")
+                                    st.markdown("---")
                                     
                                     c1, c2 = st.columns(2)
                                     if c1.form_submit_button("Salvar Alterações", width='stretch', type="primary"):
                                         if edited_name:
-                                            updated_field = copy.deepcopy(field)
-                                            updated_field.update({
+                                            current_layout_fields[i].update({
                                                 "field_name": edited_name, "field_type": edited_type,
                                                 "options": edited_options, "two_columns": edited_two_cols,
-                                                "allow_images": allow_images, "number_type": edited_num_type,
+                                                "number_type": edited_num_type,
                                                 "precision": edited_precision
                                             })
-                                            os_layouts[selected_layout_to_edit][i] = updated_field
-                                            project_config['os_layouts'] = os_layouts
+                                            project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
                                             save_project_config(project_key, project_config)
                                             st.session_state.editing_field_key = None
                                             st.success("Campo atualizado com sucesso!")
@@ -307,143 +328,168 @@ with tab_config:
                                         st.session_state.editing_field_key = None
                                         st.rerun()
                             else:
-                                col1, col_up, col_down, col_edit, col_remove = st.columns([4, 1, 1, 1, 1])
+                                col1, col_first, col_up, col_down, col_last, col_edit, col_remove = st.columns([4, 1, 1, 1, 1, 1, 1])
                                 field_display = f"Campo: {field['field_name']} (Tipo: {field['field_type']})"
-                                if field.get('two_columns'): field_display += " (Duas Colunas)"
+                                if field.get('two_columns'): field_display += " | Layout: Duas Colunas"
                                 col1.text(field_display)
-                                if i > 0:
-                                    if col_up.button("⬆️", key=f"up_btn_{field_key}", width='stretch', help="Mover para cima"):
-                                        current_layout_fields[i], current_layout_fields[i-1] = current_layout_fields[i-1], current_layout_fields[i]
-                                        project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
-                                        save_project_config(project_key, project_config)
-                                        st.rerun()
-                                if i < len(current_layout_fields) - 1:
-                                    if col_down.button("⬇️", key=f"down_btn_{field_key}", width='stretch', help="Mover para baixo"):
-                                        current_layout_fields[i], current_layout_fields[i+1] = current_layout_fields[i+1], current_layout_fields[i]
-                                        project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
-                                        save_project_config(project_key, project_config)
-                                        st.rerun()
+
+                                if col_first.button("⏫", key=f"first_btn_{field_key}", width='stretch', help="Mover para o início", disabled=(i == 0)):
+                                    current_layout_fields.insert(0, current_layout_fields.pop(i)); save_project_config(project_key, project_config); st.rerun()
+                                if col_up.button("🔼", key=f"up_btn_{field_key}", width='stretch', help="Mover para cima", disabled=(i == 0)):
+                                    current_layout_fields[i], current_layout_fields[i-1] = current_layout_fields[i-1], current_layout_fields[i]; save_project_config(project_key, project_config); st.rerun()
+                                if col_down.button("🔽", key=f"down_btn_{field_key}", width='stretch', help="Mover para baixo", disabled=(i == len(current_layout_fields) - 1)):
+                                    current_layout_fields[i], current_layout_fields[i+1] = current_layout_fields[i+1], current_layout_fields[i]; save_project_config(project_key, project_config); st.rerun()
+                                if col_last.button("⏬", key=f"last_btn_{field_key}", width='stretch', help="Mover para o fim", disabled=(i == len(current_layout_fields) - 1)):
+                                    current_layout_fields.append(current_layout_fields.pop(i)); save_project_config(project_key, project_config); st.rerun()
                                 if col_edit.button("✏️", key=f"edit_btn_{field_key}", width='stretch'):
-                                    st.session_state.editing_field_key = field_key
-                                    st.rerun()
+                                    st.session_state.editing_field_key = field_key; st.rerun()
                                 if col_remove.button("❌", key=f"del_btn_{field_key}", width='stretch'):
-                                    current_layout_fields.pop(i)
-                                    project_config['os_layouts'][selected_layout_to_edit] = current_layout_fields
-                                    save_project_config(project_key, project_config)
-                                    st.rerun()
+                                    current_layout_fields.pop(i); save_project_config(project_key, project_config); st.rerun()
 
                     with st.form(f"add_field_form_{selected_layout_to_edit}"):
                         st.markdown("**Adicionar Novo Campo**")
-                        c1, c2 = st.columns([3, 1])
-                        field_name = c1.text_input("Nome do Campo*")
-                        two_cols_new = c2.toggle("Duas Colunas", key=f"add_twocols_{selected_layout_to_edit}")
-                        field_type = st.selectbox("Tipo de Campo*", options=field_types_options)
+                        field_name = st.text_input("Nome do Campo*")
+                        field_type = st.selectbox("Tipo de Campo*", options=field_types_options, key="add_field_type")
                         
-                        number_type = "Inteiro"
-                        precision = 2
-                        if field_type == "Número":
+                        options_str = ""
+                        if st.session_state.add_field_type in ["Seleção Única", "Seleção Múltipla"]:
+                            options_str = st.text_area("Opções (separadas por vírgula)", key="add_options")
+                        elif st.session_state.add_field_type == "Tabela":
+                            options_str = st.text_area("Nomes das Colunas (separados por vírgula)", key="add_table_cols")
+
+                        number_type = "Inteiro"; precision = 2
+                        if st.session_state.add_field_type == "Número":
                             number_type = st.radio("Formato do Número", ["Inteiro", "Decimal"], key="add_num_type", horizontal=True)
                             if number_type == "Decimal":
                                 precision = st.number_input("Casas Decimais", min_value=1, max_value=4, value=2, step=1, key="add_precision")
                         
-                        allow_images_new = False
-                        if field_type == "Texto Longo":
-                            allow_images_new = st.checkbox("Permitir upload de imagens")
-                        
-                        options_str = ""
-                        if field_type in ["Seleção Única", "Seleção Múltipla", "Tabela"]:
-                            options_str = st.text_area("Opções (separadas por vírgula)")
-                        
+                        st.markdown("---")
+                        two_cols_new = st.toggle("Duas Colunas", key=f"add_twocols_{selected_layout_to_edit}")
+
                         if st.form_submit_button("Adicionar Campo ao Layout"):
                             if field_name:
                                 new_field = {
-                                    "field_name": field_name, "field_type": field_type,
+                                    "field_name": field_name, "field_type": st.session_state.add_field_type,
                                     "options": options_str, "two_columns": two_cols_new,
-                                    "allow_images": allow_images_new, "number_type": number_type,
-                                    "precision": precision
+                                    "number_type": number_type, "precision": precision
                                 }
-                                os_layouts[selected_layout_to_edit].append(new_field)
-                                project_config['os_layouts'] = os_layouts
-                                save_project_config(project_key, project_config)
+                                current_config = get_project_config(project_key) or {}
+                                current_layouts = current_config.get('os_layouts', {})
+                                current_layouts.setdefault(selected_layout_to_edit, []).append(new_field)
+                                current_config['os_layouts'] = current_layouts
+                                save_project_config(project_key, current_config)
                                 st.success(f"Campo '{field_name}' adicionado ao layout!")
                                 st.rerun()
 
-with tab_os:
-    st.subheader("Gerador de Ordem de Serviço")
+elif st.session_state.active_tab == "📄 Gerar OS":
+    project_config = get_project_config(project_key) or {}
+    os_layouts = project_config.get('os_layouts', {})
+    valuation_config = project_config.get('commercial_valuation', {})
     
+    st.subheader("Gerador de Ordem de Serviço")
+
     if not os_layouts:
         st.warning("Nenhum layout de OS foi criado. Por favor, crie um na aba de 'Configurações' primeiro.")
     else:
-        selected_layout_name = st.selectbox("Selecione o Layout da OS:", options=list(os_layouts.keys()), on_change=lambda: st.session_state.update(ai_prefilled_data={}))
-        
+        os_templates = project_config.get('os_templates', {})
+        template_names = [""] + list(os_templates.keys())
+
+        col1, col2 = st.columns([3, 1], vertical_alignment="bottom") 
+
+        selected_template = col1.selectbox(
+            "Carregar um modelo de OS preenchido:", 
+            options=template_names, 
+            format_func=lambda x: "Nenhum (começar do zero)" if x == "" else x, 
+            key="template_selector"
+        )
+
+        def load_template():
+            template_data = os_templates.get(st.session_state.template_selector)
+            if template_data:
+                st.session_state.ai_prefilled_data = {}
+                st.session_state.os_items = []
+                st.session_state.selected_layout_name = template_data.get('layout_name')
+                st.session_state.ai_prefilled_data = template_data.get('custom_fields', {})
+                st.session_state.os_items = template_data.get('items', [])
+                
+                loaded_signatories = template_data.get('assinantes', [])
+                st.session_state.os_signatories = loaded_signatories if loaded_signatories else [{"Nome": "", "Papel": ""}]
+                
+                for i, sig in enumerate(st.session_state.os_signatories):
+                    st.session_state[f"assinante_nome_{i}"] = sig.get("Nome", "")
+                    st.session_state[f"assinante_papel_{i}"] = sig.get("Papel", "")
+                
+                st.success(f"Modelo '{st.session_state.template_selector}' carregado com sucesso!")
+
+        col2.button(
+            "Carregar Modelo", 
+            on_click=load_template, 
+            disabled=not selected_template, 
+            use_container_width=True # use_container_width é o novo nome para 'width=stretch'
+        )
+
+        st.divider()
+
+        selected_layout_name = st.selectbox("Selecione o Layout da OS:", options=list(os_layouts.keys()), key='selected_layout_name', on_change=lambda: st.session_state.update(ai_prefilled_data={}, os_items=[], os_signatories=[{"Nome": "", "Papel": ""}]))
+
         if selected_layout_name:
             layout_to_render = os_layouts.get(selected_layout_name, [])
-            
+
             with st.expander("🤖 Preencher com IA a partir do Jira"):
                 c1, c2 = st.columns([3, 1])
                 jira_issue_key = c1.text_input("Insira a chave da Issue do Jira (ex: PROJ-123)")
                 if c2.button("Buscar e Preencher", width='stretch'):
                     if jira_issue_key:
-                        with st.spinner(f"A buscar dados da issue {jira_issue_key} e a analisar com a IA..."):
+                        with st.spinner(f"A buscar dados da issue {jira_issue_key}..."):
                             try:
                                 issue_data_dict = get_issue_as_dict(st.session_state.jira_client, jira_issue_key)
                                 ai_result = get_ai_os_from_jira_issue(issue_data_dict, layout_to_render)
-                                
-                                if "error" in ai_result:
-                                    st.session_state.ai_feedback = {"type": "error", "message": f"Erro da IA: {ai_result['error']}"}
+                                if "error" in ai_result: st.session_state.ai_feedback = {"type": "error", "message": f"Erro da IA: {ai_result['error']}"}
                                 elif ai_result and any(ai_result.values()):
                                     st.session_state.ai_prefilled_data = ai_result
-                                    st.session_state.ai_feedback = {"type": "success", "message": "Dados extraídos com sucesso! O formulário abaixo foi preenchido."}
+                                    st.session_state.ai_feedback = {"type": "success", "message": "Dados extraídos com sucesso!"}
                                 else:
-                                    st.session_state.ai_prefilled_data = {} # Limpa dados antigos se a IA não retornar nada
-                                    st.session_state.ai_feedback = {"type": "warning", "message": "A IA analisou a issue, mas não conseguiu extrair dados para preencher o formulário. A issue pode não ter informações suficientes."}
-                                
+                                    st.session_state.ai_prefilled_data = {}
+                                    st.session_state.ai_feedback = {"type": "warning", "message": "A IA não conseguiu extrair dados."}
                                 st.rerun()
+                            except Exception as e: st.error(f"Não foi possível processar a issue {jira_issue_key}: {e}")
+                    else: st.warning("Por favor, insira uma chave de issue.")
 
-                            except Exception as e: 
-                                st.error(f"Não foi possível encontrar ou processar a issue {jira_issue_key}: {e}")
-                    else: 
-                        st.warning("Por favor, insira uma chave de issue.")
-
-            # Bloco de feedback (agora separado do formulário)
             if 'ai_feedback' in st.session_state:
                 feedback = st.session_state.ai_feedback
-                if feedback["type"] == "success":
-                    st.success(feedback["message"])
-                elif feedback["type"] == "warning":
-                    st.warning(feedback["message"])
-                elif feedback["type"] == "error":
-                    st.error(feedback["message"])
+                if feedback["type"] == "success": st.success(feedback["message"])
+                elif feedback["type"] == "warning": st.warning(feedback["message"])
+                elif feedback["type"] == "error": st.error(feedback["message"])
                 del st.session_state.ai_feedback
 
-            # --- NOVO BLOCO DE DEPURAÇÃO ---
-            # Este bloco irá mostrar os dados que a IA retornou, ajudando a identificar discrepâncias.
             if st.session_state.ai_prefilled_data:
-                with st.expander("🔍 Dados Recebidos da IA (Depuração)"):
-                    st.json(st.session_state.ai_prefilled_data)
+                with st.expander("🔍 Dados Recebidos da IA (Depuração)"): st.json(st.session_state.ai_prefilled_data)
+            
+            if 'os_signatories' not in st.session_state:
+                st.session_state.os_signatories = [{"Nome": "", "Papel": ""}]
+                
+            def add_signatory():
+                st.session_state.os_signatories.append({"Nome": "", "Papel": ""})
 
-            # Formulário principal (agora sempre visível)
+            def remove_signatory(i):
+                if len(st.session_state.os_signatories) > 1:
+                    st.session_state.os_signatories.pop(i)
+            
             with st.form("os_form"):
                 st.markdown(f"**Preencha os dados para a OS:** `{selected_layout_name}`")
-                
                 custom_field_data = {}
-                
                 i = 0
                 while i < len(layout_to_render):
                     field = layout_to_render[i]
                     is_two_col = field.get('two_columns', False)
                     next_field_is_two_col = (i + 1 < len(layout_to_render)) and layout_to_render[i+1].get('two_columns', False)
-
                     if is_two_col and next_field_is_two_col:
                         cols = st.columns(2)
-                        with cols[0]:
-                            render_os_field(field, custom_field_data, i)
+                        with cols[0]: render_os_field(field, custom_field_data, i)
                         i += 1
                         field2 = layout_to_render[i]
-                        with cols[1]:
-                            render_os_field(field2, custom_field_data, i)
-                    else:
-                        render_os_field(field, custom_field_data, i)
+                        with cols[1]: render_os_field(field2, custom_field_data, i)
+                    else: render_os_field(field, custom_field_data, i)
                     i += 1
 
                 st.divider()
@@ -451,97 +497,187 @@ with tab_os:
                 catalog = valuation_config.get('service_catalog', [])
                 currency_name = valuation_config.get('currency_name', 'UPs')
                 item_options = {f"{item['Item']} ({item['Valor']} {currency_name})": item for item in catalog}
-                selected_items_desc = st.multiselect("Selecione os itens do catálogo para a OS:", options=item_options.keys(), key="catalog_items_multiselect")
+                default_items = []
+                if st.session_state.get('os_items'):
+                    for item in st.session_state.os_items:
+                        desc = f"{item.get('Item')} ({item.get('Valor')} {currency_name})"
+                        if desc in item_options: default_items.append(desc)
+                selected_items_desc = st.multiselect("Selecione os itens do catálogo para a OS:", options=item_options.keys(), default=default_items, key="catalog_items_multiselect")
                 
                 st.divider()
-                st.markdown("**Assinaturas**")
-                assinantes_df = st.data_editor(pd.DataFrame([{"Nome": "", "Cargo": ""}]), num_rows="dynamic", use_container_width=True, key="assinantes_editor", column_config={"Nome": st.column_config.TextColumn("Nome*", required=True), "Cargo": st.column_config.TextColumn("Cargo*", required=True)})
-                
+                st.markdown("**Assinantes**")
+                for i, signatory in enumerate(st.session_state.os_signatories):
+                    # Inicializa o estado do widget SE ele não existir
+                    if f"assinante_nome_{i}" not in st.session_state:
+                        st.session_state[f"assinante_nome_{i}"] = signatory.get("Nome", "")
+                    if f"assinante_papel_{i}" not in st.session_state:
+                        st.session_state[f"assinante_papel_{i}"] = signatory.get("Papel", "")
+
+                    st.markdown("---")
+                    c1, c2 = st.columns(2)
+                    # Agora o widget lê o seu valor diretamente da session_state através da key
+                    c1.text_input(f"Nome do Assinante {i+1}*", key=f"assinante_nome_{i}")
+                    c2.text_input(f"Papel do Assinante {i+1}*", key=f"assinante_papel_{i}")
+
                 preview_button = st.form_submit_button("Pré-visualizar OS", width='stretch')
+                
+            col1, col2, _ = st.columns([1.5, 1, 4])
+            col1.button("Adicionar Assinante", on_click=add_signatory, use_container_width=True)
+            if len(st.session_state.os_signatories) > 1:
+                col2.button("Remover Último", on_click=lambda: st.session_state.os_signatories.pop(), use_container_width=True)
 
             if preview_button:
                 st.session_state.ai_prefilled_data = {}
+                processed_custom_data = {}
                 selected_items_data = [item_options[desc] for desc in selected_items_desc]
-                assinantes_validos = pd.DataFrame(assinantes_df).dropna(how='all').to_dict('records')
                 
                 total_catalog_value = sum(float(item.get('Valor', 0)) for item in selected_items_data)
-                conversion_rate = valuation_config.get('conversion_rate', 1.0)
-                final_brl_value = total_catalog_value * conversion_rate
-                
-                for field in layout_to_render:
-                    if field.get('field_type') == 'Valor Calculado':
-                        custom_field_data[field['field_name']] = f"R$ {final_brl_value:,.2f}"
-                
-                for field in layout_to_render:
-                    field_name = field.get('field_name'); field_type = field.get('field_type')
-                    if field_type == "Texto Longo":
-                        text_longo_data = custom_field_data.get(field_name, {"text": "", "images": None})
-                        if text_longo_data.get("images"): text_longo_data["images"] = [file.getvalue() for file in text_longo_data["images"]]
-                        else: text_longo_data["images"] = []
-                        custom_field_data[field_name] = text_longo_data
-                    elif field_type == "Imagem" and custom_field_data.get(field_name) is not None:
-                        uploaded_files = custom_field_data[field_name]
-                        if len(uploaded_files) > 5:
-                            st.warning(f"Apenas as primeiras 5 imagens do campo '{field_name}' serão processadas."); uploaded_files = uploaded_files[:5]
-                        custom_field_data[field_name] = [file.getvalue() for file in uploaded_files]
-                    elif field_type == "Tabela":
-                        custom_field_data[field_name] = pd.DataFrame(custom_field_data.get(field_name)).to_dict('records')
+                final_brl_value = total_catalog_value * valuation_config.get('conversion_rate', 1.0)
 
+                for field in layout_to_render:
+                    field_name, field_type = field['field_name'], field['field_type']
+                    data = custom_field_data.get(field_name, {})
+                    
+                    if field_type == 'Valor Calculado':
+                        processed_custom_data[field_name] = {'value': f"R$ {final_brl_value:,.2f}"}
+                        continue
+
+                    processed_entry = {}
+                    value = data.get('value')
+                    if field_type == "Tabela":
+                        processed_entry['value'] = pd.DataFrame(value).dropna(how='all').to_dict('records')
+                    elif field_type == "Imagem" and value:
+                        if len(value) > 5:
+                            st.warning(f"Apenas 5 imagens por campo são permitidas."); value = value[:5]
+                        processed_entry['value'] = [file.getvalue() for file in value]
+                    else: processed_entry['value'] = value
+                    
+                    processed_custom_data[field_name] = processed_entry
+    
+                assinantes_list = []
+                for i in range(len(st.session_state.os_signatories)):
+                    nome = st.session_state.get(f"assinante_nome_{i}", "")
+                    papel = st.session_state.get(f"assinante_papel_{i}", "")
+                    if nome and papel:
+                        assinantes_list.append({"Nome": nome, "Papel": papel})
+                
                 st.session_state.os_preview_data = {
-                    'layout_name': selected_layout_name, 'custom_fields': custom_field_data,
+                    'layout_name': selected_layout_name, 'custom_fields': processed_custom_data,
                     'custom_fields_layout': layout_to_render, 'items': selected_items_data,
-                    'assinantes': assinantes_validos
+                    'assinantes': assinantes_list
                 }
                 st.rerun()
 
-    if 'os_preview_data' in st.session_state:
-        st.divider()
-        st.subheader("🔍 Pré-visualização da OS")
-        
-        preview_data = st.session_state.os_preview_data
-        
-        with st.container(border=True):
-            st.markdown(f"**Layout:** {preview_data['layout_name']}")
-            st.divider()
-            for field_data in preview_data['custom_fields_layout']:
-                field_name = field_data['field_name']; field_type = field_data['field_type']
-                value = preview_data['custom_fields'].get(field_name)
-                
-                if value is not None and value != '' and (not isinstance(value, list) or len(value) > 0):
-                    st.markdown(f"**{field_name}:**")
-                    if field_type == "Tabela": st.dataframe(pd.DataFrame(value))
-                    elif field_type == "Imagem" and isinstance(value, list):
-                        for img_bytes in value: st.image(img_bytes)
-                    elif field_type == "Texto Longo" and isinstance(value, dict):
-                        if value.get("text"): st.markdown(value["text"], help="Este campo suporta formatação Markdown.")
-                        if value.get("images"):
-                            for img_bytes in value["images"]: st.image(img_bytes)
-                    elif field_type == "Toggle (Sim/Não)": st.markdown("Sim" if value else "Não")
-                    else:
-                        if isinstance(value, list):
-                            display_value = ", ".join(map(str, value))
-                            st.markdown(display_value)
-                        else: st.markdown(str(value))
-            
-            if preview_data.get('items'):
-                st.markdown("**Itens do Catálogo:**"); st.dataframe(pd.DataFrame(preview_data['items'])[["Item", "Valor"]])
-            if preview_data.get('assinantes'):
-                st.markdown("**Assinantes:**"); st.dataframe(pd.DataFrame(preview_data['assinantes']))
-
-        if st.button("Confirmar e Gerar PDF", type="primary", width='stretch'):
-            with st.spinner("A gerar o PDF..."):
-                pdf_data = copy.deepcopy(preview_data)
-                pdf_bytes = create_os_pdf(pdf_data)
-                st.session_state.generated_os_pdf = pdf_bytes
-                st.session_state.generated_os_data = preview_data
-                st.success("Minuta da OS gerada com sucesso!")
-                st.rerun()
+if 'os_preview_data' in st.session_state:
+    st.divider()
+    st.subheader("🔍 Pré-visualização da OS")
     
-    if 'generated_os_pdf' in st.session_state:
-        os_data = st.session_state.generated_os_data
+    preview_data = st.session_state.os_preview_data
+
+    default_os_title = f"Ordem de Serviço: {preview_data.get('layout_name', 'N/A')}"
+        
+    # Passo 1: Inicializa o valor na session_state APENAS se ele não existir
+    if 'editable_os_title' not in st.session_state:
+        st.session_state.editable_os_title = default_os_title
+            
+    # Passo 2: Cria o widget usando a key. O Streamlit irá gerir o valor automaticamente.
+    # Não atribua o resultado do widget de volta para a session_state.
+    st.text_input(
+        "**Título da OS (para o PDF):**",
+        key="editable_os_title" 
+    )
+
+    with st.container(border=True):
+        st.markdown(f"**Layout:** {preview_data['layout_name']}")
+        st.divider()
+        
+        layout_for_preview = preview_data['custom_fields_layout']
+        fields_for_preview = preview_data['custom_fields']
+        
+        i = 0
+        while i < len(layout_for_preview):
+            field1_data = layout_for_preview[i]
+            is_two_col = field1_data.get('two_columns', False)
+            next_field_is_two_col = (i + 1 < len(layout_for_preview)) and layout_for_preview[i+1].get('two_columns', False)
+
+            def display_field(field_info):
+                field_name = field_info['field_name']
+                st.markdown(f"**{field_name}:**")
+                field_content = fields_for_preview.get(field_name, {})
+                value = field_content.get('value')
+                
+                if value is not None and (not isinstance(value, list) or len(value) > 0):
+                    if field_info.get('field_type') == "Tabela": st.dataframe(pd.DataFrame(value))
+                    elif field_info.get('field_type') == "Toggle (Sim/Não)": st.markdown("Sim" if value else "Não")
+                    elif isinstance(value, list): st.markdown(", ".join(map(str, value)))
+                    else: st.markdown(value, unsafe_allow_html=True)
+                else: st.caption("-")
+
+            if is_two_col and next_field_is_two_col:
+                field2_data = layout_for_preview[i+1]
+                col1, col2 = st.columns(2)
+                with col1: display_field(field1_data)
+                with col2: display_field(field2_data)
+                i += 2
+            else:
+                display_field(field1_data)
+                i += 1
+        
+        if preview_data.get('items'):
+            st.markdown("**Itens do Catálogo:**"); st.dataframe(pd.DataFrame(preview_data['items'])[["Item", "Valor"]])
+        if preview_data.get('assinantes'):
+            st.markdown("**Assinantes:**"); st.dataframe(pd.DataFrame(preview_data['assinantes']))
+
+    with st.form("save_template_form"):
+        st.subheader("💾 Salvar como Modelo (Opcional)")
+        template_name = st.text_input("Nome para o novo modelo")
+        if st.form_submit_button("Salvar OS como Modelo", use_container_width=True):
+            if template_name:
+                os_templates = project_config.get('os_templates', {})
+                os_templates[template_name] = {
+                    'layout_name': preview_data['layout_name'], 'custom_fields': preview_data['custom_fields'],
+                    'items': preview_data.get('items', []), 'assinantes': preview_data.get('assinantes', [])
+                }
+                project_config['os_templates'] = os_templates
+                save_project_config(project_key, project_config)
+                st.success(f"Modelo '{template_name}' salvo com sucesso!")
+            else: st.warning("Por favor, dê um nome ao modelo.")
+
+    st.divider()
+    if st.button("Confirmar e Gerar PDF", type="primary", use_container_width=True):
+        with st.spinner("A gerar o PDF..."):
+            pdf_data = copy.deepcopy(preview_data)
+
+            final_os_title = st.session_state.get('editable_os_title', default_os_title)
+            pdf_bytes = create_os_pdf(pdf_data, os_title=final_os_title)
+            
+            # Pega o título editado e passa para a função
+            final_os_title = st.session_state.get('editable_os_title', default_os_title)
+            pdf_bytes = create_os_pdf(pdf_data, os_title=final_os_title)
+            
+            st.session_state.generated_os_pdf = pdf_bytes
+            st.session_state.generated_os_data = preview_data
+            st.session_state.pdf_generation_success = True
+            del st.session_state.os_preview_data
+            del st.session_state.editable_os_title # Limpa o título da sessão
+            st.rerun()
+
+if st.session_state.get('pdf_generation_success'):
+    st.success("PDF gerado com sucesso! Clique no botão abaixo para descarregar.")
+    st.session_state.pdf_generation_success = False
+
+# Verifica se os dados e o PDF existem na sessão antes de tentar usá-los
+if 'generated_os_pdf' in st.session_state and 'generated_os_data' in st.session_state:
+    
+    # Define a variável 'os_data' DENTRO do bloco seguro
+    os_data = st.session_state.generated_os_data
+
+    if os_data:
         st.download_button(
             label="⬇️ Descarregar OS em PDF",
             data=st.session_state.generated_os_pdf,
-            file_name=f"OS_{os_data['layout_name'].replace(' ', '_')}.pdf",
-            mime="application/pdf"
+            file_name=f"OS_{os_data.get('layout_name', 'SemNome').replace(' ', '_')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary"
         )

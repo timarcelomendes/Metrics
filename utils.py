@@ -1,4 +1,4 @@
-# utils.py (VERSÃO CORRIGIDA)
+# utils.py (VERSÃO FINAL CORRIGIDA E OTIMIZADA)
 
 import streamlit as st
 import json, os, pandas as pd
@@ -14,7 +14,6 @@ from datetime import datetime, date, timedelta
 import openai
 from sklearn.linear_model import LinearRegression
 import numpy as np
-import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -29,6 +28,14 @@ import requests
 from config import COLOR_THEMES
 from sklearn.linear_model import LinearRegression
 from datetime import datetime, date, timedelta
+import html
+from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+import unicodedata
+
 
 def apply_filters(df, filters):
     """Aplica a lista de filtros do construtor de gráficos a um DataFrame."""
@@ -172,11 +179,9 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     default_theme_key = list(COLOR_THEMES.keys())[0]
     theme_dict = COLOR_THEMES.get(theme_name, COLOR_THEMES[default_theme_key])
     
-    # Fallback de segurança se a configuração do tema estiver incorreta (e.g., uma lista em vez de um dict)
     if not isinstance(theme_dict, dict):
         theme_dict = COLOR_THEMES[default_theme_key]
 
-    # Extrai a lista de cores para o 'colorway'
     color_sequence = theme_dict.get('color_sequence', [])
     
     fig.update_layout(
@@ -193,9 +198,8 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
-        # Validação inicial para garantir que a configuração é um dicionário
         if not isinstance(chart_config, dict):
-            st.error(f"Erro: A configuração deste gráfico é inválida (não é um dicionário) e não pode ser renderizada.")
+            st.error(f"Erro: A configuração deste gráfico é inválida e não pode ser renderizada.")
             with st.expander("Ver dados corrompidos"):
                 st.json(chart_config)
             return
@@ -206,7 +210,6 @@ def render_chart(chart_config, df, chart_key):
         color_theme = chart_config.get('color_theme', default_theme)
         df_chart_filtered = apply_filters(df, chart_config.get('filters', []))
 
-        # --- Gráficos Agregados ---
         if chart_type in ['barra', 'barra_horizontal', 'linha_agregada', 'pizza', 'treemap', 'funil', 'tabela']:
             dimension = chart_config.get('dimension')
             measure = chart_config.get('measure')
@@ -287,7 +290,6 @@ def render_chart(chart_config, df, chart_key):
                     elif chart_type == 'linha_agregada':
                         fig.update_traces(texttemplate=text_template, textposition='top center')
                     elif chart_type == 'funil':
-                        # Funil tem posições de texto diferentes
                         fig.update_traces(texttemplate=text_template, textposition='auto')
 
                 if chart_config.get('show_as_percentage'):
@@ -295,7 +297,6 @@ def render_chart(chart_config, df, chart_key):
                     else: fig.update_layout(yaxis_ticksuffix="%")
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_agg")
 
-        # --- Gráficos X-Y ---
         elif chart_type in ['linha', 'dispersão']:
             x, y = chart_config.get('x'), chart_config.get('y')
             size_by = chart_config.get('size_by')
@@ -394,7 +395,6 @@ def render_chart(chart_config, df, chart_key):
             fig.update_layout(title_text=None, xaxis_title=chart_config.get('x_axis_title', x), yaxis_title=y_axis_title)
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
-        # --- Indicador (KPI) ---
         elif chart_type == 'indicator':
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
             if not isinstance(theme_colors, dict):
@@ -465,7 +465,6 @@ def render_chart(chart_config, df, chart_key):
                 fig.update_layout(margin=dict(l=0, r=0, t=40, b=10), height=150, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
                     
-        # --- Tabela Dinâmica ---
         elif chart_type == 'pivot_table':
             rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
@@ -524,10 +523,6 @@ def find_date_for_status(changelog, target_statuses, default=None):
     return default
 
 def convert_dates_in_filters(filters):
-    """
-    Percorre uma lista de filtros e converte quaisquer objetos de data/datetime
-    em strings ISO para que possam ser salvos em JSON.
-    """
     processed_filters = []
     for f in filters:
         new_filter = f.copy()
@@ -539,173 +534,196 @@ def convert_dates_in_filters(filters):
         processed_filters.append(new_filter)
     return processed_filters
 
-# ===== CLASSE DE PDF E FUNÇÕES DE GERAÇÃO DE DOCUMENTOS =====
+def clean_html(raw_html):
+    if not isinstance(raw_html, str):
+        return str(raw_html)
+    cleanr = re.compile('<.*?>')
+    cleantext = re.sub(cleanr, '', raw_html)
+    return html.unescape(cleantext)
+
+def clean_text(text):
+    """Remove caracteres que não são suportados pela fonte padrão do FPDF."""
+    if text is None:
+        return ''
+    text = ''.join(c for c in unicodedata.normalize('NFKD', str(text)) if unicodedata.category(c) != 'Mn' and c.isprintable())
+    return text
+
 class PDF(FPDF):
+    """Classe FPDF customizada para ter cabeçalho e rodapé com logo e título."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.os_title = ""
+        self.os_title = "Ordem de Serviço" # Título padrão
 
     def header(self):
         try:
-            self.image('images/gauge-logo.svg', 10, 8, 33)
+            logo_path = str(Path(__file__).resolve().parent / "images" / "logo.png")
+            # Adiciona a imagem: (caminho, x, y, largura) - LARGURA REDUZIDA PARA 25
+            self.image(logo_path, 5, 4, 12.5)
         except Exception as e:
-            print(f"Não foi possível carregar o logo: {e}")
+            print(f"Erro ao carregar o logo: {e}")
+            self.set_xy(10, 8)
+            self.set_font('Roboto', 'I', 8)
+            self.cell(25, 10, '[Logo]', 0, 0, 'L')
 
-        self.set_y(13)
-        self.set_x(45)
-        self.set_font('Roboto', 'B', 16)
-        remaining_width = self.w - 45 - self.r_margin
-        self.cell(remaining_width, 10, self.os_title, 0, 0, 'C')
+        self.set_font('Roboto', 'B', 15)
+        self.cell(0, 10, clean_text(self.os_title), 0, 0, 'C')
         self.ln(20)
 
     def footer(self):
         self.set_y(-15)
         self.set_font('Roboto', 'I', 8)
-        self.set_text_color(128, 128, 128)
-        self.cell(0, 10, 'Documento Gerado pelo Gauge Product Hub', 0, 0, 'L')
-        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'R')
+        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
 
-def clean_text(text):
-    if text is None: return ""
-    return str(text)
+def render_pdf_field(pdf, field_info, value, width):
+    """Renderiza o valor de um campo no PDF, tratando diferentes tipos."""
+    pdf.set_font('Roboto', '', 10)
+    field_type = field_info.get('field_type')
 
-def create_os_pdf(os_data):
+    if value is None or value == '' or (isinstance(value, list) and not value):
+        pdf.multi_cell(width, 6, "-")
+        return
+
+    if field_type == "Tabela" and isinstance(value, list) and value:
+        pdf.ln(2)
+        headers = value[0].keys()
+        pdf.set_font('Roboto', 'B', 9)
+        col_width = (width / len(headers)) - 1
+        for h in headers:
+            pdf.cell(col_width, 6, clean_text(h), 1, 0, 'C')
+        pdf.ln()
+        pdf.set_font('Roboto', '', 8)
+        for row in value:
+            for h in headers:
+                pdf.cell(col_width, 6, clean_text(row.get(h)), 1, 0, 'L')
+            pdf.ln()
+
+    elif field_type == "Toggle (Sim/Não)":
+        display_val = "Sim" if value else "Não"
+        pdf.multi_cell(width, 6, display_val)
+    elif isinstance(value, list):
+        display_val = ", ".join(map(str, value))
+        pdf.multi_cell(width, 6, clean_text(display_val))
+    else:
+        pdf.multi_cell(width, 6, clean_text(value))
+
+def create_os_pdf(data, os_title=None):
+    """
+    Gera um PDF para a Ordem de Serviço, aceitando um título customizado.
+    """
     pdf = PDF()
-    pdf.os_title = f"Ordem de Serviço: {clean_text(os_data.get('layout_name', 'N/A'))}"
+    
+    # Define o título: usa o título passado como argumento ou cria um padrão
+    if os_title:
+        pdf.os_title = clean_text(os_title)
+    else:
+        pdf.os_title = f"Ordem de Serviço: {clean_text(data.get('layout_name', 'N/A'))}"
 
     base_dir = Path(__file__).resolve().parent
     font_dir = base_dir / "fonts"
-    roboto_regular_path = font_dir / "Roboto-Regular.ttf"
-    roboto_bold_path = font_dir / "Roboto-Bold.ttf"
-    roboto_italic_path = font_dir / "Roboto-Italic.ttf"
-
-    if not roboto_regular_path.is_file(): raise FileNotFoundError(f"Arquivo de fonte não encontrado: {roboto_regular_path}")
-    if not roboto_bold_path.is_file(): raise FileNotFoundError(f"Arquivo de fonte não encontrado: {roboto_bold_path}")
-    if not roboto_italic_path.is_file(): raise FileNotFoundError(f"Arquivo de fonte não encontrado: {roboto_italic_path}")
-
-    pdf.add_font('Roboto', '', str(roboto_regular_path))
-    pdf.add_font('Roboto', 'B', str(roboto_bold_path))
-    pdf.add_font('Roboto', 'I', str(roboto_italic_path))
+    pdf.add_font('Roboto', '', str(font_dir / "Roboto-Regular.ttf"))
+    pdf.add_font('Roboto', 'B', str(font_dir / "Roboto-Bold.ttf"))
+    pdf.add_font('Roboto', 'I', str(font_dir / "Roboto-Italic.ttf"))
+    
     pdf.add_page()
     pdf.set_font('Roboto', 'B', 12)
     pdf.cell(0, 10, 'Detalhes da Ordem de Serviço', 0, 1, 'L')
     pdf.ln(2)
 
-    def render_pdf_field(field_data, value, width):
-        field_type = field_data.get('field_type')
-        pdf.set_font('Roboto', '', 11)
-        effective_width = width if width > 0 else pdf.w - pdf.l_margin - pdf.r_margin
-
-        if value is None or value == '' or (isinstance(value, list) and not value) or (isinstance(value, pd.DataFrame) and value.empty):
-            pdf.multi_cell(effective_width, 5, "N/A", 0, 'L')
-            return
-
-        if field_type == "Texto Longo":
-            if isinstance(value, dict) and value.get("text"):
-                 pdf.multi_cell(effective_width, 5, clean_text(value["text"]), 0, 'L')
-            else:
-                 pdf.multi_cell(effective_width, 5, clean_text(value), 0, 'L')
-        else:
-            if isinstance(value, list): value_str = ", ".join(map(str, value))
-            elif isinstance(value, bool): value_str = "Sim" if value else "Não"
-            else: value_str = str(value)
-            pdf.multi_cell(effective_width, 5, clean_text(value_str), 0, 'L')
-
-    layout_fields = os_data.get('custom_fields_layout', [])
-    custom_data = os_data.get('custom_fields', {})
+    layout_fields = data.get('custom_fields_layout', [])
+    custom_data = data.get('custom_fields', {})
     
     i = 0
     while i < len(layout_fields):
         field1 = layout_fields[i]
+        
+        field_value_dict = custom_data.get(field1['field_name'], {})
+        field_actual_value = field_value_dict.get('value') if isinstance(field_value_dict, dict) else field_value_dict
+        
+        est_height = 15
+        if isinstance(field_actual_value, str) and field1['field_type'] == 'Texto Longo':
+            est_height = (len(field_actual_value) / 80) * 8 + 10
+        elif isinstance(field_actual_value, list) and field1['field_type'] == 'Tabela':
+            est_height = len(field_actual_value) * 10 + 20
+        if pdf.get_y() + est_height > 270:
+            pdf.add_page()
+            
         is_two_col = field1.get('two_columns', False)
         next_field_is_two_col = (i + 1 < len(layout_fields)) and layout_fields[i+1].get('two_columns', False)
 
+        y_start = pdf.get_y()
+        line_height = 6
+
         if is_two_col and next_field_is_two_col:
             field2 = layout_fields[i+1]
-            y_before = pdf.get_y()
             
-            pdf.set_xy(pdf.l_margin, y_before)
             pdf.set_font('Roboto', 'B', 11)
-            pdf.multi_cell(95, 8, clean_text(f"{field1['field_name']}:"), 0, 'L')
-            render_pdf_field(field1, custom_data.get(field1['field_name']), width=95)
-            y_after1 = pdf.get_y()
+            pdf.cell(40, line_height, clean_text(f"{field1['field_name']}:"), 0, 0, 'L')
+            pdf.set_xy(pdf.l_margin + 40, y_start)
+            render_pdf_field(pdf, field1, field_actual_value, width=55)
+            y_after_col1 = pdf.get_y()
 
-            pdf.set_xy(pdf.l_margin + 100, y_before)
+            field2_value_dict = custom_data.get(field2['field_name'], {})
+            field2_actual_value = field2_value_dict.get('value') if isinstance(field2_value_dict, dict) else field2_value_dict
+            pdf.set_xy(pdf.l_margin + 100, y_start)
             pdf.set_font('Roboto', 'B', 11)
-            pdf.multi_cell(90, 8, clean_text(f"{field2['field_name']}:"), 0, 'L')
-            render_pdf_field(field2, custom_data.get(field2['field_name']), width=90)
-            y_after2 = pdf.get_y()
+            pdf.cell(40, line_height, clean_text(f"{field2['field_name']}:"), 0, 0, 'L')
+            pdf.set_xy(pdf.l_margin + 140, y_start)
+            render_pdf_field(pdf, field2, field2_actual_value, width=50)
+            y_after_col2 = pdf.get_y()
 
-            pdf.set_y(max(y_after1, y_after2) + 6)
+            pdf.set_y(max(y_after_col1, y_after_col2))
+            pdf.ln(4)
             i += 2
         else:
-            pdf.set_x(pdf.l_margin)
             pdf.set_font('Roboto', 'B', 11)
-            pdf.multi_cell(0, 8, clean_text(f"{field1['field_name']}:"), 0, 'L')
-            render_pdf_field(field1, custom_data.get(field1['field_name']), width=0)
-            pdf.ln(6)
+            title_text = clean_text(f"{field1['field_name']}:")
+            title_width = pdf.get_string_width(title_text) + 2
+            
+            pdf.cell(title_width, line_height, title_text, 0, 0, 'L')
+            
+            value_width = pdf.w - pdf.l_margin - pdf.r_margin - title_width
+            render_pdf_field(pdf, field1, field_actual_value, width=value_width)
+            
+            pdf.ln(2)
             i += 1
 
-    if os_data.get('items'):
-        # Verifica se há espaço para o título, cabeçalho e pelo menos uma linha
-        if pdf.get_y() > pdf.page_break_trigger - 30:
-            pdf.add_page()
-
-        pdf.ln(5)
+    items = data.get('items')
+    if items:
+        if pdf.get_y() > 240: pdf.add_page()
+        pdf.ln(10)
         pdf.set_font('Roboto', 'B', 12)
-        pdf.cell(0, 10, 'Itens do Catálogo Inclusos', 0, 1, 'L')
+        pdf.cell(0, 10, 'Itens do Catálogo', 0, 1, 'L')
+        pdf.ln(2)
 
-        def draw_catalog_header():
-            pdf.set_font('Roboto', 'B', 10)
-            pdf.cell(160, 8, 'Item', 1, 0, 'C')
-            pdf.cell(30, 8, 'Valor', 1, 1, 'C')
-            pdf.set_font('Roboto', '', 10)
-
-        draw_catalog_header()
-
-        for item in os_data['items']:
-            # Estima a altura necessária para o texto do item
-            item_text = clean_text(item.get('Item', ''))
-            lines = pdf.multi_cell(160, 8, item_text, split_only=True)
-            required_height = len(lines) * 8
-
-            # Se a altura necessária ultrapassar o limite da página, adiciona uma nova página e o cabeçalho
-            if pdf.get_y() + required_height > pdf.page_break_trigger:
-                pdf.add_page()
-                draw_catalog_header()
-
-            # Desenha a linha da tabela
+        pdf.set_font('Roboto', 'B', 10)
+        pdf.cell(140, 8, 'Item', 1, 0, 'C')
+        pdf.cell(40, 8, 'Valor', 1, 1, 'C')
+        
+        pdf.set_font('Roboto', '', 10)
+        for item in items:
+            x_before = pdf.get_x()
             y_before = pdf.get_y()
-            pdf.multi_cell(160, 8, item_text, border=1, align='L')
-            y_after_item = pdf.get_y()
-            pdf.set_xy(170, y_before)
-            pdf.multi_cell(30, 8, clean_text(str(item.get('Valor', ''))), border=1, align='C', ln=1)
-            y_after_valor = pdf.get_y()
-            pdf.set_y(max(y_after_item, y_after_valor))
+            pdf.multi_cell(140, 8, clean_text(item.get('Item', '')), 1, 'L')
+            y_after = pdf.get_y()
+            cell_height = y_after - y_before
+            pdf.set_xy(x_before + 140, y_before)
+            pdf.cell(40, cell_height, str(item.get('Valor', '')), 1, 1, 'R')
 
-    if os_data.get('assinantes'):
-        # Verifica se há espaço para o título das assinaturas e pelo menos uma assinatura
-        if pdf.get_y() > pdf.page_break_trigger - 50:
-             pdf.add_page()
-
+    if data.get('assinantes'):
+        if pdf.get_y() > 220: pdf.add_page()
         pdf.ln(10)
         pdf.set_font('Roboto', 'B', 12)
         pdf.cell(0, 10, 'Assinaturas', 0, 1, 'L')
         pdf.ln(15)
-
-        for assinante in os_data['assinantes']:
-            if assinante.get('Nome') and assinante.get('Cargo'):
-                # Verifica se há espaço para uma assinatura completa
-                if pdf.get_y() > pdf.page_break_trigger - 35:
-                    pdf.add_page()
-                    pdf.ln(10)
-
+        for assinante in data['assinantes']:
+            if assinante.get('Nome') and assinante.get('Papel'):
+                if pdf.get_y() > 250: pdf.add_page(); pdf.ln(10)
                 pdf.cell(0, 8, "___________________________________________", 0, 1, 'C')
                 pdf.cell(0, 8, clean_text(f"{assinante['Nome']}"), 0, 1, 'C')
-                pdf.cell(0, 8, clean_text(f"({assinante['Cargo']})"), 0, 1, 'C')
+                pdf.cell(0, 8, clean_text(f"({assinante['Papel']})"), 0, 1, 'C')
                 pdf.ln(10)
-
-    return bytes(pdf.output())
+    
+    return bytes(pdf.output(dest='S'))
 
 def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
     """Gera um PDF do dashboard, com gráficos como imagens."""
@@ -721,9 +739,7 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
 
     for tab_name, charts in charts_by_tab.items():
         if not charts: continue
-
-        if pdf.page_no() > 1 or pdf.get_y() > 40:
-            pdf.add_page()
+        if pdf.page_no() > 1 or pdf.get_y() > 40: pdf.add_page()
 
         pdf.set_font('Roboto', 'B', 18)
         pdf.cell(0, 10, f"Aba: {tab_name}", 0, 1, 'L')
@@ -739,15 +755,13 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
                     img_bytes = fig.to_image(format="png", scale=2, width=800, height=450)
                     img_file = io.BytesIO(img_bytes)
 
-                    if pdf.get_y() + 80 > 297:
-                        pdf.add_page()
-
+                    if pdf.get_y() + 80 > 297: pdf.add_page()
                     pdf.image(img_file, w=180)
                     pdf.ln(10)
                 else:
                     pdf.set_font('Roboto', '', 10)
                     pdf.set_text_color(255, 0, 0)
-                    pdf.multi_cell(0, 5, "Nao foi possivel gerar uma imagem para este tipo de grafico (ex: Indicador).")
+                    pdf.multi_cell(0, 5, "Nao foi possivel gerar uma imagem para este tipo de grafico.")
                     pdf.set_text_color(0, 0, 0)
                     pdf.ln(5)
             except Exception as e:
@@ -761,27 +775,13 @@ def create_dashboard_pdf(dashboard_name, charts_by_tab, df):
 
     return pdf.output(dest='S').encode('latin-1')
 
-# --- NOVA FUNÇÃO "LEITORA DE GRÁFICOS" PARA A IA ---
 def summarize_chart_data(chart_config, df):
     """Gera um resumo em texto dos dados de um único gráfico."""
     title = chart_config.get('title', 'um gráfico')
     chart_type = chart_config.get('type')
 
     try:
-        df_to_render = df.copy()
-        chart_filters = chart_config.get('filters', [])
-        if chart_filters:
-            for f in chart_filters:
-                field, op, val = f.get('field'), f.get('operator'), f.get('value')
-                if field and op and val is not None and field in df_to_render.columns:
-                    if op == 'é igual a': df_to_render = df_to_render[df_to_render[field] == val]
-                    elif op == 'não é igual a': df_to_render = df_to_render[df_to_render[field] != val]
-                    elif op == 'está em': df_to_render = df_to_render[df_to_render[field].isin(val)]
-                    elif op == 'não está em': df_to_render = df_to_render[~df_to_render[field].isin(val)]
-                    elif op == 'maior que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') > val]
-                    elif op == 'menor que': df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce') < val]
-                    elif op == 'entre' and len(val) == 2:
-                        df_to_render = df_to_render[pd.to_numeric(df_to_render[field], errors='coerce').between(val[0], val[1])]
+        df_to_render = apply_filters(df, chart_config.get('filters', []))
 
         if chart_type == 'indicator':
             if chart_config.get('source_type') == 'jql':
@@ -826,12 +826,9 @@ def summarize_chart_data(chart_config, df):
 # --- FUNÇÕES DE IA ---
 def _get_ai_client_and_model(provider, user_data):
     """Função auxiliar para configurar e retornar o cliente de IA correto."""
-    
-    # Verifica se o utilizador tem o perfil de 'admin' antes de mostrar a caixa de depuração.
-    # Esta verificação assume que o seu objeto 'user_data' tem um campo 'role'.
     if user_data and user_data.get('role') == 'admin':
         with st.expander("🔍 Dados do Perfil (Depuração)", expanded=False):
-            st.info("Esta caixa mostra os dados lidos do seu perfil para configurar a IA. Verifique se a chave correta (Gemini ou OpenAI) está presente aqui.")
+            st.info("Verifique se a chave correta (Gemini ou OpenAI) está presente aqui.")
             st.json(user_data)
 
     api_key_encrypted = None
