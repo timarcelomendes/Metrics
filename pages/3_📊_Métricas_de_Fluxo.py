@@ -147,6 +147,16 @@ with st.expander("Filtros da Análise", expanded=True):
     st.button("➕ Adicionar Filtro", on_click=lambda: st.session_state.flow_filters.append({}))
 
 filtered_df = apply_filters(df, st.session_state.get('flow_filters', []))
+
+# Garante que a coluna 'ID' existe antes de tentar usá-la.
+if 'ID' not in filtered_df.columns:
+    st.error(
+        "Ocorreu um erro inesperado: a coluna 'ID' não foi encontrada nos dados após a filtragem. "
+        "Isso pode acontecer se não houver dados no período selecionado. "
+        "Tente ajustar os filtros ou recarregar os dados na barra lateral."
+    )
+    st.stop()
+
 filtered_issue_keys = filtered_df['ID'].tolist()
 all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
 filtered_issues = [issue for issue in all_raw_issues if issue.key in filtered_issue_keys]

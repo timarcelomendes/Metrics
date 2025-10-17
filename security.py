@@ -171,7 +171,8 @@ def get_user_connections(user_email):
     return list(get_connections_collection().find({"user_email": user_email}))
 
 def delete_jira_connection(connection_id):
-    get_connections_collection().delete_one({"_id": ObjectId(connection_id)})
+    """Apaga uma conexão pelo seu ID de string (UUID)."""
+    get_connections_collection().delete_one({"id": connection_id})
 
 # --- Funções de Gestão de Dashboards ---
 def get_user_dashboard(user_email, project_key):
@@ -275,13 +276,27 @@ def save_dashboard_column_preference(project_key, num_columns):
     save_project_config(project_key, project_config)
 
 def save_last_active_connection(user_email, connection_id):
+    """
+    Guarda o ID da última conexão ativa do utilizador (como uma string).
+    """
     get_users_collection().update_one(
         {'email': user_email},
-        {'$set': {'last_active_connection_id': ObjectId(connection_id)}}
+        {'$set': {'last_active_connection_id': connection_id}}
     )
 
 def get_connection_by_id(connection_id):
-    return get_connections_collection().find_one({"_id": ObjectId(connection_id)})
+    """Procura uma conexão pelo seu ID de string (UUID)."""
+    # Procura pelo campo 'id' que guarda a string UUID, em vez do '_id' do MongoDB.
+    return get_connections_collection().find_one({"id": connection_id})
+
+def deactivate_active_connection(user_email):
+    """
+    Desativa a conexão Jira ativa para um utilizador, definindo o campo como None.
+    """
+    get_users_collection().update_one(
+        {'email': user_email},
+        {'$set': {'last_active_connection_id': None}}
+    )
 
 def delete_user(email):
     if find_user(email):

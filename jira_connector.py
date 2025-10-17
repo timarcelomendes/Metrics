@@ -33,12 +33,32 @@ def get_jira_projects(_jira_client):
 
 @lru_cache(maxsize=32)
 def get_projects(jira_client):
-    """Busca todos os projetos acessíveis pela conta."""
+    """
+    Busca todos os projetos visíveis para o cliente Jira e os retorna
+    como um dicionário {nome_do_projeto: chave_do_projeto}.
+    Inclui tratamento de erro robusto.
+    """
     try:
-        projects = jira_client.projects()
-        return {p.name: p.key for p in projects}
+        # A API retorna uma lista de objetos de projeto
+        all_projects = jira_client.projects()
+        
+        # Verifica se a lista não está vazia antes de processar
+        if not all_projects:
+            return {} # Retorna um dicionário vazio se nenhum projeto for encontrado
+            
+        # Converte a lista de objetos num dicionário no formato {nome: chave}
+        projects_dict = {project.name: project.key for project in all_projects}
+        return projects_dict
+
+    except JIRAError as e:
+        # Fornece feedback específico em caso de erro de permissão ou outro
+        st.error(
+            f"Ocorreu um erro ao buscar os projetos do Jira (Status: {e.status_code}). "
+            f"Mensagem: {e.text}"
+        )
+        return {} # Retorna um dicionário vazio em caso de erro
     except Exception as e:
-        print(f"Erro ao buscar projetos: {e}")
+        st.error(f"Ocorreu um erro inesperado ao processar os projetos: {e}")
         return {}
 
 @lru_cache(maxsize=32)
@@ -450,21 +470,21 @@ def get_jql_issue_count(_client, jql):
     
 def validate_jira_connection(jira_client):
     """
-    Tenta uma operação simples e de baixo custo para validar a conexão com o Jira.
-    Retorna True se a conexão for válida, False caso contrário.
+    Tenta validar a conexão com o Jira.
+    Retorna (True, "Sucesso") se válida, ou (False, "Mensagem de Erro") caso contrário.
     """
     if not jira_client:
-        return False
+        return False, "O cliente Jira não pôde ser inicializado."
     try:
-        # A chamada .server_info() é ideal para um teste de conexão, pois é leve.
+        # A chamada .server_info() é ideal para um teste de conexão
         jira_client.server_info()
-        return True
+        return True, "Conexão validada com sucesso."
     except JIRAError as e:
-        # Erros 401 (Não Autorizado) e 404 (Não Encontrado - URL errada) são falhas de conexão.
-        if e.status_code in [401, 404]:
-            return False
-        # Outros erros de conexão (DNS, timeout) também devem ser considerados falhas.
-        return False
-    except Exception:
-        # Captura outras exceções genéricas (ex: requests.exceptions.ConnectionError)
-        return False
+        if e.status_code == 401:
+            return False, "Falha na autenticação (Erro 401). Verifique seu e-mail e token de API."
+        if e.status_code == 404:
+            return False, "Não foi possível encontrar a URL do Jira (Erro 404). Verifique se o endereço está correto."
+        return False, f"Erro do Jira: {e.text} (Status: {e.status_code})"
+    except Exception as e:
+        # Captura outros erros de conexão (ex: falha de rede)
+        return False, f"Erro de conexão. Verifique sua rede e a URL do Jira. Detalhes: {e}"

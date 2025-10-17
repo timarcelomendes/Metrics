@@ -397,7 +397,6 @@ def render_chart(chart_config, df, chart_key):
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
         elif chart_type == 'indicator':
-            # --- LÓGICA DE RENDERIZAÇÃO ATUALIZADA ---
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
             if not isinstance(theme_colors, dict):
                 theme_colors = COLOR_THEMES[default_theme]
@@ -406,7 +405,6 @@ def render_chart(chart_config, df, chart_key):
             number_color = theme_colors.get('primary_color', '#0068C9')
             delta_color = theme_colors.get('secondary_color', '#83C9FF')
             
-            # Pega as configurações de formatação do gráfico
             decimal_places = int(chart_config.get('kpi_decimal_places', 2))
             format_as_pct = chart_config.get('kpi_format_as_percentage', False)
             valueformat = f".{decimal_places}f"
@@ -416,23 +414,21 @@ def render_chart(chart_config, df, chart_key):
             baseline = None
             fig = None
             
-            # Calcula os valores brutos (main_value e baseline)
             if chart_config.get('source_type') == 'jql':
                 from jira_connector import get_jql_issue_count
                 jql_a = chart_config.get('jql_a', '')
                 if not jql_a.strip():
-                    st.warning("A Consulta JQL 1 (Valor A) é obrigatória e está vazia.")
-                    return
+                    st.warning("A Consulta JQL 1 (Valor A) é obrigatória e está vazia."); return
                 val_a = get_jql_issue_count(st.session_state.jira_client, jql_a)
                 if not isinstance(val_a, (int, float)):
-                    st.error(f"Erro ao processar a Consulta JQL 1 (Valor A): {val_a}")
-                    return
+                    st.error(f"Erro ao processar a Consulta JQL 1 (Valor A): {val_a}"); return
+                
                 val_b = None
                 jql_b = chart_config.get('jql_b', '')
                 if jql_b.strip():
                     val_b_raw = get_jql_issue_count(st.session_state.jira_client, jql_b)
                     if isinstance(val_b_raw, (int, float)): val_b = val_b_raw
-                    else: st.warning(f"Aviso na Consulta JQL 2 (Valor B): {val_b_raw}")
+                
                 main_value = val_a
                 op = chart_config.get('jql_operation')
                 if op != "Nenhuma" and val_b is not None:
@@ -445,17 +441,11 @@ def render_chart(chart_config, df, chart_key):
                 if jql_baseline.strip():
                     baseline_raw = get_jql_issue_count(st.session_state.jira_client, jql_baseline)
                     if isinstance(baseline_raw, (int, float)): baseline = baseline_raw
-                    else: st.warning(f"Aviso na Consulta da Linha de Base (Valor C): {baseline_raw}")
             
             else: # source_type == 'visual'
                 main_value = calculate_kpi_value(chart_config.get('num_op'), chart_config.get('num_field'), df_chart_filtered)
-                
                 if chart_config.get('use_baseline', False):
-                    baseline = calculate_kpi_value(
-                        chart_config.get('base_op'), 
-                        chart_config.get('base_field'), 
-                        df_chart_filtered
-                    )
+                    baseline = calculate_kpi_value(chart_config.get('base_op'), chart_config.get('base_field'), df_chart_filtered)
                 if chart_config.get('use_den'):
                     denominator = calculate_kpi_value(chart_config.get('den_op'), chart_config.get('den_field'), df_chart_filtered)
                     if denominator is not None and denominator != 0:
@@ -463,27 +453,27 @@ def render_chart(chart_config, df, chart_key):
                         if baseline is not None:
                             baseline = (baseline / denominator)
                     else:
-                        main_value = 0
-                        baseline = 0 if baseline is not None else None
+                        main_value = 0; baseline = 0 if baseline is not None else None
 
-            # Aplica a formatação percentual (se ativada)
             if format_as_pct:
-                if isinstance(main_value, (int, float)):
-                    main_value *= 100
-                if isinstance(baseline, (int, float)):
-                    baseline *= 100
+                if isinstance(main_value, (int, float)): main_value *= 100
+                if isinstance(baseline, (int, float)): baseline *= 100
             
-            # Constrói a figura final com a formatação
             fig = go.Figure(go.Indicator(
                 mode="number" + ("+delta" if baseline is not None else ""),
                 value=main_value,
-                title={"text": chart_config.get('title'), "font": {"color": title_color}},
+                title={"text": chart_config.get('title'), "font": {"size": 16, "color": title_color}},
                 number={"font": {"color": number_color}, "valueformat": valueformat, "suffix": suffix},
                 delta={'reference': baseline, "font": {"color": delta_color}, "valueformat": valueformat} if baseline is not None else None
             ))
             
             if fig:
-                fig.update_layout(margin=dict(l=0, r=0, t=40, b=10), height=150, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                fig.update_layout(
+                    margin=dict(l=10, r=10, t=30, b=0), 
+                    height=130, 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
 
         elif chart_type == 'pivot_table':

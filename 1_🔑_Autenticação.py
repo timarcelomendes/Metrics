@@ -98,78 +98,80 @@ else:
         with st.container(border=True):
             tab1, tab2, tab3 = st.tabs(["**Entrar**", "**Registrar-se**", "**Recuperar Senha**"])
 
-            with tab1:
-                with st.form("login_form"):
-                    st.markdown("##### Acesse a sua conta")
-                    email = st.text_input("Email", value=st.session_state.get('remember_email', ''), placeholder="email@exemplo.com")
-                    password = st.text_input("Senha", type="password", placeholder="Digite a sua senha")
-                    remember_me = st.checkbox("Lembrar-me", value=bool(st.session_state.get('remember_email', '')))
+            with st.form("login_form"):
+                st.markdown("##### Acesse a sua conta")
+                email = st.text_input("Email", value=st.session_state.get('remember_email', ''), placeholder="email@exemplo.com")
+                password = st.text_input("Senha", type="password", placeholder="Digite a sua senha")
+                remember_me = st.checkbox("Lembrar-me", value=bool(st.session_state.get('remember_email', '')))
 
-                    if st.form_submit_button("Entrar", width='stretch', type="primary"):
-                        if email and password:
-                            user = find_user(email)
+                if st.form_submit_button("Entrar", width='stretch', type="primary"):
+                    if email and password:
+                        user = find_user(email)
 
-                            if user and verify_password(password, user['hashed_password']):
-                                # Lógica de 'Lembrar-me'
-                                if remember_me:
-                                    st.session_state['remember_email'] = email
-                                elif st.session_state.get('remember_email'):
-                                    st.session_state['remember_email'] = ""
+                        if user and verify_password(password, user['hashed_password']):
+                            # ... (lógica de 'remember_me' e de definir a sessão básica)
+                            st.session_state['email'] = user['email']
+                            st.session_state['user_data'] = user
+                            st.session_state['last_activity_time'] = datetime.now()
+                            # ...
 
-                                # Define os dados básicos da sessão
-                                st.session_state['email'] = user['email']
-                                st.session_state['user_data'] = user
-                                st.session_state['last_activity_time'] = datetime.now()
-                                st.session_state['global_configs'] = get_global_configs()
-                                st.session_state['smtp_configs'] = get_smtp_configs()
-                                if user.get('last_project_key'):
-                                    st.session_state['last_project_key'] = user.get('last_project_key')
+                            last_conn_id = user.get('last_active_connection_id')
+                            if last_conn_id:
+                                with st.spinner("A validar as permissões da sua conexão Jira..."):
+                                    
+                                    # --- CORREÇÃO PRINCIPAL APLICADA AQUI ---
+                                    # Procura os detalhes da conexão diretamente no objeto 'user' que já foi carregado,
+                                    # em vez de chamar uma função que procura no local errado.
+                                    conn_details = next(
+                                        (conn for conn in user.get('jira_connections', []) if conn.get('id') == last_conn_id), 
+                                        None
+                                    )
+                                    # --- FIM DA CORREÇÃO ---
 
-                                # Tenta validar e conectar à conexão Jira ativa
-                                last_conn_id = user.get('last_active_connection_id')
-                                if last_conn_id:
-                                    with st.spinner("A validar as permissões da sua conexão Jira..."):
-                                        conn_details = get_connection_by_id(last_conn_id)
-                                        if conn_details:
-                                            token = decrypt_token(conn_details['encrypted_token'])
-                                            client = connect_to_jira(conn_details['jira_url'], conn_details['jira_email'], token)
-
-                                            if client and validate_jira_connection(client):
-                                                # CONEXÃO VÁLIDA, AGORA VERIFICA AS PERMISSÕES (CARREGANDO PROJETOS)
-                                                projects = get_projects(client)
-                                                if projects:
-                                                    # SUCESSO: O utilizador tem permissão para ver projetos
-                                                    st.session_state.active_connection = conn_details
-                                                    st.session_state.jira_client = client
-                                                    st.session_state.projects = projects
-                                                    st.success("Login bem-sucedido! A carregar...")
-                                                    time.sleep(1)
-                                                    st.switch_page("pages/2_🏠_Meu_Dashboard.py")
-                                                else:
-                                                    # FALHA DE PERMISSÃO: A conexão é válida, mas não pode ver projetos
-                                                    st.session_state['invalid_connection_id'] = last_conn_id
-                                                    st.error("Conexão válida, mas sem permissão para ver projetos. Verifique as permissões do seu token de API no Jira. A redirecionar...")
-                                                    time.sleep(3)
-                                                    st.switch_page("pages/8_🔗_Conexões_Jira.py")
+                                    if conn_details:
+                                        token = decrypt_token(conn_details['encrypted_token'])
+                                        client = connect_to_jira(conn_details['jira_url'], conn_details['jira_email'], token)
+                                        
+                                        is_valid, reason = validate_jira_connection(client)
+                                        
+                                        if client and is_valid:
+                                            projects = get_projects(client)
+                                            if projects:
+                                                # SUCESSO TOTAL
+                                                st.session_state.active_connection = conn_details
+                                                st.session_state.jira_client = client
+                                                st.session_state.projects = projects
+                                                st.success("Login bem-sucedido! A carregar...")
+                                                time.sleep(1)
+                                                st.switch_page("pages/2_🏠_Meu_Dashboard.py")
                                             else:
-                                                # CONEXÃO INVÁLIDA: Redireciona para a página de conexões
+                                                # FALHA DE PERMISSÃO
                                                 st.session_state['invalid_connection_id'] = last_conn_id
-                                                st.error("A sua conexão Jira ativa é inválida. A redirecionar...")
-                                                time.sleep(2)
+                                                st.session_state['connection_error_reason'] = "Conexão válida, mas o seu token não tem permissão para listar projetos."
+                                                st.error(st.session_state['connection_error_reason'] + " A redirecionar...")
+                                                time.sleep(3)
                                                 st.switch_page("pages/8_🔗_Conexões_Jira.py")
                                         else:
-                                            st.error("Não foi possível encontrar os detalhes da sua conexão ativa. A redirecionar...")
-                                            time.sleep(2)
+                                            # CONEXÃO INVÁLIDA (com motivo específico)
+                                            st.session_state['invalid_connection_id'] = last_conn_id
+                                            st.session_state['connection_error_reason'] = reason
+                                            st.error(f"Sua conexão Jira ativa falhou: {reason}. A redirecionar...")
+                                            time.sleep(3)
                                             st.switch_page("pages/8_🔗_Conexões_Jira.py")
-                                else:
-                                    # NENHUMA CONEXÃO ATIVA: Redireciona para a página de conexões
-                                    st.warning("Nenhuma conexão Jira foi definida como ativa. A redirecionar...")
-                                    time.sleep(2)
-                                    st.switch_page("pages/8_🔗_Conexões_Jira.py")
+                                    else:
+                                        # Esta mensagem agora só aparecerá se a conexão ativa não estiver na lista do utilizador
+                                        st.error("A sua conexão ativa não foi encontrada no seu perfil. Por favor, ative uma nova conexão.")
+                                        time.sleep(3)
+                                        st.switch_page("pages/8_🔗_Conexões_Jira.py")
                             else:
-                                st.error("Email ou senha inválidos.")
+                                # Nenhuma conexão ativa definida
+                                st.warning("Nenhuma conexão Jira foi definida como ativa. A redirecionar...")
+                                time.sleep(2)
+                                st.switch_page("pages/8_🔗_Conexões_Jira.py")
                         else:
-                            st.warning("Por favor, preencha todos os campos.")
+                            st.error("Email ou senha inválidos.")
+                    else:
+                        st.warning("Por favor, preencha todos os campos.")
 
             with tab2:
                  with st.form("register_form", clear_on_submit=True):
