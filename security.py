@@ -1,4 +1,4 @@
-# security.py (Versão Completa e Corrigida para o Erro Bcrypt)
+# security.py
 
 import streamlit as st
 import pandas as pd
@@ -68,7 +68,6 @@ def save_config(data, file_path):
         json.dump(data, f, indent=4)
 
 # --- Configuração de Hashing e Criptografia ---
-# Utiliza as chaves definidas nos seus secrets do Streamlit
 cipher_suite = Fernet(st.secrets["SECRET_KEY"].encode())
 
 def verify_password(plain_password, hashed_password):
@@ -125,7 +124,6 @@ def get_tokens_collection():
 
 # --- Funções de Gestão de Utilizadores (Preservadas) ---
 def find_user(email):
-    # (Sua função find_user original, com a lógica de migração, permanece aqui)
     user = get_users_collection().find_one({'email': email})
     if user and 'dashboard_layout' in user:
         needs_update = False
@@ -226,7 +224,7 @@ def get_global_configs():
 def save_global_configs(config_data):
     """Guarda ou atualiza as configurações globais e limpa o cache da função de leitura."""
     get_app_configs_collection().update_one(
-        {"_id": "global_settings"}, # Usa o mesmo ID da função de leitura
+        {"_id": "global_settings"},
         {"$set": config_data},
         upsert=True
     )
@@ -286,7 +284,6 @@ def save_last_active_connection(user_email, connection_id):
 
 def get_connection_by_id(connection_id):
     """Procura uma conexão pelo seu ID de string (UUID)."""
-    # Procura pelo campo 'id' que guarda a string UUID, em vez do '_id' do MongoDB.
     return get_connections_collection().find_one({"id": connection_id})
 
 def deactivate_active_connection(user_email):
@@ -407,7 +404,7 @@ def save_app_configs(configs_data):
     configs_collection = get_app_configs_collection()
     configs_collection.update_one({}, {'$set': configs_data}, upsert=True)
 
-# ===== NOVAS FUNÇÕES PARA GESTÃO DE CREDENCIAIS DE E-MAIL =====
+# ===== FUNÇÕES PARA GESTÃO DE CREDENCIAIS DE E-MAIL =====
 def get_smtp_configs():
     user_email = st.session_state.get('email')
     if not user_email: return {}
@@ -480,29 +477,6 @@ def get_user_figma_token(user_email):
         st.error("O seu token do Figma parece estar corrompido. Por favor, guarde-o novamente.")
         return None
     
-def get_user_product_hub_data(user_email):
-    user = find_user(user_email)
-    hub_data = user.get('product_hub_data', {})
-    
-    if 'membros' in hub_data and isinstance(hub_data['membros'], list):
-        hub_data['membros'] = pd.DataFrame(hub_data['membros'])
-    else:
-        hub_data['membros'] = pd.DataFrame(columns=["Nome", "Papel"])
-        
-    return hub_data
-
-def save_user_product_hub_data(user_email, hub_data):
-    data_to_save = hub_data.copy()
-    
-    if 'membros' in data_to_save and isinstance(data_to_save['membros'], pd.DataFrame):
-        data_to_save['membros'] = data_to_save['membros'].to_dict('records')
-        
-    get_users_collection().update_one(
-        {'email': user_email},
-        {'$set': {'product_hub_data': data_to_save}},
-        upsert=True
-    )
-
 def get_global_smtp_configs():
     try:
         configs = get_global_configs()
@@ -516,10 +490,6 @@ def save_global_smtp_configs(smtp_data):
     configs['smtp_configs'] = smtp_data
     save_global_configs(configs)
     get_global_configs.clear()
-
-def get_global_smtp_configs():
-    configs = get_global_configs()
-    return configs.get("smtp_configs")
 
 def validate_smtp_connection(provider, from_email, credential):
     if provider == 'SendGrid':
@@ -572,7 +542,7 @@ def send_assessment_email(recipient_email, recipient_name, sender_name, assessme
     from_email = smtp_configs.get('from_email')
     if not from_email:
         st.error("O 'E-mail de Origem' não está configurado.")
-        return False
+        return False, "E-mail de origem não configurado."
 
     html_body = f"""
     <html>
@@ -596,15 +566,24 @@ def send_assessment_email(recipient_email, recipient_name, sender_name, assessme
 
     try:
         if provider == 'SendGrid':
-            api_key = decrypt_token(smtp_configs.get('api_key_encrypted', ''))
+            # A função get_smtp_configs() já desencripta, então usamos a chave diretamente
+            api_key = smtp_configs.get('api_key', '')
+            if not api_key:
+                return False, "API Key do SendGrid não encontrada."
             sg = sendgrid.SendGridAPIClient(api_key=api_key)
             from_sg = From(email=from_email, name=sender_name)
             to_sg = To(email=recipient_email)
             message = Mail(from_email=from_sg, to_emails=to_sg, subject=subject, html_content=html_body)
             response = sg.client.mail.send.post(request_body=message.get())
-            return 200 <= response.status_code < 300
+            if 200 <= response.status_code < 300:
+                return True, "E-mail enviado com sucesso via SendGrid."
+            else:
+                return False, f"Falha no envio pelo SendGrid (Status: {response.status_code})."
         elif provider == 'Gmail (SMTP)':
-            app_password = decrypt_token(smtp_configs.get('app_password_encrypted', ''))
+            # A função get_smtp_configs() já desencripta, então usamos a chave diretamente
+            app_password = smtp_configs.get('app_password', '')
+            if not app_password:
+                return False, "Senha de aplicação do Gmail não encontrada."
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = f"{sender_name} <{from_email}>"
@@ -613,20 +592,16 @@ def send_assessment_email(recipient_email, recipient_name, sender_name, assessme
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
                 server.login(from_email, app_password)
                 server.sendmail(from_email, recipient_email, msg.as_string())
-            return True
+            return True, "E-mail enviado com sucesso via Gmail."
         else:
-            st.error(f"Provedor de e-mail desconhecido: '{provider}'")
-            return False
+            return False, f"Provedor de e-mail desconhecido: '{provider}'"
     except Exception as e:
-        st.error(f"Ocorreu um erro ao enviar o e-mail: {e}")
-        return False
+        return False, f"Ocorreu um erro ao enviar o e-mail: {e}"
     
 def save_user_connections(email, connections):
     """
     Atualiza o campo 'jira_connections' para um utilizador específico no MongoDB.
     """
-    # Esta operação encontra o utilizador pelo e-mail e define (ou substitui)
-    # o campo 'jira_connections' com a nova lista de conexões fornecida.
     get_users_collection().update_one(
         {'email': email},
         {'$set': {'jira_connections': connections}}

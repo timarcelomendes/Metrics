@@ -42,7 +42,7 @@ def ensure_project_data_is_loaded():
     if 'dynamic_df' not in st.session_state or st.session_state.get('dynamic_df') is None:
         project_key = st.session_state.get('project_key')
         if project_key and 'jira_client' in st.session_state:
-            df, _ = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
+            df = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
             st.session_state.dynamic_df = df
             st.session_state.loaded_project_key = project_key
 
@@ -133,7 +133,7 @@ with st.sidebar:
             save_last_project(st.session_state['email'], project_key)
             st.session_state.project_key = project_key
             st.session_state.project_name = selected_project_name
-            df, _ = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
+            df = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
             st.session_state.dynamic_df = df
             st.session_state.loaded_project_key = project_key
             st.rerun()
@@ -325,6 +325,44 @@ if edit_mode and can_edit:
                                     st.success(f"Dashboard '{active_dashboard_name}' partilhado com {target_user_email}!")
                                 else:
                                     st.error("Utilizador de destino não encontrado.")
+                    st.divider()
+
+                    # --- GERIR PARTILHAS (REVOGAR ACESSO) ---
+                    st.markdown("###### Gerir Partilhas")
+                    current_user_email = st.session_state.get('email', '')
+                    shared_with_list = []
+                    all_other_users_emails = get_all_users(exclude_email=current_user_email)
+                    for other_user_email in all_other_users_emails:
+                        other_user_data = find_user(other_user_email)
+                        if other_user_data:
+                            other_user_dashboards = other_user_data.get('dashboard_layout', {}).get(current_project_key, {}).get('dashboards', {})
+                            if active_dashboard_id in other_user_dashboards:
+                                dashboard_info = other_user_dashboards[active_dashboard_id]
+                                if dashboard_info.get('owner_email') == current_user_email:
+                                    permission = dashboard_info.get('permission', 'view') # 'view' como padrão
+                                    shared_with_list.append({'email': other_user_email, 'permission': permission})
+                    
+                    if not shared_with_list:
+                        st.info("Este dashboard ainda não foi partilhado com outros utilizadores.")
+                    else:
+                        st.write("Partilhado com:")
+                        for shared_user in shared_with_list:
+                            shared_user_email = shared_user['email']
+                            permission_text = "Edição" if shared_user['permission'] == 'edit' else "Visualização"
+                            
+                            r_cols = st.columns([0.6, 0.2, 0.2])
+                            r_cols[0].write(f"- {shared_user_email}")
+                            r_cols[1].write(f"_{permission_text}_")
+                            if r_cols[2].button("Revogar", key=f"revoke_{shared_user_email}", help=f"Revogar acesso de {shared_user_email}", width='stretch'):
+                                target_user_data = find_user(shared_user_email)
+                                if target_user_data:
+                                    target_layouts = target_user_data.get('dashboard_layout', {})
+                                    if current_project_key in target_layouts and active_dashboard_id in target_layouts[current_project_key]['dashboards']:
+                                        del target_layouts[current_project_key]['dashboards'][active_dashboard_id]
+                                        save_user_dashboard(shared_user_email, target_layouts)
+                                        st.success(f"Acesso de {shared_user_email} revogado com sucesso!")
+                                        st.rerun()
+
                     st.divider()
                     if len(available_dashboards) > 1:
                         if st.button("❌ Apagar Dashboard Atual", width='stretch', type="secondary"):
