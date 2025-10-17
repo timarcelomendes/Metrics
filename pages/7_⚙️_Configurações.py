@@ -313,8 +313,16 @@ with tab_campos:
         st.caption("Adicione e nomeie os campos personalizados que são importantes para o seu negócio.")
 
         df_custom = pd.DataFrame(custom_fields)
-        df_custom_to_edit = df_custom[['id', 'name']].copy()
-        df_custom_to_edit.rename(columns={'id': 'ID (Não editável)', 'name': 'Nome do Campo'}, inplace=True)
+
+        # Verifica se o DataFrame não está vazio e se contém as colunas necessárias
+        if not df_custom.empty and all(col in df_custom.columns for col in ['id', 'name']):
+            df_custom_to_edit = df_custom[['id', 'name']].copy()
+            df_custom_to_edit.rename(columns={'id': 'ID (Não editável)', 'name': 'Nome do Campo'}, inplace=True)
+        else:
+            # Se não houver campos personalizados, cria um DataFrame vazio com as colunas certas
+            # para evitar que o st.data_editor cause um erro.
+            df_custom_to_edit = pd.DataFrame(columns=['ID (Não editável)', 'Nome do Campo'])
+            st.info("Nenhum campo personalizado editável foi encontrado nesta instância do Jira.")
 
         edited_custom_fields_df = st.data_editor(
             df_custom_to_edit, use_container_width=True, hide_index=True,

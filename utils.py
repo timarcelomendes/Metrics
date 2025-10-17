@@ -210,6 +210,7 @@ def render_chart(chart_config, df, chart_key):
         color_theme = chart_config.get('color_theme', default_theme)
         df_chart_filtered = apply_filters(df, chart_config.get('filters', []))
 
+        # --- INÍCIO DO BLOCO CORRIGIDO ---
         if chart_type in ['barra', 'barra_horizontal', 'linha_agregada', 'pizza', 'treemap', 'funil', 'tabela']:
             dimension = chart_config.get('dimension')
             measure = chart_config.get('measure')
@@ -396,6 +397,7 @@ def render_chart(chart_config, df, chart_key):
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
         elif chart_type == 'indicator':
+            # --- LÓGICA DE RENDERIZAÇÃO ATUALIZADA ---
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
             if not isinstance(theme_colors, dict):
                 theme_colors = COLOR_THEMES[default_theme]
@@ -403,8 +405,18 @@ def render_chart(chart_config, df, chart_key):
             title_color = theme_colors.get('title_color', '#3D3D3D')
             number_color = theme_colors.get('primary_color', '#0068C9')
             delta_color = theme_colors.get('secondary_color', '#83C9FF')
+            
+            # Pega as configurações de formatação do gráfico
+            decimal_places = int(chart_config.get('kpi_decimal_places', 2))
+            format_as_pct = chart_config.get('kpi_format_as_percentage', False)
+            valueformat = f".{decimal_places}f"
+            suffix = "%" if format_as_pct else ""
+            
+            main_value = None
+            baseline = None
             fig = None
             
+            # Calcula os valores brutos (main_value e baseline)
             if chart_config.get('source_type') == 'jql':
                 from jira_connector import get_jql_issue_count
                 jql_a = chart_config.get('jql_a', '')
@@ -428,43 +440,52 @@ def render_chart(chart_config, df, chart_key):
                     elif op == "Somar (A + B)": main_value = val_a + val_b
                     elif op == "Subtrair (A - B)": main_value = val_a - val_b
                     elif op == "Multiplicar (A * B)": main_value = val_a * val_b
-                baseline = None
+                
                 jql_baseline = chart_config.get('jql_baseline', '')
                 if jql_baseline.strip():
                     baseline_raw = get_jql_issue_count(st.session_state.jira_client, jql_baseline)
                     if isinstance(baseline_raw, (int, float)): baseline = baseline_raw
                     else: st.warning(f"Aviso na Consulta da Linha de Base (Valor C): {baseline_raw}")
+            
+            else: # source_type == 'visual'
+                main_value = calculate_kpi_value(chart_config.get('num_op'), chart_config.get('num_field'), df_chart_filtered)
                 
-                fig = go.Figure(go.Indicator(
-                    mode="number" + ("+delta" if baseline is not None else ""),
-                    value=main_value,
-                    title={"text": chart_config.get('title'), "font": {"color": title_color}},
-                    number={"font": {"color": number_color}},
-                    delta={'reference': baseline, "font": {"color": delta_color}} if baseline is not None else None
-                ))
-            else:
-                numerator = calculate_kpi_value(chart_config.get('num_op'), chart_config.get('num_field'), df_chart_filtered)
-                main_value = numerator
-                suffix = ""
+                if chart_config.get('use_baseline', False):
+                    baseline = calculate_kpi_value(
+                        chart_config.get('base_op'), 
+                        chart_config.get('base_field'), 
+                        df_chart_filtered
+                    )
                 if chart_config.get('use_den'):
                     denominator = calculate_kpi_value(chart_config.get('den_op'), chart_config.get('den_field'), df_chart_filtered)
                     if denominator is not None and denominator != 0:
-                        main_value = (numerator / denominator) * 100
-                        suffix = "%"
+                        main_value = (main_value / denominator)
+                        if baseline is not None:
+                            baseline = (baseline / denominator)
                     else:
                         main_value = 0
-                
-                fig = go.Figure(go.Indicator(
-                    mode="number",
-                    value=main_value,
-                    title={"text": chart_config.get('title'), "font": {"color": title_color}},
-                    number={'suffix': suffix, "font": {"color": number_color}}
-                ))
+                        baseline = 0 if baseline is not None else None
+
+            # Aplica a formatação percentual (se ativada)
+            if format_as_pct:
+                if isinstance(main_value, (int, float)):
+                    main_value *= 100
+                if isinstance(baseline, (int, float)):
+                    baseline *= 100
+            
+            # Constrói a figura final com a formatação
+            fig = go.Figure(go.Indicator(
+                mode="number" + ("+delta" if baseline is not None else ""),
+                value=main_value,
+                title={"text": chart_config.get('title'), "font": {"color": title_color}},
+                number={"font": {"color": number_color}, "valueformat": valueformat, "suffix": suffix},
+                delta={'reference': baseline, "font": {"color": delta_color}, "valueformat": valueformat} if baseline is not None else None
+            ))
             
             if fig:
                 fig.update_layout(margin=dict(l=0, r=0, t=40, b=10), height=150, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
-                    
+
         elif chart_type == 'pivot_table':
             rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
@@ -480,7 +501,79 @@ def render_chart(chart_config, df, chart_key):
                     cells=dict(values=[pivot_df[col] for col in pivot_df.columns], fill_color='#f0f2f6', align='left')
                 )])
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_pivot")
-            else: st.warning("Para a Tabela Dinâmica, 'Linhas' e 'Valores' são obrigatórios.")
+            else: 
+                st.warning("Para a Tabela Dinâmica, 'Linhas' e 'Valores' são obrigatórios.")
+
+        elif chart_type == 'metric_with_chart':
+            fig_func_map = {'linha': px.line, 'área': px.area, 'barra': px.bar}
+            title = chart_config.get('title')
+            dimension = chart_config.get('mc_dimension')
+            measure = chart_config.get('mc_measure')
+            chart_type_internal = chart_config.get('mc_chart_type', 'Linha').lower()
+            main_value_agg = chart_config.get('mc_main_value_agg')
+            delta_agg = chart_config.get('mc_delta_agg')
+
+            if not dimension or not measure:
+                st.warning("Configuração de Métrica inválida. Dimensão e Medida são obrigatórias.")
+                return
+
+            measure_col_for_plotting = measure
+            if measure == "Contagem de Issues":
+                df_chart = df_chart_filtered.groupby(dimension).size().reset_index(name="Contagem de Issues")
+                df_chart = df_chart.sort_values(by=dimension)
+                measure_col_for_plotting = "Contagem de Issues"
+            else:
+                df_chart = df_chart_filtered.sort_values(by=dimension).dropna(subset=[measure])
+            
+            if df_chart.empty:
+                 st.warning("Não há dados para exibir na Métrica com Gráfico.")
+                 st.metric(label=title, value="N/A")
+                 return
+
+            chart_data_values = df_chart[measure_col_for_plotting].tolist()
+            
+            main_value = 0
+            if main_value_agg == "Último valor da série":
+                main_value = chart_data_values[-1] if chart_data_values else 0
+            elif main_value_agg == "Soma de todos os valores":
+                main_value = sum(chart_data_values)
+            elif main_value_agg == "Média de todos os valores":
+                main_value = sum(chart_data_values) / len(chart_data_values) if chart_data_values else 0
+
+            delta = None
+            if len(chart_data_values) > 1:
+                if delta_agg == "Variação (último - primeiro)":
+                    delta = chart_data_values[-1] - chart_data_values[0]
+                elif delta_agg == "Variação (último - penúltimo)":
+                    delta = chart_data_values[-1] - chart_data_values[-2]
+
+            st.metric(
+                label=title,
+                value=f"{main_value:,.2f}",
+                delta=f"{delta:,.2f}" if delta is not None else None
+            )
+
+            spark_df = pd.DataFrame({
+                dimension: df_chart[dimension],
+                measure_col_for_plotting: chart_data_values
+            })
+
+            fig = fig_func_map[chart_type_internal](spark_df, x=dimension, y=measure_col_for_plotting)
+
+            fig.update_layout(
+                showlegend=False,
+                xaxis=dict(visible=False, showgrid=False),
+                yaxis=dict(visible=False, showgrid=False),
+                margin=dict(l=0, r=0, t=0, b=0),
+                height=60,
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+            )
+            
+            if chart_type_internal in ['linha', 'área']:
+                fig.update_traces(line=dict(width=2.5))
+
+            st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_sparkline")
 
     except Exception as e:
         import traceback
@@ -545,6 +638,7 @@ def clean_text(text):
     """Remove caracteres que não são suportados pela fonte padrão do FPDF."""
     if text is None:
         return ''
+    # Normaliza para decompor caracteres acentuados e remove caracteres de controle
     text = ''.join(c for c in unicodedata.normalize('NFKD', str(text)) if unicodedata.category(c) != 'Mn' and c.isprintable())
     return text
 
@@ -552,13 +646,13 @@ class PDF(FPDF):
     """Classe FPDF customizada para ter cabeçalho e rodapé com logo e título."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.os_title = "Ordem de Serviço" # Título padrão
+        self.os_title = "Ordem de Serviço"
 
     def header(self):
         try:
-            logo_path = str(Path(__file__).resolve().parent / "images" / "logo.png")
-            # Adiciona a imagem: (caminho, x, y, largura) - LARGURA REDUZIDA PARA 25
-            self.image(logo_path, 5, 4, 12.5)
+            # Caminho corrigido para a pasta 'images' no mesmo nível da pasta 'pages'
+            logo_path = str(Path(__file__).resolve().parent.parent / "images" / "logo.png")
+            self.image(logo_path, 10, 8, 25)
         except Exception as e:
             print(f"Erro ao carregar o logo: {e}")
             self.set_xy(10, 8)
@@ -585,9 +679,10 @@ def render_pdf_field(pdf, field_info, value, width):
 
     if field_type == "Tabela" and isinstance(value, list) and value:
         pdf.ln(2)
+        if not value[0]: return
         headers = value[0].keys()
         pdf.set_font('Roboto', 'B', 9)
-        col_width = (width / len(headers)) - 1
+        col_width = (width / len(headers)) - 1 if len(headers) > 0 else width
         for h in headers:
             pdf.cell(col_width, 6, clean_text(h), 1, 0, 'C')
         pdf.ln()
@@ -596,7 +691,6 @@ def render_pdf_field(pdf, field_info, value, width):
             for h in headers:
                 pdf.cell(col_width, 6, clean_text(row.get(h)), 1, 0, 'L')
             pdf.ln()
-
     elif field_type == "Toggle (Sim/Não)":
         display_val = "Sim" if value else "Não"
         pdf.multi_cell(width, 6, display_val)
@@ -608,11 +702,11 @@ def render_pdf_field(pdf, field_info, value, width):
 
 def create_os_pdf(data, os_title=None):
     """
-    Gera um PDF para a Ordem de Serviço, aceitando um título customizado.
+    Gera um PDF para a Ordem de Serviço, com o alinhamento de texto corrigido
+    e a tabela de itens complexa.
     """
     pdf = PDF()
     
-    # Define o título: usa o título passado como argumento ou cria um padrão
     if os_title:
         pdf.os_title = clean_text(os_title)
     else:
@@ -641,73 +735,123 @@ def create_os_pdf(data, os_title=None):
         
         est_height = 15
         if isinstance(field_actual_value, str) and field1['field_type'] == 'Texto Longo':
-            est_height = (len(field_actual_value) / 80) * 8 + 10
+            est_height = (len(field_actual_value) / 80) * 8 + 20
         elif isinstance(field_actual_value, list) and field1['field_type'] == 'Tabela':
-            est_height = len(field_actual_value) * 10 + 20
+            est_height = len(field_actual_value) * 10 + 25
         if pdf.get_y() + est_height > 270:
             pdf.add_page()
             
         is_two_col = field1.get('two_columns', False)
         next_field_is_two_col = (i + 1 < len(layout_fields)) and layout_fields[i+1].get('two_columns', False)
 
-        y_start = pdf.get_y()
         line_height = 6
 
+        # --- LÓGICA DE ALINHAMENTO CORRIGIDA ---
         if is_two_col and next_field_is_two_col:
             field2 = layout_fields[i+1]
-            
+            y_start = pdf.get_y()
+            half_width = (pdf.w - pdf.l_margin - pdf.r_margin) / 2 - 2
+            col2_start_x = pdf.l_margin + half_width + 4
+
+            # --- Coluna 1 ---
             pdf.set_font('Roboto', 'B', 11)
-            pdf.cell(40, line_height, clean_text(f"{field1['field_name']}:"), 0, 0, 'L')
-            pdf.set_xy(pdf.l_margin + 40, y_start)
-            render_pdf_field(pdf, field1, field_actual_value, width=55)
+            pdf.multi_cell(half_width, line_height, clean_text(field1['field_name']), 0, 'L')
+            pdf.set_x(pdf.l_margin) # Garante que o valor comece no início da coluna
+            render_pdf_field(pdf, field1, field_actual_value, width=half_width)
             y_after_col1 = pdf.get_y()
 
+            # --- Coluna 2 ---
+            pdf.set_xy(col2_start_x, y_start) # Move o cursor para o início da segunda coluna
             field2_value_dict = custom_data.get(field2['field_name'], {})
             field2_actual_value = field2_value_dict.get('value') if isinstance(field2_value_dict, dict) else field2_value_dict
-            pdf.set_xy(pdf.l_margin + 100, y_start)
+            
             pdf.set_font('Roboto', 'B', 11)
-            pdf.cell(40, line_height, clean_text(f"{field2['field_name']}:"), 0, 0, 'L')
-            pdf.set_xy(pdf.l_margin + 140, y_start)
-            render_pdf_field(pdf, field2, field2_actual_value, width=50)
+            pdf.multi_cell(half_width, line_height, clean_text(field2['field_name']), 0, 'L')
+            pdf.set_x(col2_start_x) # Garante que o valor comece no início da coluna 2
+            render_pdf_field(pdf, field2, field2_actual_value, width=half_width)
             y_after_col2 = pdf.get_y()
 
+            # --- Finaliza a linha ---
             pdf.set_y(max(y_after_col1, y_after_col2))
             pdf.ln(4)
             i += 2
         else:
+            # Renderiza o campo de coluna única
+            full_width = pdf.w - pdf.l_margin - pdf.r_margin
             pdf.set_font('Roboto', 'B', 11)
-            title_text = clean_text(f"{field1['field_name']}:")
-            title_width = pdf.get_string_width(title_text) + 2
-            
-            pdf.cell(title_width, line_height, title_text, 0, 0, 'L')
-            
-            value_width = pdf.w - pdf.l_margin - pdf.r_margin - title_width
-            render_pdf_field(pdf, field1, field_actual_value, width=value_width)
-            
-            pdf.ln(2)
+            pdf.multi_cell(full_width, line_height, clean_text(field1['field_name']), 0, 'L')
+            pdf.set_x(pdf.l_margin) # Garante o alinhamento para o valor
+            render_pdf_field(pdf, field1, field_actual_value, width=full_width)
+            pdf.ln(4)
             i += 1
-
+        # --- FIM DA CORREÇÃO ---
+            
     items = data.get('items')
+    totals = data.get('items_totals')
+    currency_name = data.get('currency_name', 'Moeda')
+
     if items:
-        if pdf.get_y() > 240: pdf.add_page()
+        if pdf.get_y() > 200: pdf.add_page()
         pdf.ln(10)
         pdf.set_font('Roboto', 'B', 12)
         pdf.cell(0, 10, 'Itens do Catálogo', 0, 1, 'L')
         pdf.ln(2)
 
-        pdf.set_font('Roboto', 'B', 10)
-        pdf.cell(140, 8, 'Item', 1, 0, 'C')
-        pdf.cell(40, 8, 'Valor', 1, 1, 'C')
+        page_width = pdf.w - 2 * pdf.l_margin
+        col_widths = {"id": page_width * 0.1, "desc": page_width * 0.35, "qtd": page_width * 0.1, "val": page_width * 0.15, "total": page_width * 0.15, "brl": page_width * 0.15}
         
-        pdf.set_font('Roboto', '', 10)
+        pdf.set_font('Roboto', 'B', 9)
+        pdf.cell(col_widths["id"], 7, 'Item ID', 1, 0, 'C')
+        pdf.cell(col_widths["desc"], 7, 'Descrição', 1, 0, 'C')
+        pdf.cell(col_widths["qtd"], 7, 'Qtde. Itens', 1, 0, 'C')
+        pdf.cell(col_widths["val"], 7, f'Valor ({currency_name})', 1, 0, 'C')
+        pdf.cell(col_widths["total"], 7, f'Total ({currency_name})', 1, 0, 'C')
+        pdf.cell(col_widths["brl"], 7, 'Valor (R$)', 1, 1, 'C')
+
+        pdf.set_font('Roboto', '', 8)
         for item in items:
-            x_before = pdf.get_x()
-            y_before = pdf.get_y()
-            pdf.multi_cell(140, 8, clean_text(item.get('Item', '')), 1, 'L')
-            y_after = pdf.get_y()
-            cell_height = y_after - y_before
-            pdf.set_xy(x_before + 140, y_before)
-            pdf.cell(40, cell_height, str(item.get('Valor', '')), 1, 1, 'R')
+            desc_text = clean_text(item.get('Item', ''))
+            
+            lines_desc = pdf.multi_cell(col_widths["desc"], 5, desc_text, 0, 'L', split_only=True)
+            cell_height = max(5 * len(lines_desc), 5) 
+
+            if pdf.get_y() + cell_height > 277: 
+                pdf.add_page()
+                pdf.set_font('Roboto', 'B', 9)
+                pdf.cell(col_widths["id"], 7, 'Item ID', 1, 0, 'C')
+                pdf.cell(col_widths["desc"], 7, 'Descrição', 1, 0, 'C')
+                pdf.cell(col_widths["qtd"], 7, 'Qtde. Itens', 1, 0, 'C')
+                pdf.cell(col_widths["val"], 7, f'Valor ({currency_name})', 1, 0, 'C')
+                pdf.cell(col_widths["total"], 7, f'Total ({currency_name})', 1, 0, 'C')
+                pdf.cell(col_widths["brl"], 7, 'Valor (R$)', 1, 1, 'C')
+                pdf.set_font('Roboto', '', 8)
+
+            x_start, y_start = pdf.get_x(), pdf.get_y()
+
+            pdf.multi_cell(col_widths["id"], cell_height, str(item.get('ID do Item', '')), 1, 'C')
+            pdf.set_xy(x_start + col_widths["id"], y_start)
+            pdf.multi_cell(col_widths["desc"], 5, desc_text, 1, 'L')
+            
+            pdf.set_xy(x_start + col_widths["id"] + col_widths["desc"], y_start)
+            
+            pdf.cell(col_widths["qtd"], cell_height, str(item.get('Qtde. Itens', '')), 1, 0, 'C')
+            pdf.cell(col_widths["val"], cell_height, str(item.get('Valor', '')), 1, 0, 'C')
+            pdf.cell(col_widths["total"], cell_height, str(item.get('Total Currency', '')), 1, 0, 'C')
+            
+            brl_value = item.get('Valor (R$)', 0)
+            formatted_brl = f"R$ {brl_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            pdf.cell(col_widths["brl"], cell_height, formatted_brl, 1, 1, 'R')
+
+        if totals:
+            pdf.set_font('Roboto', 'B', 9)
+            total_currency = totals.get('TOTAL_CURRENCY', 0)
+            total_brl = totals.get('TOTAL_BRL', 0)
+            formatted_total_brl = f"R$ {total_brl:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            
+            total_label_width = sum(col_widths.values()) - col_widths["total"] - col_widths["brl"]
+            pdf.cell(total_label_width, 7, 'TOTAL', 1, 0, 'R')
+            pdf.cell(col_widths["total"], 7, str(round(total_currency, 2)), 1, 0, 'C')
+            pdf.cell(col_widths["brl"], 7, formatted_total_brl, 1, 1, 'R')
 
     if data.get('assinantes'):
         if pdf.get_y() > 220: pdf.add_page()
@@ -1363,8 +1507,8 @@ def load_and_process_project_data(jira_client, project_key):
     df['Lead Time (dias)'] = (data_conclusao_dt - data_criacao_dt).dt.days
     df['Cycle Time (dias)'] = df['calculated_cycle_time'] # Adiciona a nova coluna
     
-    df['Data de Criação'] = data_criacao_dt.dt.date
-    df['Data de Conclusão'] = data_conclusao_dt.dt.date
+    df['Data de Criação'] = data_criacao_dt.dt.normalize()
+    df['Data de Conclusão'] = data_conclusao_dt.dt.normalize()
 
     final_columns = ['ID', 'Issue', 'Tipo de Issue', 'Status', 'Responsável', 'Prioridade', 'Categoria de Status', 'Data de Criação', 'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)']
     
@@ -1755,7 +1899,7 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
-    cleaned_response = "" # Inicializa para o bloco except
+    raw_response_text = "" # Inicializa para o bloco except
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
@@ -1764,78 +1908,157 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     field_names = [field['field_name'] for field in layout_fields]
     json_structure_example = {field_name: "" for field_name in field_names}
     
-    # Sanitiza os dados da issue para remover caracteres problemáticos antes de enviar para a IA
+    # Sanitiza os dados da issue para remover caracteres problemáticos
     sanitized_issue_dict = {}
     for key, value in issue_data_dict.items():
         if isinstance(value, str):
-            # Força a codificação para UTF-8, ignorando erros, e depois decodifica.
-            # Isso ajuda a limpar caracteres malformados.
             sanitized_issue_dict[key] = value.encode('utf-8', 'ignore').decode('utf-8')
         else:
             sanitized_issue_dict[key] = value
     issue_context = "\n".join([f"- {key}: {value}" for key, value in sanitized_issue_dict.items() if value])
 
-    # --- PROMPT FINAL, COM EXEMPLO (ONE-SHOT) ---
     prompt = f"""
-    Aja como um robô de extração de dados. Sua única tarefa é preencher um formulário JSON usando as informações de uma tarefa.
-
-    **EXEMPLO:**
-    *INFORMAÇÕES DA TAREFA:*
-    - Resumo: Criar botão de login
-    - Descrição: O botão deve ser azul e levar para a página de login.
-    - Relator: Maria
-    *FORMULÁRIO JSON PARA PREENCHER:*
-    {{
-        "Título": "",
-        "Demandante": "",
-        "Escopo": ""
-    }}
-    *SUA RESPOSTA JSON:*
-    {{
-        "Título": "Criar botão de login",
-        "Demandante": "Maria",
-        "Escopo": "O botão deve ser azul e levar para a página de login."
-    }}
-    ---
-    **TAREFA REAL:**
+    Sua única tarefa é extrair dados de uma tarefa do Jira e preencher um formulário JSON.
 
     **INFORMAÇÕES DA TAREFA:**
     ```
     {issue_context}
     ```
 
-    **FORMULÁRIO JSON PARA PREENCHER (Sua Resposta):**
-    ```json
-    {json.dumps(json_structure_example, indent=2)}
-    ```
-    **REGRAS FINAIS:**
-    1.  As chaves no seu JSON devem ser **EXATAMENTE IGUAIS** às do formulário.
-    2.  Seja o mais **DETALHADO** possível ao preencher os valores.
-    3.  Responda **APENAS** com o código JSON final.
+    **FORMULÁRIO JSON PARA PREENCHER:**
+    {json.dumps(json_structure_example, indent=2, ensure_ascii=False)}
+
+    **REGRAS:**
+    1. As chaves no seu JSON de resposta devem ser EXATAMENTE IGUAIS às do formulário.
+    2. Preencha os valores com o máximo de detalhes possível com base nas informações da tarefa.
+    3. Se uma informação não for encontrada, retorne uma string vazia "" para o campo correspondente.
+    4. Sua resposta final deve ser APENAS o código JSON, sem nenhum outro texto, explicação ou marcadores de código.
     """
 
     try:
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
-            # Extrai o JSON da resposta de forma segura
-            match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            cleaned_response = match.group(0) if match else "{}"
+            raw_response_text = response.text
         else: # OpenAI
             response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
-            cleaned_response = response.choices[0].message.content
+            raw_response_text = response.choices[0].message.content
         
-        if not cleaned_response:
-            return {}
-            
-        return json.loads(cleaned_response)
+        # 1. Remove marcadores de código e espaços em branco
+        cleaned_text = raw_response_text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
         
+        cleaned_text = cleaned_text.strip()
+
+        # 2. Tenta carregar o JSON
+        if not cleaned_text:
+             return {"error": "A IA retornou uma resposta vazia."}
+
+        return json.loads(cleaned_text)
+        
+    except json.JSONDecodeError:
+        # Erro se o texto não for um JSON válido
+        return {"error": "A IA retornou um formato de dados inválido (não é um JSON válido).", "raw_response": raw_response_text}
     except Exception as e:
-        # Retorna o erro e a resposta parcial da IA para depuração
-        return {"error": f"Ocorreu um erro ao processar a resposta da IA: {e}. Resposta recebida: '{cleaned_response}'"}
+        # Captura outras exceções (ex: falha na API)
+        return {"error": f"Ocorreu um erro ao processar a resposta da IA: {e}", "raw_response": raw_response_text}
+
+def get_ai_os_from_text(user_text, layout_fields):
+    """
+    Usa a IA para analisar um texto livre do usuário e preencher os campos
+    de uma Ordem de Serviço em formato JSON, atuando como um analista técnico.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    raw_response_text = ""
+
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        return {"error": "Análise indisponível. Verifique a configuração da sua chave de IA."}
+
+    field_names = [
+        field['field_name'] for field in layout_fields 
+        if field.get('field_type') not in ["Subtítulo", "Valor Calculado", "Imagem"]
+    ]
+    json_structure_example = {field_name: "" for field_name in field_names}
+
+    # --- PROMPT APRIMORADO COM PERSONA E EXEMPLO TÉCNICO ---
+    prompt = f"""
+    **PERSONA:** Você é a Gauge AI, uma assistente especialista em engenharia de software e gestão de projetos. Sua tarefa é atuar como um analista de negócios sênior, transformando uma descrição simples de uma necessidade em um texto técnico, detalhado и bem estruturado, adequado para uma Ordem de Serviço (OS). Você deve inferir detalhes técnicos, detalhar o escopo e enriquecer a descrição inicial.
+
+    **EXEMPLO DE TAREFA:**
+    * **Texto do Usuário:** "Preciso criar uma nova tela de login para o app mobile. O design já foi aprovado e o prazo de entrega é para a próxima sexta-feira."
+    * **Formulário para Preencher:**
+        {{
+            "Título da Demanda": "",
+            "Objetivo": "",
+            "Escopo Detalhado": "",
+            "Prazo Estimado": ""
+        }}
+    * **Sua Resposta JSON (Exemplo de alta qualidade):**
+        {{
+            "Título da Demanda": "Desenvolvimento da Nova Interface de Autenticação para Aplicativo Móvel",
+            "Objetivo": "Implementar uma nova interface de usuário (UI) para o processo de login e autenticação no aplicativo móvel, visando melhorar a experiência do usuário (UX), reforçar a segurança com validação de campos em tempo real e garantir a compatibilidade com os sistemas de backend existentes.",
+            "Escopo Detalhado": "O escopo compreende o desenvolvimento front-end dos seguintes componentes: campo de e-mail com validação de formato, campo de senha com opção de visualização, botão de 'Entrar' com feedback de estado (loading, erro), link para recuperação de senha e integração com a API de autenticação. Deverá ser assegurada a responsividade para diferentes tamanhos de tela e a implementação de tratamento de erros para cenários como credenciais inválidas ou falhas de conexão.",
+            "Prazo Estimado": "Próxima sexta-feira"
+        }}
+    ---
+    **TAREFA REAL:**
+
+    **Texto Fornecido Pelo Usuário:**
+    ```
+    {user_text}
+    ```
+
+    **Formulário JSON para Preencher (Sua Resposta):**
+    {json.dumps(json_structure_example, indent=2, ensure_ascii=False)}
+
+    **REGRAS FINAIS:**
+    1.  Analise o texto do usuário e preencha o formulário JSON, enriquecendo-o com detalhes técnicos e linguagem profissional.
+    2.  As chaves no seu JSON devem ser **EXATAMENTE IGUAIS** às do formulário.
+    3.  Seja o mais **DETALHADO** possível. Infira requisitos técnicos comuns quando apropriado.
+    4.  Responda **APENAS** com o código JSON final, sem nenhum outro texto ou explicação.
+    """
+
+    try:
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            raw_response_text = response.text
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            raw_response_text = response.choices[0].message.content
+        
+        cleaned_text = raw_response_text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
+        
+        cleaned_text = cleaned_text.strip()
+
+        if not cleaned_text:
+             return {"error": "A IA retornou uma resposta vazia."}
+
+        return json.loads(cleaned_text)
+        
+    except json.JSONDecodeError:
+        return {"error": "A IA retornou um formato de dados inválido (não é um JSON válido).", "raw_response": raw_response_text}
+    except Exception as e:
+        return {"error": f"Ocorreu um erro ao processar a resposta da IA: {e}", "raw_response": raw_response_text}
     
 def load_local_css(file_path):
     """Lê um arquivo CSS e o injeta na aplicação Streamlit."""
@@ -1929,3 +2152,86 @@ def calculate_kpi_value(op, field, df):
         return numeric_series.mean()
     
     return 0
+
+def save_help_topic(topic_key, content):
+    """Guarda o conteúdo de um tópico de ajuda num ficheiro JSON."""
+    file_path = Path(__file__).parent / "help_documentation.json"
+    docs = {}
+    if file_path.exists():
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                docs = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass # Se o ficheiro estiver corrompido, será sobrescrito
+    
+    docs[topic_key] = {
+        "content": content,
+        "last_updated": datetime.now().isoformat()
+    }
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(docs, f, indent=4, ensure_ascii=False)
+
+def load_help_topics():
+    """Carrega todos os tópicos de ajuda do ficheiro JSON."""
+    file_path = Path(__file__).parent / "help_documentation.json"
+    if file_path.exists():
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {}
+    return {}
+
+def get_ai_page_summary_and_faq(page_name, page_content):
+    """
+    Usa a IA para analisar o código de uma PÁGINA ESPECÍFICA e gerar
+    uma página de "Sobre" e um FAQ técnico para ela.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+
+    model_client = _get_ai_client_and_model(provider, user_data)
+    if not model_client:
+        return "### Análise Indisponível\nPara usar esta funcionalidade, configure a sua chave de API."
+
+    prompt = f"""
+    Aja como um Redator Técnico (Technical Writer). A sua tarefa é analisar o código-fonte de uma página específica de uma aplicação Streamlit chamada "{page_name}" e gerar uma documentação clara em Português.
+
+    **Código da Página "{page_name}":**
+    ```python
+    {page_content}
+    ```
+
+    **Estrutura da Resposta (Obrigatório):**
+    A sua resposta DEVE ser formatada em Markdown e seguir estritamente esta estrutura:
+
+    ### Sobre a Página: {page_name}
+    (Escreva um parágrafo conciso sobre o propósito principal e a funcionalidade desta página específica, com base no código fornecido.)
+
+    ### Como Usar
+    (Crie um passo a passo ou uma lista de tópicos explicando como um utilizador deve interagir com as principais funcionalidades da página.)
+
+    ### Perguntas Frequentes (FAQ) da Página
+    **(Crie de 3 a 5 perguntas e respostas focadas exclusivamente nesta página. As perguntas devem ser do tipo 'Como eu faço para...' ou 'O que significa...').**
+
+    **P: [Pergunta relevante para a página]**
+    *R: [Resposta clara e direta baseada no código da página.]*
+
+    **P: [Outra pergunta relevante]**
+    *R: [Outra resposta clara.]*
+    """
+
+    try:
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            return response.text
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
+        return "Ocorreu uma falha ao tentar gerar a análise. Por favor, tente novamente."

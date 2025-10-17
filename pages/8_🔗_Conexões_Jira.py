@@ -1,128 +1,139 @@
-# pages/2_🔗_Conexões_Jira.py
+# pages/8_🔗_Conexões_Jira.py
 
 import streamlit as st
 from security import *
-from bson.objectid import ObjectId
+from jira_connector import connect_to_jira, validate_jira_connection
+import uuid
+import time
 from pathlib import Path
-import os
-from config import SESSION_TIMEOUT_MINUTES
-from utils import is_valid_url, is_valid_email
-from jira_connector import connect_to_jira, get_projects
 
 st.set_page_config(page_title="Conexões Jira", page_icon="🔗", layout="wide")
 
 st.header("🔗 Gerir Conexões Jira", divider='rainbow')
 
+# --- BLOCO 1: ALERTA GLOBAL DE CONEXÃO INVÁLIDA ---
+# Verifica se o utilizador foi redirecionado para esta página devido a uma conexão inválida
+if 'invalid_connection_id' in st.session_state and st.session_state.invalid_connection_id:
+    st.error(
+        "A sua conexão Jira que estava ativa é inválida, expirou ou não tem as permissões necessárias. "
+        "Por favor, edite-a com um novo token de API, ative outra conexão ou crie uma nova.",
+        icon="💔"
+    )
+
+# --- Verificações de Segurança ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
-    # Usa uma f-string para formatar a mensagem com o valor da variável
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
     st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
-
-email = st.session_state['email']
-
-# --- Adicionar Nova Conexão ---
-with st.expander("➕ Adicionar Nova Conexão ao Jira", expanded=False):
-    with st.form("new_connection_form", clear_on_submit=False):
-        st.markdown("**Preencha os dados da sua conta Jira:**")
-        col1, col2 = st.columns(2)
-        
-        conn_name = col1.text_input("Nome da Conexão*", placeholder="Ex: Jira da Empresa X")
-        jira_url = col2.text_input("URL do Servidor Jira*", placeholder="https://seu-nome.atlassian.net")
-        jira_email = col1.text_input("Email da Conta Jira*")
-        
-        with col2:
-            api_token = st.text_input("Token da API Jira*", type="password")
-            st.caption("Não sabe como criar um token? [Clique aqui para gerar um novo](https://id.atlassian.com/manage-profile/security/api-tokens)")
-
-        if st.form_submit_button("Adicionar e Testar Conexão", type="primary", use_container_width=True):
-            if all([conn_name, jira_url, jira_email, api_token]) and is_valid_url(jira_url) and is_valid_email(jira_email):
-                with st.spinner("A guardar a conexão..."):
-                    encrypted_token = encrypt_token(api_token)
-                    add_jira_connection(email, conn_name, jira_url, jira_email, encrypted_token)
-                    st.success(f"Conexão '{conn_name}' adicionada com sucesso!")
-                    # Limpa o estado da sessão para forçar a limpeza do formulário APENAS em caso de sucesso
-                    for key in list(st.session_state.keys()):
-                        if key.startswith("FormSubmitter"): # Limpa o estado do formulário
-                            del st.session_state[key]
-                    st.rerun()
-            else:
-                st.error("Por favor, preencha todos os campos corretamente.")
-
-st.divider()
-
-# --- Listar Conexões Existentes ---
-st.subheader("Suas Conexões Guardadas")
-connections = get_user_connections(email)
-
-if not connections:
-    st.info("Nenhuma conexão Jira encontrada. Adicione uma acima para começar.")
-else:
-    for conn in connections:
-        with st.container(border=True):
-            col1, col2, col3 = st.columns([2, 1, 1])
-            with col1:
-                st.markdown(f"**{conn['connection_name']}**")
-                st.caption(f"URL: {conn['jira_url']}")
-            with col2:
-                # Verifica se esta é a conexão atualmente ativa
-                is_active = st.session_state.get('active_connection', {}).get('_id') == conn['_id']
-                
-                # Desabilita o botão se a conexão já estiver ativa
-                if st.button("Ativar Conexão", key=f"activate_{conn['_id']}", use_container_width=True, type="primary", disabled=is_active):
-                    with st.spinner("A testar e ativar a conexão..."):
-                        token = decrypt_token(conn['encrypted_token'])
-                        client = connect_to_jira(conn['jira_url'], conn['jira_email'], token)
-                        
-                        if client:
-                            st.session_state.active_connection = conn
-                            st.session_state.jira_client = client
-                            st.session_state.projects = get_projects(client)
-                            
-                            # Guarda esta conexão como a última ativa para o utilizador
-                            save_last_active_connection(st.session_state['email'], conn['_id'])
-                            
-                            st.success(f"Conexão '{conn['connection_name']}' ativada com sucesso!")
-                            st.rerun()
-                        else:
-                            st.error("Falha na conexão. Verifique os detalhes e o token de API.")
-            
-            with col3:
-                if st.button("Remover", key=f"delete_{conn['_id']}", use_container_width=True):
-                    delete_jira_connection(conn['_id'])
-                    if st.session_state.get('active_connection', {}).get('_id') == conn['_id']:
-                        for key in ['active_connection', 'jira_client', 'projects', 'project_key', 'project_name', 'dynamic_df']:
-                            if key in st.session_state: del st.session_state[key]
-                    st.rerun()
-
-# --- Status da Conexão na Sidebar ---
+    
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            logo_path, 
-            size="large")
-    except FileNotFoundError:
+        st.logo(str(logo_path), size="large")
+    except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
-    
+
     if st.session_state.get("email"):
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
     else:
         st.info("⚠️ Usuário não conectado!")
-        
-    if st.button("Logout", use_container_width=True, type='secondary'):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.switch_page("1_🔑_Autenticação.py")
 
-    st.divider()
+    if st.button("Logout", width='stretch', type='secondary'):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.switch_page("1_🔑_Autenticação.py")
+        
+user_data = find_user(st.session_state['email'])
+connections = user_data.get('jira_connections', [])
+active_connection_id = user_data.get('active_jira_connection')
+
+# --- Adicionar Nova Conexão ---
+st.subheader("Adicionar Nova Conexão")
+with st.form("new_connection_form"):
+    st.text_input("Nome da Conexão*", placeholder="Ex: Jira da Empresa X", key="new_conn_name")
+    st.text_input("URL do Jira*", placeholder="https://sua-empresa.atlassian.net", key="new_conn_url")
+    st.text_input("E-mail do Jira*", placeholder="seu-email@empresa.com", key="new_conn_email")
+    st.text_input("Token de API*", type="password", help="O seu token de API, não a sua senha.", key="new_conn_token")
     
-    if 'active_connection' in st.session_state:
-        active_conn_name = st.session_state.active_connection['connection_name']
-        st.sidebar.success(f"Conexão Ativa: **{active_conn_name}**")
-    else:
-        st.sidebar.warning("Nenhuma conexão ativa nesta sessão.")
+    if st.form_submit_button("Testar e Salvar Conexão", type="primary"):
+        name = st.session_state.new_conn_name
+        url = st.session_state.new_conn_url
+        email = st.session_state.new_conn_email
+        token = st.session_state.new_conn_token
+
+        if all([name, url, email, token]):
+            with st.spinner("A testar a conexão..."):
+                client = connect_to_jira(url, email, token)
+                if client and validate_jira_connection(client):
+                    new_conn = {
+                        "id": str(uuid.uuid4()), "name": name, "jira_url": url,
+                        "jira_email": email, "encrypted_token": encrypt_token(token)
+                    }
+                    connections.append(new_conn)
+                    save_user_connections(st.session_state['email'], connections)
+                    st.success(f"Conexão '{name}' salva e validada com sucesso!")
+                    time.sleep(1); st.rerun()
+                else:
+                    st.error("Falha na conexão. Verifique se a URL, o e-mail e o token de API estão corretos.")
+        else:
+            st.warning("Por favor, preencha todos os campos.")
+
+st.divider()
+
+# --- Listar Conexões Existentes ---
+st.subheader("Conexões Guardadas")
+if not connections:
+    st.info("Nenhuma conexão Jira foi guardada ainda.")
+else:
+    for i, conn in enumerate(connections):
+        conn_id = conn['id']
+        is_active = (conn_id == active_connection_id)
+        # --- BLOCO 2: VERIFICA SE A CONEXÃO ATUAL É A INVÁLIDA ---
+        is_invalid = (conn_id == st.session_state.get('invalid_connection_id'))
+
+        # Constrói o rótulo do expander dinamicamente para incluir os ícones
+        label = conn['name']
+        if is_invalid:
+            label = f"⚠️ {label} (Inválida / Requer Atenção)"
+        elif is_active:
+            label = f"🟢 {label} (Ativa)"
+
+        with st.expander(label):
+            with st.form(f"form_{conn_id}"):
+                st.text_input("Nome da Conexão", value=conn['name'], key=f"name_{conn_id}")
+                st.text_input("URL do Jira", value=conn['jira_url'], key=f"url_{conn_id}")
+                st.text_input("E-mail do Jira", value=conn['jira_email'], key=f"email_{conn_id}")
+                st.text_input("Novo Token de API (Opcional)", type="password", help="Preencha apenas se quiser atualizar o token.", key=f"token_{conn_id}")
+
+                c1, c2, c3 = st.columns([2, 1, 1])
+                with c1:
+                    if st.form_submit_button("Ativar Conexão", type="primary", disabled=is_active):
+                        save_last_active_connection(st.session_state['email'], conn_id)
+
+                        if 'invalid_connection_id' in st.session_state:
+                            del st.session_state['invalid_connection_id']
+                        st.success(f"Conexão '{conn['name']}' ativada. A aplicação irá reiniciar.")
+                        time.sleep(2)
+                        st.switch_page("1_🔑_Autenticação.py")
+                with c2:
+                    if st.form_submit_button("Salvar Alterações"):
+                        connections[i]['name'] = st.session_state[f"name_{conn_id}"]
+                        connections[i]['jira_url'] = st.session_state[f"url_{conn_id}"]
+                        connections[i]['jira_email'] = st.session_state[f"email_{conn_id}"]
+                        new_token = st.session_state[f"token_{conn_id}"]
+                        if new_token:
+                            connections[i]['encrypted_token'] = encrypt_token(new_token)
+                        save_user_connections(st.session_state['email'], connections)
+                        st.success("Alterações salvas!")
+                        time.sleep(1); st.rerun()
+                with c3:
+                    if st.form_submit_button("Apagar"):
+                        delete_jira_connection(conn_id)
+
+                        if st.session_state.get('invalid_connection_id') == conn_id:
+                            del st.session_state['invalid_connection_id']
+                        st.success("Conexão apagada!")
+                        time.sleep(1); st.rerun()

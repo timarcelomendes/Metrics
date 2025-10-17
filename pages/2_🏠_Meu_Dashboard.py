@@ -258,7 +258,6 @@ with st.sidebar:
             st.session_state['remember_email'] = email_to_remember
         st.switch_page("1_🔑_Autenticação.py")
 
-
 # --- BLOCO 4: LÓGICA PRINCIPAL DA PÁGINA E RENDERIZAÇÃO ---
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
@@ -366,6 +365,7 @@ if organize_mode:
     st.subheader("🛠️ Modo de Organização")
     st.markdown("**1. Gerir Dashboards**")
     with st.container(border=True):
+        # --- Secção de Criar e Renomear (sem alterações) ---
         d_col1, d_col2 = st.columns(2)
         with d_col1:
             with st.form("new_dashboard_form"):
@@ -393,6 +393,53 @@ if organize_mode:
                         st.success("Dashboard renomeado!")
                         st.rerun()
         st.divider()
+
+        # --- PARTILHAR DASHBOARD ---
+        st.markdown("###### Partilhar Dashboard")
+        with st.form("assign_dashboard_form"):
+            current_user_email = st.session_state.get('email', '')
+            
+            # Utiliza a sua função para obter a lista de e-mails, já excluindo o utilizador atual
+            other_users_emails = get_all_users(exclude_email=current_user_email)
+            
+            if not other_users_emails:
+                st.info("Não há outros utilizadores registados para quem partilhar o dashboard.")
+                st.form_submit_button("Partilhar Dashboard", width='stretch', disabled=True)
+            else:
+                target_user_email = st.selectbox(
+                    "Selecione um utilizador para receber uma cópia deste dashboard:",
+                    options=other_users_emails
+                )
+                if st.form_submit_button("📬 Partilhar Dashboard", width='stretch'):
+                    # Encontra os dados completos do utilizador de destino e do utilizador atual
+                    target_user_data = find_user(target_user_email)
+                    current_user_data = find_user(current_user_email)
+
+                    if target_user_data and current_user_data:
+                        # Pega a configuração do dashboard ativo do utilizador atual
+                        current_layouts = current_user_data.get('dashboard_layout', {})
+                        active_dashboard_to_copy = current_layouts.get(current_project_key, {}) \
+                            .get('dashboards', {}).get(active_dashboard_id)
+
+                        if active_dashboard_to_copy:
+                            # Carrega os layouts do utilizador de destino
+                            target_layouts = target_user_data.get('dashboard_layout', {})
+                            if current_project_key not in target_layouts:
+                                target_layouts[current_project_key] = {'dashboards': {}}
+                            
+                            # Copia o dashboard para a estrutura de dados do utilizador de destino
+                            target_layouts[current_project_key]['dashboards'][active_dashboard_id] = active_dashboard_to_copy
+                            
+                            # Salva a configuração de layout ATUALIZADA para o utilizador de DESTINO
+                            save_user_dashboard(target_user_email, target_layouts)
+                            st.success(f"Dashboard '{active_dashboard_name}' partilhado com sucesso com {target_user_email}!")
+                        else:
+                            st.error("Não foi possível encontrar o dashboard ativo para partilhar.")
+                    else:
+                        st.error("Ocorreu um erro ao encontrar os dados do utilizador.")
+
+        st.divider()
+
         if len(available_dashboards) > 1:
             if st.button("❌ Apagar Dashboard Atual", width='stretch', type="secondary"):
                 layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
@@ -403,6 +450,7 @@ if organize_mode:
                 st.rerun()
         else:
             st.button("❌ Apagar Dashboard Atual", width='stretch', disabled=True, help="Não pode apagar o seu último dashboard.")
+
     with st.container(border=True):
         st.markdown("**2. Gerir Abas e Gráficos do Dashboard Atual**")
         st.markdown("###### Gerir Abas")
@@ -498,24 +546,35 @@ else:
                 indicator_charts = [c for c in charts_in_tab if c.get('type') == 'indicator']
                 other_charts = [c for c in charts_in_tab if c.get('type') != 'indicator']
                 if indicator_charts:
-                    cols = st.columns(len(indicator_charts))
-                    for idx, chart_config in enumerate(indicator_charts):
-                        with cols[idx]:
-                            original_index = charts_in_tab.index(chart_config)
-                            with st.container(border=True):
-                                # Container para os botões de ação
-                                st.markdown('<div class="card-actions">', unsafe_allow_html=True)
-                                # Colunas para organizar os botões dentro do container flex
-                                b_cols = st.columns(4)
-                                b_cols[0].button("🔼", key=f"indicator_up_{tab_name}_{chart_config['id']}", help="Mover para cima", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0), use_container_width=True)
-                                b_cols[1].button("🔽", key=f"indicator_down_{tab_name}_{chart_config['id']}", help="Mover para baixo", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1), use_container_width=True)
-                                if b_cols[2].button("✏️", key=f"indicator_edit_{tab_name}_{chart_config['id']}", help="Editar", use_container_width=True):
-                                    edit_chart_callback(chart_config)
-                                b_cols[3].button("❌", key=f"indicator_del_{tab_name}_{chart_config['id']}", help="Remover", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts), use_container_width=True)
-                                st.markdown('</div>', unsafe_allow_html=True)
+                    # Define o número máximo de colunas para os indicadores
+                    num_indicator_cols = 4
+                    
+                    # Agrupa os indicadores em linhas, com no máximo `num_indicator_cols` por linha
+                    for i in range(0, len(indicator_charts), num_indicator_cols):
+                        # Pega a fatia de indicadores para a linha atual
+                        row_indicators = indicator_charts[i:i + num_indicator_cols]
+                        
+                        # Cria as colunas para a linha atual
+                        cols = st.columns(len(row_indicators))
+                        
+                        # Renderiza cada indicador na sua respectiva coluna
+                        for idx, chart_config in enumerate(row_indicators):
+                            with cols[idx]:
+                                original_index = charts_in_tab.index(chart_config)
+                                with st.container(border=True):
+                                    # Container para os botões de ação
+                                    st.markdown('<div class="card-actions">', unsafe_allow_html=True)
+                                    # Colunas para organizar os botões dentro do container flex
+                                    b_cols = st.columns(4)
+                                    b_cols[0].button("🔼", key=f"indicator_up_{tab_name}_{chart_config['id']}", help="Mover para cima", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0), use_container_width=True)
+                                    b_cols[1].button("🔽", key=f"indicator_down_{tab_name}_{chart_config['id']}", help="Mover para baixo", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1), use_container_width=True)
+                                    if b_cols[2].button("✏️", key=f"indicator_edit_{tab_name}_{chart_config['id']}", help="Editar", use_container_width=True):
+                                        edit_chart_callback(chart_config)
+                                    b_cols[3].button("❌", key=f"indicator_del_{tab_name}_{chart_config['id']}", help="Remover", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts), use_container_width=True)
+                                    st.markdown('</div>', unsafe_allow_html=True)
 
-                                # Renderiza o gráfico logo abaixo dos botões
-                                render_chart(chart_config, filtered_df, f"chart_indicator_{tab_name}_{chart_config['id']}")
+                                    # Renderiza o gráfico logo abaixo dos botões
+                                    render_chart(chart_config, filtered_df, f"chart_indicator_{tab_name}_{chart_config['id']}")
                     if other_charts:
                         st.divider()
                 if other_charts:

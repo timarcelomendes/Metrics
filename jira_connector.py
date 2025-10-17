@@ -1,7 +1,7 @@
 # jira_connector.py (VERSÃO CORRIGIDA)
 
 import streamlit as st
-from jira import JIRA, Issue
+from jira import JIRA, Issue, JIRAError
 from functools import lru_cache
 import pandas as pd
 import requests
@@ -317,12 +317,29 @@ def get_issue_types(_jira_client):
         st.error(f"Erro ao buscar os tipos de issue: {e}")
         return []
 
-@st.cache_data(ttl=3600, show_spinner="A obter as prioridades do Jira...")
 def get_priorities(_jira_client):
+    """Busca todas as prioridades disponíveis na instância Jira, com tratamento de erro aprimorado."""
     try:
         return _jira_client.priorities()
+    except JIRAError as e:
+        # Verifica se o erro é especificamente de autenticação (401)
+        if e.status_code == 401:
+            st.error(
+                "Falha na autenticação com o Jira (Erro 401). "
+                "Por favor, verifique se a sua Conexão Jira ativa está correta (URL, e-mail e token) e tente novamente.",
+                icon="🚫"
+            )
+        else:
+            # Para outros erros relacionados ao Jira (ex: permissão negada, projeto não encontrado)
+            st.error(
+                f"Ocorreu um erro ao comunicar com o Jira (Erro {e.status_code}). "
+                "Verifique sua conexão e as configurações do projeto.",
+                icon="🔥"
+            )
+        return [] # Retorna uma lista vazia para a aplicação continuar a funcionar
     except Exception as e:
-        st.error(f"Erro ao buscar as prioridades: {e}")
+        # Captura qualquer outro erro inesperado
+        st.error(f"Ocorreu um erro inesperado ao buscar as prioridades: {e}")
         return []
     
 @st.cache_data(ttl=3600, show_spinner="A carregar todos os campos do Jira...")
@@ -430,3 +447,24 @@ def get_jql_issue_count(_client, jql):
         return search_result.total
     except Exception as e:
         return f"Erro na JQL: {e}"
+    
+def validate_jira_connection(jira_client):
+    """
+    Tenta uma operação simples e de baixo custo para validar a conexão com o Jira.
+    Retorna True se a conexão for válida, False caso contrário.
+    """
+    if not jira_client:
+        return False
+    try:
+        # A chamada .server_info() é ideal para um teste de conexão, pois é leve.
+        jira_client.server_info()
+        return True
+    except JIRAError as e:
+        # Erros 401 (Não Autorizado) e 404 (Não Encontrado - URL errada) são falhas de conexão.
+        if e.status_code in [401, 404]:
+            return False
+        # Outros erros de conexão (DNS, timeout) também devem ser considerados falhas.
+        return False
+    except Exception:
+        # Captura outras exceções genéricas (ex: requests.exceptions.ConnectionError)
+        return False

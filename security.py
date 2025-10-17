@@ -605,3 +605,14 @@ def send_assessment_email(recipient_email, recipient_name, sender_name, assessme
     except Exception as e:
         st.error(f"Ocorreu um erro ao enviar o e-mail: {e}")
         return False
+    
+def save_user_connections(email, connections):
+    """
+    Atualiza o campo 'jira_connections' para um utilizador específico no MongoDB.
+    """
+    # Esta operação encontra o utilizador pelo e-mail e define (ou substitui)
+    # o campo 'jira_connections' com a nova lista de conexões fornecida.
+    get_users_collection().update_one(
+        {'email': email},
+        {'$set': {'jira_connections': connections}}
+    )

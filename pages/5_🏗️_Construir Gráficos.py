@@ -16,7 +16,6 @@ from metrics_calculator import *
 st.set_page_config(page_title="Personalizar Gráficos", page_icon="🏗️", layout="wide")
 
 # --- BLOCO 1: INICIALIZAÇÃO E AUTENTICAÇÃO ---
-
 # Validação robusta e função de callback para limpar o estado ao trocar de tipo de gráfico
 if 'new_chart_config' not in st.session_state or not isinstance(st.session_state.new_chart_config, dict):
     st.session_state.new_chart_config = {}
@@ -225,7 +224,7 @@ new_measure_col = None
 if creation_mode == "Construtor Visual":
     config = st.session_state.new_chart_config
     
-    creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica"]
+    creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica", "Gráfico de Tendência"]
     default_creator_index = creator_type_options.index(config.get('creator_type')) if config.get('creator_type') in creator_type_options else 0
     chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
     config['creator_type'] = chart_creator_type
@@ -394,114 +393,131 @@ if creation_mode == "Construtor Visual":
 
         elif chart_creator_type == "Indicador (KPI)":
             config = st.session_state.new_chart_config
-            
-            # --- Início da lógica de construção da UI (sem alterações) ---
             st.markdown("###### **Configuração do Indicador (KPI)**")
-            config['type'] = 'indicator' # Definido para referência interna
-            
-            title = st.text_input("Título do Indicador", config.get('title', ''))
+            config['type'] = 'indicator'
+
+            config['title'] = st.text_input("Título do Indicador", value=config.get('title', ''), key="kpi_title")
 
             theme_options = list(COLOR_THEMES.keys())
             default_theme_name = config.get('color_theme', theme_options[0])
-            color_theme = st.selectbox("Esquema de Cores", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="kpi_color_theme")
+            theme_idx = theme_options.index(default_theme_name) if default_theme_name in theme_options else 0
+            config['color_theme'] = st.selectbox("Esquema de Cores", options=theme_options, index=theme_idx, key="kpi_color_theme")
+
+            # --- NOVA SEÇÃO DE FORMATAÇÃO ---
+            st.markdown("##### Formatação do Valor")
+            f_col1, f_col2 = st.columns(2)
             
-            source_type = st.radio("Fonte de Dados para o KPI", ["Dados do Dashboard", "Consulta JQL"], horizontal=True, key='kpi_source_type', index=0 if config.get('source_type', 'visual') == 'visual' else 1)
-            source_type_value = 'jql' if source_type == "Consulta JQL" else 'visual'
+            decimal_places_value = config.get('kpi_decimal_places', 2)
+            config['kpi_decimal_places'] = f_col1.number_input(
+                "Casas Decimais", 
+                min_value=0, 
+                max_value=5, 
+                value=int(decimal_places_value), 
+                step=1, 
+                key="kpi_decimal_places"
+            )
 
-            jql_a, jql_b, jql_operation, jql_baseline = None, None, None, None
-            num_op, num_field, use_den, den_op, den_field = None, None, False, None, None
+            config['kpi_format_as_percentage'] = f_col2.toggle(
+                "Formatar como Percentual (%)", 
+                value=config.get('kpi_format_as_percentage', False),
+                key="kpi_format_percentage"
+            )
+            st.divider()
+            # --- FIM DA NOVA SEÇÃO ---
 
-            if source_type_value == "jql":
-                 st.info("Crie um KPI usando até 3 consultas JQL. Use o botão 'Testar' para validar cada uma.")
-                 jql_a = st.text_area("Consulta JQL 1 (Valor A)*", config.get('jql_a', ''), height=100)
-                 if st.button("Testar JQL 1"):
-                     if jql_a:
-                         with st.spinner("A testar..."):
-                             count = get_jql_issue_count(st.session_state.jira_client, jql_a)
-                             if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
-                             else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
-                 
-                 jql_b = st.text_area("Consulta JQL 2 (Valor B)", config.get('jql_b', ''), height=100)
-                 if st.button("Testar JQL 2"):
-                     if jql_b:
-                         with st.spinner("A testar..."):
-                             count = get_jql_issue_count(st.session_state.jira_client, jql_b)
-                             if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
-                             else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
+            source_options = ["Dados do Dashboard", "Consulta JQL"]
+            source_idx = 1 if config.get('source_type') == 'jql' else 0
+            source_type_selection = st.radio("Fonte de Dados para o KPI", source_options, horizontal=True, index=source_idx, key="kpi_source_type")
+            config['source_type'] = 'jql' if source_type_selection == "Consulta JQL" else 'visual'
 
-                 op_options_jql = ["Nenhuma", "Dividir (A / B)", "Somar (A + B)", "Subtrair (A - B)", "Multiplicar (A * B)"]
-                 default_op_jql = config.get('jql_operation')
-                 default_op_index = op_options_jql.index(default_op_jql) if default_op_jql in op_options_jql else 0
-                 jql_operation = st.selectbox("Operação entre A e B", op_options_jql, key='jql_op', index=default_op_index)
+            if config['source_type'] == "jql":
+                st.info("Crie um KPI usando até 3 consultas JQL. Use o botão 'Testar' para validar cada uma.")
+                config['jql_a'] = st.text_area("Consulta JQL 1 (Valor A)*", config.get('jql_a', ''), height=100, key="kpi_jql_a")
+                if st.button("Testar JQL 1", key="kpi_test_jql_a"):
+                    if config['jql_a']:
+                        with st.spinner("A testar..."):
+                            count = get_jql_issue_count(st.session_state.jira_client, config['jql_a'])
+                            if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
+                            else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
 
-                 jql_baseline = st.text_area("Consulta JQL da Linha de Base (Valor C)", config.get('jql_baseline', ''), height=100)
-                 if st.button("Testar JQL da Linha de Base"):
-                     if jql_baseline:
-                         with st.spinner("A testar..."):
-                             count = get_jql_issue_count(st.session_state.jira_client, jql_baseline)
-                             if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
-                             else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
-            else: # source_type == 'visual'
+                config['jql_b'] = st.text_area("Consulta JQL 2 (Valor B)", config.get('jql_b', ''), height=100, key="kpi_jql_b")
+                if st.button("Testar JQL 2", key="kpi_test_jql_b"):
+                    if config['jql_b']:
+                        with st.spinner("A testar..."):
+                            count = get_jql_issue_count(st.session_state.jira_client, config['jql_b'])
+                            if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
+                            else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
+
+                op_options_jql = ["Nenhuma", "Dividir (A / B)", "Somar (A + B)", "Subtrair (A - B)", "Multiplicar (A * B)"]
+                op_idx_jql = op_options_jql.index(config.get('jql_operation')) if config.get('jql_operation') in op_options_jql else 0
+                config['jql_operation'] = st.selectbox("Operação entre A e B", op_options_jql, index=op_idx_jql, key="kpi_jql_op")
+
+                config['jql_baseline'] = st.text_area("Consulta JQL da Linha de Base (Valor C)", config.get('jql_baseline', ''), height=100, key="kpi_jql_baseline")
+                if st.button("Testar JQL da Linha de Base", key="kpi_test_jql_baseline"):
+                    if config['jql_baseline']:
+                        with st.spinner("A testar..."):
+                            count = get_jql_issue_count(st.session_state.jira_client, config['jql_baseline'])
+                            if isinstance(count, int): st.success(f"✅ Sucesso! A consulta retornou {count} issues.")
+                            else: st.error(f"❌ Falha. A consulta retornou um erro: {count}")
+            
+            else:  # source_type == 'visual'
                 op_options = ["Contagem", "Soma", "Média"]
                 st.markdown("##### Numerador")
                 col1, col2 = st.columns(2)
-                num_op = col1.selectbox("Operação do Numerador", op_options, key="num_op", index=op_options.index(config.get('num_op')) if config.get('num_op') in op_options else 0)
-                if num_op == "Contagem":
-                    col2.selectbox("Campo do Numerador", ["Contagem de Issues"], key="num_field_count", disabled=True)
-                    num_field = "Contagem de Issues"
-                else:
-                    num_field = col2.selectbox("Campo do Numerador", numeric_cols, key="num_field_numeric", index=numeric_cols.index(config.get('num_field')) if config.get('num_field') in numeric_cols else 0)
                 
-                use_den = st.toggle("Usar Denominador (para calcular percentagem)", key='use_den', value=config.get('use_den', False))
-                if use_den:
+                num_op_idx = op_options.index(config.get('num_op', 'Contagem')) if config.get('num_op') in op_options else 0
+                config['num_op'] = col1.selectbox("Operação do Numerador", op_options, index=num_op_idx, key="kpi_num_op")
+                
+                if config.get('num_op') == "Contagem":
+                    col2.selectbox("Campo do Numerador", ["Contagem de Issues"], disabled=True, key="kpi_num_field_count")
+                    config['num_field'] = "Contagem de Issues"
+                else:
+                    num_field_idx = numeric_cols.index(config.get('num_field')) if config.get('num_field') in numeric_cols else 0
+                    config['num_field'] = col2.selectbox("Campo do Numerador", numeric_cols, index=num_field_idx, key="kpi_num_field_numeric")
+
+                config['use_den'] = st.toggle("Usar Denominador (para calcular proporção)", value=config.get('use_den', False), key="kpi_use_den")
+                
+                if config.get('use_den'):
                     st.markdown("##### Denominador")
                     col3, col4 = st.columns(2)
-                    den_op = col3.selectbox("Operação do Denominador", op_options, key="den_op", index=op_options.index(config.get('den_op')) if config.get('den_op') in op_options else 0)
-                    if den_op == "Contagem":
-                        col4.selectbox("Campo do Denominador", ["Contagem de Issues"], key="den_field_count", disabled=True)
-                        den_field = "Contagem de Issues"
+                    
+                    den_op_idx = op_options.index(config.get('den_op', 'Contagem')) if config.get('den_op') in op_options else 0
+                    config['den_op'] = col3.selectbox("Operação do Denominador", op_options, index=den_op_idx, key="kpi_den_op")
+                    
+                    if config.get('den_op') == "Contagem":
+                        col4.selectbox("Campo do Denominador", ["Contagem de Issues"], disabled=True, key="kpi_den_field_count")
+                        config['den_field'] = "Contagem de Issues"
                     else:
-                        den_field = col4.selectbox("Campo do Denominador", numeric_cols, key="den_field_numeric", index=numeric_cols.index(config.get('den_field')) if config.get('den_field') in numeric_cols else 0)
-            
+                        den_field_idx = numeric_cols.index(config.get('den_field')) if config.get('den_field') in numeric_cols else 0
+                        config['den_field'] = col4.selectbox("Campo do Denominador", numeric_cols, index=den_field_idx, key="kpi_den_field_numeric")
 
-            # Lógica de validação e criação do chart_config
-            if source_type_value == "jql" and not (jql_a and jql_a.strip()):
-                chart_config = {}
-                st.warning("Por favor, preencha a 'Consulta JQL 1 (Valor A)' para gerar a pré-visualização.")
+                st.divider()
+                config['use_baseline'] = st.toggle("Exibir Variação (Delta)", value=config.get('use_baseline', False), key="kpi_use_baseline")
+
+                if config.get('use_baseline'):
+                    st.markdown("##### Linha de Base (Valor de Referência para o Delta)")
+                    col5, col6 = st.columns(2)
+
+                    base_op_idx = op_options.index(config.get('base_op', 'Contagem')) if config.get('base_op') in op_options else 0
+                    config['base_op'] = col5.selectbox("Operação da Linha de Base", op_options, index=base_op_idx, key="kpi_base_op")
+
+                    if config.get('base_op') == "Contagem":
+                        col6.selectbox("Campo da Linha de Base", ["Contagem de Issues"], disabled=True, key="kpi_base_field_count")
+                        config['base_field'] = "Contagem de Issues"
+                    else:
+                        base_field_idx = numeric_cols.index(config.get('base_field')) if config.get('base_field') in numeric_cols else 0
+                        config['base_field'] = col6.selectbox("Campo da Linha de Base", numeric_cols, index=base_field_idx, key="kpi_base_field_numeric")
+
+            # Lógica de validação e atribuição final
+            is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
+            is_visual_valid = config.get('source_type') == 'visual' and config.get('num_op') and config.get('num_field')
+
+            if is_jql_valid or is_visual_valid:
+                chart_config = {k: v for k, v in config.items() if v is not None}
             else:
-                # Cria um dicionário de configuração limpo, contendo apenas as chaves relevantes para o KPI
-                kpi_config = {
-                    'creator_type': 'Indicador (KPI)',
-                    'type': 'indicator',
-                    'title': title,
-                    'source_type': source_type_value,
-                    'id': config.get('id') # Preserva o ID original durante a edição
-                }
-
-                if source_type_value == 'jql':
-                    kpi_config.update({
-                        'jql_a': jql_a,
-                        'jql_b': jql_b,
-                        'jql_operation': jql_operation,
-                        'jql_baseline': jql_baseline
-                    })
-                else: # source is 'visual'
-                    kpi_config.update({
-                        'num_op': num_op,
-                        'num_field': num_field,
-                        'use_den': use_den
-                    })
-                    if use_den:
-                        kpi_config.update({
-                            'den_op': den_op,
-                            'den_field': den_field
-                        })
-                
-                # Remove chaves com valor None e atribui à configuração final
-                chart_config = {k: v for k, v in kpi_config.items() if v is not None}
-                
-                # Atualiza o estado da sessão com a configuração limpa para consistência
-                st.session_state.new_chart_config = chart_config.copy()
+                chart_config = {}
+                if config.get('source_type') == 'jql':
+                    st.warning("Por favor, preencha a 'Consulta JQL 1 (Valor A)' para gerar a pré-visualização.")
 
         elif chart_creator_type == "Tabela Dinâmica":
             config = st.session_state.new_chart_config
@@ -552,6 +568,40 @@ if creation_mode == "Construtor Visual":
 
                 chart_config = pivot_config.copy()
                 st.session_state.new_chart_config = chart_config.copy()
+        
+        elif chart_creator_type == "Gráfico de Tendência":
+            config = st.session_state.new_chart_config
+            st.markdown("###### **Configuração da Métrica com Gráfico de Tendência**")
+            config['type'] = 'metric_with_chart'
+            config['title'] = st.text_input("Título da Métrica", value=config.get('title', ''))
+
+            st.markdown("##### **Configuração do Gráfico de Tendência**")
+            mc_cols1, mc_cols2, mc_cols3 = st.columns(3)
+            
+            chart_type_options = ["Linha", "Área", "Barra"]
+            chart_type_idx = chart_type_options.index(config.get('mc_chart_type')) if config.get('mc_chart_type') in chart_type_options else 0
+            config['mc_chart_type'] = mc_cols1.selectbox("Tipo de Gráfico", chart_type_options, index=chart_type_idx, help="O tipo de gráfico a ser exibido sob a métrica.")
+            
+            dimension_options = date_cols + categorical_cols
+            dimension_idx = dimension_options.index(config.get('mc_dimension')) if config.get('mc_dimension') in dimension_options else 0
+            config['mc_dimension'] = mc_cols2.selectbox("Dimensão (Eixo X do gráfico)", options=dimension_options, index=dimension_idx, help="O campo que define a sequência de dados, como uma data ou categoria.")
+            
+            measure_options_mc = ["Contagem de Issues"] + numeric_cols
+            measure_idx = measure_options_mc.index(config.get('mc_measure')) if config.get('mc_measure') in measure_options_mc else 0
+            config['mc_measure'] = mc_cols3.selectbox("Medida (Eixo Y do gráfico)", options=measure_options_mc, index=measure_idx, help="O valor numérico ou a contagem de issues a ser plotada no gráfico.")
+
+            st.markdown("##### **Configuração dos Valores Principais da Métrica**")
+            mv_cols1, mv_cols2 = st.columns(2)
+
+            main_value_options = ["Último valor da série", "Soma de todos os valores", "Média de todos os valores"]
+            main_value_idx = main_value_options.index(config.get('mc_main_value_agg')) if config.get('mc_main_value_agg') in main_value_options else 0
+            config['mc_main_value_agg'] = mv_cols1.selectbox("Valor Principal a Exibir", main_value_options, index=main_value_idx)
+            
+            delta_agg_options = ["Variação (último - primeiro)", "Variação (último - penúltimo)"]
+            delta_agg_idx = delta_agg_options.index(config.get('mc_delta_agg')) if config.get('mc_delta_agg') in delta_agg_options else 0
+            config['mc_delta_agg'] = mv_cols2.selectbox("Valor do Delta (Comparação)", delta_agg_options, index=delta_agg_idx)
+            
+            chart_config = config.copy()
 
 else: # Modo IA
     st.subheader("🤖 Assistente de Geração de Gráficos com IA")
@@ -642,6 +692,7 @@ if editing_mode:
     with col2:
         if st.button("Cancelar Edição", width='stretch'):
             cleanup_editor_state_and_switch_page()
+
 else: # Lógica para adicionar novo gráfico (sem alterações)
     if st.button("Adicionar ao Dashboard Ativo", type="primary", width='stretch', icon="➕"):
         if chart_config and chart_config.get('title'):
