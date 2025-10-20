@@ -27,7 +27,7 @@ if check_session_timeout():
 # --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados
-    user_connections = get_user_connections(st.session_state['email'])
+    user_connections = get_users_collection(st.session_state['email'])
     
     if not user_connections:
         # Cenário 1: O utilizador nunca configurou uma conexão
@@ -77,14 +77,22 @@ with st.sidebar:
         
         # --- BOTÃO PARA CARREGAR OS DADOS ---
         if st.button("Processar Análise", use_container_width=True, type="primary"):
-                df_loaded = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
-                st.session_state.strategic_df = df_loaded
-                st.session_state.selected_project_name_for_diag = selected_project_name
-                st.session_state.selected_context_projects_for_diag = selected_context_projects
-                st.session_state.strategic_data_loaded = True
-                if 'strategic_diagnosis' in st.session_state:
-                    del st.session_state['strategic_diagnosis']
-                st.rerun()
+            # Garanta que a linha abaixo está a desempacotar em DUAS variáveis
+            df_from_func, issues_from_func = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+            
+            # Armazena cada objeto na sua respetiva variável de sessão
+            st.session_state.strategic_df = df_from_func
+            st.session_state.raw_issues_for_fluxo = issues_from_func
+            
+            # Guarda os outros estados da sessão
+            st.session_state.selected_project_name_for_diag = selected_project_name
+            st.session_state.selected_context_projects_for_diag = selected_context_projects
+            st.session_state.strategic_data_loaded = True
+            
+            # Limpa o diagnóstico antigo
+            if 'strategic_diagnosis' in st.session_state:
+                del st.session_state['strategic_diagnosis']
+            st.rerun()
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 if not st.session_state.get('strategic_data_loaded'):
@@ -97,15 +105,21 @@ selected_project_name = st.session_state.selected_project_name_for_diag
 selected_context_projects = st.session_state.selected_context_projects_for_diag
 projects = st.session_state.get('projects', {})
 
-st.info(f"Dados carregados para o projeto **{selected_project_name}**. Agora, selecione o cliente e gere o diagnóstico.", icon="✅")
+# Bloco Novo e Corrigido
+CLIENT_FIELD_NAME = "Cliente"
 
-CLIENT_FIELD_NAME = "Cliente" 
-if CLIENT_FIELD_NAME not in df.columns:
-    st.error(f"O campo '{CLIENT_FIELD_NAME}' não foi encontrado nos dados carregados. Por favor, ative-o em 'Minha Conta'.")
-    st.stop()
-
-client_list = ["— Visão Agregada do Projeto —"] + sorted(df[CLIENT_FIELD_NAME].dropna().unique())
-selected_client = st.selectbox("Selecione um Cliente para Análise:", options=client_list)
+# Verifica se a coluna 'Cliente' existe e se tem algum valor preenchido
+if CLIENT_FIELD_NAME in df.columns and not df[CLIENT_FIELD_NAME].dropna().empty:
+    # Se sim, mostra o seletor de cliente normalmente
+    st.info(f"Dados carregados para o projeto **{selected_project_name}**. Agora, selecione um cliente ou a visão agregada para gerar o diagnóstico.", icon="✅")
+    client_list = ["— Visão Agregada do Projeto —"] + sorted(df[CLIENT_FIELD_NAME].dropna().unique())
+    selected_client = st.selectbox("Selecione um Cliente para Análise:", options=client_list)
+else:
+    # Se não, informa o utilizador e assume a visão agregada por defeito
+    st.info(f"O campo '{CLIENT_FIELD_NAME}' não está em uso neste projeto. A análise será feita na **Visão Agregada**.", icon="ℹ️")
+    selected_client = "— Visão Agregada do Projeto —"
+    # Mostra o seletor desativado para o utilizador entender a seleção atual
+    st.selectbox("Cliente para Análise:", options=[selected_client], disabled=True)
 
 if st.button("Gerar Diagnóstico com IA", use_container_width=True):
     # Filtra os dados com base no cliente selecionado
@@ -206,7 +220,7 @@ if 'strategic_diagnosis' in st.session_state:
                     st.markdown(message["content"])
 
             # Input para a nova pergunta do utilizador
-            if prompt := st.chat_input("Faça uma pergunta sobre o diagnóstico..."):
+            if prompt := st.chat_message("Faça uma pergunta sobre o diagnóstico..."):
                 # Adiciona e exibe a pergunta do utilizador
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
                 with st.chat_message("Você", avatar="👤"):

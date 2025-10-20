@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 from sendgrid.helpers.mail import Mail, To, From, Content
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from config import MASTER_USERS
+GLOBAL_CONFIG_PATH = Path("global_app_configs.json")
 
 # --- CONSTANTES PADRÃO ---
 AVAILABLE_STANDARD_FIELDS = {
@@ -68,13 +70,14 @@ def save_config(data, file_path):
         json.dump(data, f, indent=4)
 
 # --- Configuração de Hashing e Criptografia ---
-cipher_suite = Fernet(st.secrets["SECRET_KEY"].encode())
+cipher_suite = Fernet(st.secrets["app_settings"]["SECRET_KEY"].encode())
 
 def verify_password(plain_password, hashed_password):
     """Verifica uma senha usando bcrypt."""
     password_bytes = plain_password.encode('utf-8')
+    truncated_bytes = password_bytes[:72] 
     hashed_password_bytes = hashed_password.encode('utf-8')
-    return bcrypt.checkpw(password_bytes, hashed_password_bytes)
+    return bcrypt.checkpw(truncated_bytes, hashed_password_bytes)
 
 def get_password_hash(password):
     """Cria um hash de uma senha usando bcrypt."""
@@ -97,7 +100,7 @@ def decrypt_token(encrypted_token):
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
 def get_db_client():
-    return MongoClient(st.secrets["MONGO_CONNECTION_STRING"])
+    return MongoClient(MONGO_URI)
 
 def get_db():
     return get_db_client().get_database("dashboard_metrics")
@@ -165,9 +168,6 @@ def add_jira_connection(user_email, conn_name, url, api_email, encrypted_token):
         "encrypted_token": encrypted_token
     })
 
-def get_user_connections(user_email):
-    return list(get_connections_collection().find({"user_email": user_email}))
-
 def delete_jira_connection(connection_id):
     """Apaga uma conexão pelo seu ID de string (UUID)."""
     get_connections_collection().delete_one({"id": connection_id})
@@ -202,37 +202,38 @@ def save_last_project(email, project_key):
         {'$set': {'last_project_key': project_key}}
     )
 
+GLOBAL_CONFIG_PATH = Path("global_app_configs.json")
 @st.cache_data
 def get_global_configs():
-    """Obtém as configurações globais, com lógica de fallback e migração."""
-    collection = get_app_configs_collection()
-    configs = collection.find_one({'_id': 'global_settings'})
+    """
+    Lê o ficheiro de configuração global do disco e armazena-o no session_state.
+    Isto garante que as configurações estão sempre atualizadas em todas as páginas.
+    """
+    configs = {}
+    if GLOBAL_CONFIG_PATH.is_file():
+        try:
+            with open(GLOBAL_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                configs = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Erro ao ler o ficheiro de configuração global: {e}")
+            configs = {}
     
-    if configs is None:
-        configs = {
-            '_id': 'global_settings',
-            'playbooks': DEFAULT_PLAYBOOKS,
-            'admin_emails': [],
-        }
-        collection.insert_one(configs)
-    
-    if 'playbooks' not in configs:
-        configs['playbooks'] = DEFAULT_PLAYBOOKS
-
+    st.session_state['global_configs'] = configs
     return configs
 
-def save_global_configs(config_data):
-    """Guarda ou atualiza as configurações globais e limpa o cache da função de leitura."""
-    get_app_configs_collection().update_one(
-        {"_id": "global_settings"},
-        {"$set": config_data},
-        upsert=True
-    )
-    get_global_configs.clear()
+def save_global_configs(configs):
+    """
+    Salva o dicionário de configurações globais no ficheiro JSON.
+    """
+    try:
+        with open(GLOBAL_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(configs, f, indent=4)
+        st.session_state['global_configs'] = configs # Atualiza a sessão imediatamente
+        return True
+    except IOError as e:
+        print(f"Erro ao salvar o ficheiro de configuração global: {e}")
+        return False
     
-    if 'global_configs' in st.session_state:
-        st.session_state['global_configs'] = config_data
-
 # --- Funções de Gestão de Dados do Product Hub (Simplificadas) ---
 def get_user_product_hub_data(user_email):
     user = find_user(user_email)
@@ -606,3 +607,25 @@ def save_user_connections(email, connections):
         {'email': email},
         {'$set': {'jira_connections': connections}}
     )
+
+def update_user_data(email, new_data):
+    """Atualiza o documento de um utilizador na coleção."""
+    users_collection = get_users_collection()
+    # Usa $set para atualizar os campos sem apagar o documento inteiro
+    users_collection.update_one({'email': email}, {'$set': new_data})
+
+def is_admin(email):
+    # 1. Verifica se o e-mail está na lista de MASTER_USERS do secrets.toml
+    if email in MASTER_USERS:
+        return True
+    
+    # 2. Se não for um master, verifica a flag 'is_admin' no banco de dados
+    user = find_user(email)
+    return user and user.get('is_admin', False)
+
+def set_admin_status(email, is_admin_bool):
+    # Esta verificação impede que um admin remova as permissões de um master
+    if email in MASTER_USERS:
+        st.warning("Não é possível alterar as permissões de um utilizador master.")
+        return
+    update_user_configs(email, {'is_admin': is_admin_bool})

@@ -29,7 +29,7 @@ if check_session_timeout():
 
 if 'jira_client' not in st.session_state:
     # Verifica se o utilizador tem alguma conexão guardada na base de dados
-    user_connections = get_user_connections(st.session_state['email'])
+    user_connections = get_users_collection(st.session_state['email'])
     
     if not user_connections:
         # Cenário 1: O utilizador nunca configurou uma conexão
@@ -109,20 +109,39 @@ if df is None or df.empty or not current_project_key:
 
 # --- Seletor de Cliente ---
 st.subheader("Seleção de Contexto")
-CLIENT_FIELD_NAME = "Cliente" 
-if CLIENT_FIELD_NAME not in df.columns:
-    st.error(f"O campo '{CLIENT_FIELD_NAME}' não foi encontrado nos dados carregados. Por favor, ative-o em 'Minha Conta'.")
-    st.stop()
 
-client_list = ["— Visão Agregada do Projeto —"] + sorted(df[CLIENT_FIELD_NAME].dropna().unique())
-selected_client = st.selectbox("Selecione um Cliente para Análise:", options=client_list)
+# Carrega a configuração global para o campo estratégico
+global_configs = get_global_configs()
+STRATEGIC_FIELD_NAME = global_configs.get('strategic_grouping_field')
+
+# Verifica se o campo estratégico foi definido na Administração E se existe no DataFrame
+if not STRATEGIC_FIELD_NAME:
+    st.warning(
+        "Nenhum campo de agrupamento estratégico foi definido.",
+        icon="⚠️"
+    )
+    st.info("A análise será apresentada de forma agregada. Para agrupar por um campo (ex: Cliente), peça a um administrador para o configurar em **Administração > Configurações do Sistema > Campos Jira**.")
+    selected_client = "— Visão Agregada do Projeto —"
+    
+elif STRATEGIC_FIELD_NAME not in df.columns:
+    st.error(
+        f"O campo estratégico configurado ('{STRATEGIC_FIELD_NAME}') não foi encontrado nos dados carregados.",
+        icon="🚫"
+    )
+    st.info("Isto pode acontecer se o campo não estiver ativo em 'Minha Conta' ou se não existir no projeto. A análise será apresentada de forma agregada.")
+    selected_client = "— Visão Agregada do Projeto —"
+
+else:
+    # O campo está configurado e existe, exibe o seletor
+    client_list = ["— Visão Agregada do Projeto —"] + sorted(df[STRATEGIC_FIELD_NAME].dropna().unique())
+    selected_client = st.selectbox(f"Selecione um {STRATEGIC_FIELD_NAME} para Análise:", options=client_list)
 
 # --- Filtra os dados com base no cliente selecionado ---
 if selected_client == "— Visão Agregada do Projeto —":
     scope_df = df
     scope_issues = st.session_state.get('raw_issues_for_fluxo', [])
 else:
-    scope_df = df[df[CLIENT_FIELD_NAME] == selected_client]
+    scope_df = df[df[STRATEGIC_FIELD_NAME] == selected_client]
     scope_issue_keys = scope_df['Issue'].tolist()
     all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
     scope_issues = [issue for issue in all_raw_issues if issue.key in scope_issue_keys]

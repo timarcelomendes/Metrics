@@ -1,395 +1,238 @@
-# pages/7_⚙️_Configurações.py
+# pages/7_⚙️_Configuracoes.py
 
 import streamlit as st
+from pathlib import Path
 from security import *
 from config import *
-from jira_connector import *
-from pathlib import Path
 import pandas as pd
-import uuid
+from jira_connector import get_jira_statuses, get_project_issue_types, get_jira_fields
 
-st.set_page_config(page_title="Configurações", page_icon="⚙️", layout="wide")
+st.set_page_config(page_title="Configurações do Projeto", page_icon="⚙️", layout="wide")
 
-st.header("⚙️ Configurações da Aplicação", divider='rainbow')
-
+# --- BLOCO DE AUTENTICAÇÃO E CONEXÃO ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
-    st.stop()
-    
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
-st.markdown("""<style> [data-testid="stHorizontalBlock"] { align-items-center; } </style>""", unsafe_allow_html=True)
-
-configs = st.session_state.get('global_configs', get_global_configs())
-projects = st.session_state.get('projects', {})
-user_data = find_user(st.session_state['email'])
-
-def update_global_configs_and_rerun(configs_dict):
-    save_global_configs(configs_dict)
-    get_global_configs.clear()
-    st.session_state['global_configs'] = get_global_configs()
-    st.success("Configurações salvas com sucesso!")
-    st.rerun()
-
+# --- BARRA LATERAL ---
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
         st.logo(str(logo_path), size="large")
     except (FileNotFoundError, AttributeError):
-        st.write("Gauge Metrics") 
-
+        st.write("Gauge Metrics")
+    
     if st.session_state.get("email"):
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    else:
-        st.info("⚠️ Usuário não conectado!")
+
+    projects = st.session_state.get('projects', {})
+    project_names = list(projects.keys())
+    
+    last_project_key = find_user(st.session_state['email']).get('last_project_key')
+    default_index = project_names.index(next((name for name, key in projects.items() if key == last_project_key), None)) if last_project_key and last_project_key in projects.values() else 0
+
+    selected_project_name = st.selectbox(
+        "Selecione o Projeto para Configurar:",
+        options=project_names,
+        key="project_selector_config",
+        index=default_index,
+        placeholder="Escolha um projeto..."
+    )
+
+    if selected_project_name:
+        st.session_state.project_key = projects[selected_project_name]
+        st.session_state.project_name = selected_project_name
 
     if st.button("Logout", width='stretch', type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
-        
-try:
-    all_statuses_from_jira = [status.name for status in get_statuses(st.session_state.jira_client)]
-    all_issue_types = [it.name for it in get_issue_types(st.session_state.jira_client)]
-    all_priorities = [p.name for p in get_priorities(st.session_state.jira_client)]
-except Exception as e:
-    st.error(f"Não foi possível carregar os metadados do Jira (status, tipos, etc.): {e}")
-    all_statuses_from_jira, all_issue_types, all_priorities = [], [], []
 
-tab_projetos, tab_campos, tab_email = st.tabs([
-    "Configurações por Projeto", 
-    "Campos Globais", 
-    "E-mail"
+# --- Interface Principal ---
+if 'project_key' not in st.session_state:
+    st.info("⬅️ Por favor, selecione um projeto na barra lateral para começar.")
+    st.stop()
+
+project_key = st.session_state.project_key
+st.header(f"⚙️ Configurações do Projeto: **{st.session_state.project_name}**", divider='rainbow')
+
+# Carrega ambas as configurações: a específica do projeto e as globais
+project_config = get_project_config(project_key) or {}
+configs = get_global_configs() # <-- ADICIONADO PARA O CAMPO ESTRATÉGICO
+
+tab_mapping, tab_estimation, tab_time_in_status, tab_colors = st.tabs([
+    "Status (Workflow)", "Estimativa", "Tempo no Status", "Cores"
 ])
 
-with tab_projetos:
-    st.subheader("Configurações Específicas por Projeto")
-    project_names = list(projects.keys())
+with tab_mapping:
+    st.subheader("Mapeamento de Status do Workflow")
+    st.info("Para calcular métricas como Lead Time e Cycle Time, precisamos que nos ajude a entender o seu fluxo de trabalho.")
     
-    if not project_names:
-        st.warning("Nenhum projeto encontrado.")
-    else:
-        # --- FILTRO ÚNICO DE PROJETO ---
-        selected_project_name = st.selectbox(
-            "Selecione um projeto para configurar:", 
-            options=project_names,
-            key="config_project_selector"
+    try:
+        statuses = get_jira_statuses(st.session_state.jira_client, project_key)
+        status_names = sorted(list(set([status.name for status in statuses])))
+        status_mapping = project_config.get('status_mapping', {})
+
+        st.markdown("##### 🛫 Status Iniciais")
+        st.caption("Selecione os status que representam o início do trabalho (quando o 'relógio' do Cycle Time começa a contar).")
+        initial_states = st.multiselect("Status Iniciais", options=status_names, default=status_mapping.get('initial', []), label_visibility="collapsed")
+
+        st.markdown("##### ✅ Status Finais")
+        st.caption("Selecione os status que representam a conclusão do trabalho (quando o 'relógio' do Lead Time e Cycle Time para).")
+        done_states = st.multiselect("Status Finais", options=status_names, default=status_mapping.get('done', []), label_visibility="collapsed")
+
+        st.markdown("##### ❌ Status a Ignorar")
+        st.caption("Selecione quaisquer status que devam ser completamente ignorados nos cálculos (ex: Cancelado, Duplicado).")
+        ignored_states = st.multiselect("Status a Ignorar", options=status_names, default=project_config.get('ignored_statuses', []), label_visibility="collapsed")
+
+        if st.button("Salvar Mapeamento de Status", type="primary", width='stretch'):
+            project_config['status_mapping'] = {'initial': initial_states, 'done': done_states}
+            project_config['ignored_statuses'] = ignored_states
+            save_project_config(project_key, project_config)
+            st.success("Mapeamento de status salvo com sucesso!")
+
+    except Exception as e:
+        st.error(f"Não foi possível buscar os status do projeto no Jira. Verifique a conexão e as permissões.")
+        st.expander("Detalhes do Erro").error(e)
+
+with tab_estimation:
+    st.subheader("Configuração de Estimativa")
+    st.info("Selecione o campo que a sua equipa utiliza para estimar o tamanho ou esforço das tarefas (issues).")
+    
+    try:
+        all_fields = get_jira_fields(st.session_state.jira_client)
+        custom_fields = [{'name': f['name'], 'id': f['id']} for f in all_fields if f.get('custom', False)]
+        
+        field_options = {"Nenhum": None}
+        sp_field = next((f for f in all_fields if f['id'] == 'customfield_10020'), None) # Assumindo ID de Story Points
+        if sp_field:
+            field_options[f"Padrão: {sp_field['name']} ({sp_field['id']})"] = {'name': sp_field['name'], 'id': sp_field['id'], 'source': 'standard_numeric'}
+        
+        for field in custom_fields:
+             field_options[f"Personalizado: {field['name']} ({field['id']})"] = {'name': field['name'], 'id': field['id'], 'source': 'custom'}
+
+        current_selection_name = project_config.get('estimation_field', {}).get('name')
+        selection_key = next((k for k, v in field_options.items() if v and v['name'] == current_selection_name), "Nenhum")
+
+        selected_field_key = st.selectbox(
+            "Selecione o Campo de Estimativa",
+            options=list(field_options.keys()),
+            index=list(field_options.keys()).index(selection_key)
         )
-        project_key = projects[selected_project_name]
-        project_config = get_project_config(project_key) or {}
 
-        # --- GRUPO DE CONFIGURAÇÕES ---
-        with st.expander("🔁 **Mapeamento de Status do Workflow**"):
-            st.caption("Defina os status que marcam o início, o fim e os que devem ser ignorados no fluxo deste projeto.")
-            status_mapping = project_config.get('status_mapping', {}); 
+        if st.button("Salvar Campo de Estimativa", type="primary", width='stretch'):
+            project_config['estimation_field'] = field_options[selected_field_key]
+            save_project_config(project_key, project_config)
+            st.success("Campo de estimativa salvo com sucesso!")
 
-            if not status_mapping and all_statuses_from_jira:
-                initial_suggestion = [s for s in all_statuses_from_jira if any(keyword in s.lower() for keyword in ['to do', 'a fazer', 'backlog', 'aberto', 'novo'])]
-                progress_suggestion = [s for s in all_statuses_from_jira if any(keyword in s.lower() for keyword in ['em andamento', 'in progress', 'desenvolvimento'])]
-                done_suggestion = [s for s in all_statuses_from_jira if any(keyword in s.lower() for keyword in ['done', 'concluído', 'pronto', 'finalizado', 'resolvido'])]
-                ignored_suggestion = [s for s in all_statuses_from_jira if any(keyword in s.lower() for keyword in ['cancelado', 'cancelled'])]
-            else:
-                initial_suggestion = status_mapping.get('initial', [])
-                progress_suggestion = status_mapping.get('in_progress', [])
-                done_suggestion = status_mapping.get('done', [])
-                ignored_suggestion = status_mapping.get('ignored', [])
+        # --- INÍCIO DO CÓDIGO MOVIDO ---
+        st.divider()
+        
+        st.markdown("###### 🎯 Campo de Agrupamento Estratégico")
+        st.info("Selecione o campo que será usado para agrupar dados em visões executivas (Ex: Cliente, Produto, Squad).")
+        st.caption("Nota: Este é um campo global. Os campos disponíveis aqui são ativados na página de 'Administração'.")
 
-            initial_states_str = st.text_area("Status Iniciais (separados por vírgula)", value=", ".join(initial_suggestion), key=f"initial_{project_key}")
-            in_progress_states_str = st.text_area("Status 'Em Andamento' (separados por vírgula)", value=", ".join(progress_suggestion), help="Status que iniciam o Cycle Time.", key=f"progress_{project_key}")
-            done_states_str = st.text_area("Status Finais (separados por vírgula)", value=", ".join(done_suggestion), key=f"done_{project_key}")
-            ignored_states_str = st.text_area("Status a Ignorar (separados por vírgula)", value=", ".join(ignored_suggestion), help="Issues nestes status são excluídas.", key=f"ignored_{project_key}")
-
-            if st.button("Salvar Mapeamento de Status", width='stretch', key=f"save_status_{project_key}"):
-                project_config['status_mapping'] = {
-                    'initial': [s.strip() for s in initial_states_str.split(',') if s.strip()],
-                    'in_progress': [s.strip() for s in in_progress_states_str.split(',') if s.strip()],
-                    'done': [s.strip() for s in done_states_str.split(',') if s.strip()],
-                    'ignored': [s.strip() for s in ignored_states_str.split(',') if s.strip()]
-                }
-                save_project_config(project_key, project_config)
-                st.success(f"Mapeamento de status para '{selected_project_name}' salvo com sucesso!")
-
-        with st.expander(f"🎯 **Campo de Estimativa**"):
-            st.caption("Este campo será usado para cálculos de Velocidade e Burndown/Burnup neste projeto.")
+        # Pega a lista de campos personalizados que já foram salvos (da config global)
+        saved_custom_fields = configs.get('custom_fields', [])
+        if not isinstance(saved_custom_fields, list): saved_custom_fields = []
+        
+        field_options_strategic = []
+        field_format_map = {}
+        
+        for field in saved_custom_fields:
+            if isinstance(field, dict) and 'name' in field and 'id' in field:
+                field_options_strategic.append(field['name'])
+                field_format_map[field['name']] = f"{field['name']} ({field['id']})"
+        
+        if not field_options_strategic:
+            st.warning("Nenhum campo personalizado foi ativado na 'Administração' global. Ative-os lá para poder selecionar um campo de agrupamento.")
+        else:
+            current_strategic_field = configs.get('strategic_grouping_field')
             
-            custom_fields = configs.get('custom_fields', [])
-            standard_fields = configs.get('available_standard_fields', {})
-            numeric_fields = {field['name']: {'id': field['id'], 'source': 'custom'} for field in custom_fields if field.get('type') == 'Numérico'}
-            numeric_fields.update({name: {'id': details['id'], 'source': 'standard'} for name, details in standard_fields.items() if details.get('type') == 'Numérico'})
-            standard_time_fields = {"Estimativa Original (Horas)": {'id': 'timeoriginalestimate', 'source': 'standard_time'}, "Tempo Gasto (Horas)": {'id': 'timespent', 'source': 'standard_time'}}
-            all_estimation_options = {**numeric_fields, **standard_time_fields}
-            
-            if not all_estimation_options:
-                st.warning("Nenhum campo numérico ou de tempo configurado. Adicione-os na aba 'Campos Globais'.")
-            else:
-                options = ["Nenhum (usar contagem de issues)"] + list(all_estimation_options.keys())
-                saved_field_name = project_config.get('estimation_field', {}).get('name')
-                default_index = options.index(saved_field_name) if saved_field_name in options else 0
-                selected_field_name = st.selectbox("Campo para Pontos/Estimativa:", options=options, index=default_index, key=f"select_est_{project_key}")
-                if st.button(f"Salvar Campo de Estimativa", width='stretch', key=f"save_est_field_{project_key}"):
-                    if selected_field_name == "Nenhum (usar contagem de issues)":
-                        project_config['estimation_field'] = {}
-                    else:
-                        project_config['estimation_field'] = {'name': selected_field_name, **all_estimation_options[selected_field_name]}
-                    save_project_config(project_key, project_config)
-                    st.success("Configuração de estimativa salva!"); st.rerun()
+            try:
+                default_index = field_options_strategic.index(current_strategic_field) if current_strategic_field in field_options_strategic else 0
+            except ValueError:
+                default_index = 0
 
-        with st.expander(f"📅 **Mapeamento de Datas**"):
-            st.caption("Defina os campos de data para 'Prevista' e 'Conclusão' usados nas métricas deste projeto.")
-            
-            date_mappings = project_config.get('date_mappings', {})
-            all_custom_fields = configs.get('custom_fields', [])
-            date_fields = {f['name']: f['id'] for f in all_custom_fields if f.get('type') == 'Data'}
-            date_field_options = [""] + list(date_fields.keys())
-            
-            with st.form(f"date_mapping_form_{project_key}"):
-                due_date_field_name = next((name for name, id_ in date_fields.items() if id_ == date_mappings.get('due_date_field_id')), "")
-                selected_due_date = st.selectbox("Campo para 'Data Prevista'", options=date_field_options, index=date_field_options.index(due_date_field_name) if due_date_field_name else 0)
-
-                completion_date_field_name = next((name for name, id_ in date_fields.items() if id_ == date_mappings.get('completion_date_field_id')), "")
-                selected_completion_date = st.selectbox("Campo para 'Data de Conclusão' (Opcional)", options=date_field_options, index=date_field_options.index(completion_date_field_name) if completion_date_field_name else 0, help="Se não for selecionado, a data será calculada pelo status.")
-
-                if st.form_submit_button("Salvar Mapeamento de Datas", width='stretch'):
-                    project_config['date_mappings'] = {
-                        'due_date_field_id': date_fields.get(selected_due_date),
-                        'completion_date_field_id': date_fields.get(selected_completion_date)
-                    }
-                    save_project_config(project_key, project_config)
-                    st.success(f"Mapeamento de datas salvo!"); st.rerun()
-
-        with st.expander(f"📈 **Métricas Avançadas**"):
-            st.caption("Ative cálculos que podem exigir mais tempo de processamento durante o carregamento dos dados.")
-
-            calculate_time_in_status = st.toggle(
-                "Calcular tempo em cada status",
-                value=project_config.get('calculate_time_in_status', False),
-                help="Quando ativado, a aplicação calcula o tempo total (em dias) que cada issue permaneceu em cada status do workflow. Essencial para a métrica 'Tempo em Status' no construtor de gráficos.",
-                key=f"time_in_status_toggle_{project_key}"
+            selected_field = st.selectbox(
+                "Selecione o campo para agrupamento estratégico:",
+                options=field_options_strategic,
+                index=default_index,
+                format_func=lambda name: field_format_map.get(name, name)
             )
 
-            if st.button(f"Salvar Configurações de Métricas", width='stretch', key=f"save_metrics_config_{project_key}"):
-                project_config['calculate_time_in_status'] = calculate_time_in_status
-                save_project_config(project_key, project_config)
-                st.success("Configuração de métricas avançadas guardada!"); st.rerun()
-        
-        with st.expander("⏱️ **Configurações de SLA (Service Level Agreement)**"):
-            st.caption("Crie e gira as políticas de SLA para este projeto.")
-            
-            if 'editing_sla_policy_id' not in st.session_state:
-                st.session_state.editing_sla_policy_id = None
-            
-            sla_policies = project_config.get('sla_policies', [])
-
-            with st.container(border=True): # Sub-container para adicionar
-                with st.form(f"new_sla_policy_form_{project_key}", clear_on_submit=True):
-                    st.markdown("**Adicionar Nova Política de SLA**")
-                    policy_name = st.text_input("Nome da Política*", placeholder="Ex: Bugs Críticos")
-                    
-                    st.markdown("###### Escopo da Política (Quais issues serão afetadas?)")
-                    col1, col2 = st.columns(2)
-                    apply_to_types = col1.multiselect("Tipos de Tarefa", options=all_issue_types, placeholder="Todos os tipos")
-                    apply_to_priorities = col2.multiselect("Prioridades", options=all_priorities, placeholder="Todas as prioridades")
-
-                    st.markdown("###### Metas (em horas úteis)")
-                    col1, col2 = st.columns(2)
-                    ttr_goal = col1.number_input("Meta de Tempo de Resolução (horas)", min_value=0, step=1)
-                    tfr_goal = col2.number_input("Meta de Tempo de Primeira Resposta (horas)", min_value=0, step=1)
-
-                    st.markdown("###### Workflow do SLA (Como o tempo é contado?)")
-                    col1, col2, col3 = st.columns(3)
-                    start_statuses = col1.multiselect("Status de Início", options=all_statuses_from_jira, help="Quando a contagem do SLA começa.")
-                    pause_statuses = col2.multiselect("Status de Pausa", options=all_statuses_from_jira, help="Quando a contagem é pausada.")
-                    stop_statuses = col3.multiselect("Status de Fim", options=all_statuses_from_jira, help="Quando a contagem do SLA para.")
-                    
-                    if st.form_submit_button("Adicionar Política de SLA", type="primary"):
-                        if policy_name:
-                            new_policy = {
-                                "id": str(uuid.uuid4()), "name": policy_name,
-                                "issue_types": apply_to_types, "priorities": apply_to_priorities,
-                                "resolution_hours": ttr_goal, "first_response_hours": tfr_goal,
-                                "start_statuses": start_statuses, "pause_statuses": pause_statuses,
-                                "stop_statuses": stop_statuses
-                            }
-                            sla_policies.append(new_policy)
-                            project_config['sla_policies'] = sla_policies
-                            save_project_config(project_key, project_config)
-                            st.rerun()
-                        else:
-                            st.error("O nome da política é obrigatório.")
-            
-            st.divider()
-            st.markdown("**Políticas de SLA Atuais**")
-            if not sla_policies:
-                st.info("Nenhuma política de SLA foi criada para este projeto.")
-            else:
-                for i, policy in enumerate(sla_policies):
-                    # Lógica para editar ou visualizar políticas existentes... (igual ao código original)
-                    if st.session_state.editing_sla_policy_id == policy['id']:
-                        with st.form(f"edit_sla_form_{policy['id']}"):
-                            st.subheader(f"Editando: {policy['name']}")
-                            
-                            edited_name = st.text_input("Nome da Política*", value=policy['name'])
-                            c1, c2 = st.columns(2)
-                            edited_types = c1.multiselect("Tipos de Tarefa", options=all_issue_types, default=policy['issue_types'])
-                            edited_priorities = c2.multiselect("Prioridades", options=all_priorities, default=policy['priorities'])
-                            c1, c2 = st.columns(2)
-                            edited_ttr = c1.number_input("Tempo de Resolução", value=policy['resolution_hours'], min_value=0, step=1)
-                            edited_tfr = c2.number_input("Primeira Resposta", value=policy['first_response_hours'], min_value=0, step=1)
-                            c1, c2, c3 = st.columns(3)
-                            edited_start = c1.multiselect("Status de Início", options=all_statuses_from_jira, default=policy['start_statuses'])
-                            edited_pause = c2.multiselect("Status de Pausa", options=all_statuses_from_jira, default=policy['pause_statuses'])
-                            edited_stop = c3.multiselect("Status de Fim", options=all_statuses_from_jira, default=policy['stop_statuses'])
-                            c1, c2 = st.columns(2)
-                            if c1.form_submit_button("Salvar Alterações", width='stretch', type="primary"):
-                                sla_policies[i] = { "id": policy['id'], "name": edited_name, "issue_types": edited_types, "priorities": edited_priorities, "resolution_hours": edited_ttr, "first_response_hours": edited_tfr, "start_statuses": edited_start, "pause_statuses": edited_pause, "stop_statuses": edited_stop }
-                                project_config['sla_policies'] = sla_policies
-                                save_project_config(project_key, project_config)
-                                st.session_state.editing_sla_policy_id = None
-                                st.rerun()
-                            if c2.form_submit_button("Cancelar", width='stretch'):
-                                st.session_state.editing_sla_policy_id = None
-                                st.rerun()
-                    else:
-                        with st.container(border=True):
-                            c1, c2 = st.columns([0.8, 0.2])
-                            with c1: st.subheader(policy['name'])
-                            with c2:
-                                btn_cols = st.columns(2)
-                                if btn_cols[0].button("✏️", key=f"edit_sla_{policy['id']}", help="Editar", width='stretch'):
-                                    st.session_state.editing_sla_policy_id = policy['id']
-                                    st.rerun()
-                                if btn_cols[1].button("❌", key=f"del_sla_{policy['id']}", help="Remover", width='stretch'):
-                                    sla_policies.pop(i)
-                                    project_config['sla_policies'] = sla_policies
-                                    save_project_config(project_key, project_config)
-                                    st.rerun()
-                            c1, c2 = st.columns(2)
-                            c1.metric("Meta de Resolução", f"{policy['resolution_hours']} horas")
-                            c2.metric("Meta de Primeira Resposta", f"{policy['first_response_hours']} horas")
-                            st.write(f"**Aplica-se a:** {', '.join(policy['issue_types']) if policy['issue_types'] else 'Todos os tipos'}, {', '.join(policy['priorities']) if policy['priorities'] else 'Todas as prioridades'}")
-                            st.write(f"**Workflow:** Inicia em `{', '.join(policy['start_statuses'])}`, Pausa em `{', '.join(policy['pause_statuses'])}`, Termina em `{', '.join(policy['stop_statuses'])}`")
-
-
-with tab_campos:
-    st.subheader("Gerir Campos Globais para Análise")
-    
-    with st.spinner("A buscar todos os campos disponíveis no Jira..."):
-        all_jira_fields = get_all_jira_fields(st.session_state.jira_client) 
-
-    if not all_jira_fields:
-        st.warning("Nenhum campo foi encontrado na sua instância do Jira.", icon="⚠️")
-        st.info(
-            """
-            **Possíveis Causas:**
-            * **Permissões Insuficientes:** A conexão Jira que está a usar pode não ter as permissões de administrador necessárias para listar todos os campos.
-            * **Erro de Rede:** Pode ter ocorrido uma falha temporária de comunicação com o seu Jira.
-            **Ação Recomendada:** Verifique se o token de API associado à sua conexão ativa tem permissões de **"Administrar o Jira"** e tente recarregar a página.
-            """
-        )
-    else:
-        standard_fields = {f['name']: f for f in all_jira_fields if not f['custom']}
-        custom_fields = [f for f in all_jira_fields if f['custom']]
-        
-        global_configs = get_global_configs()
-        saved_standard_fields = global_configs.get('available_standard_fields', {})
-        
-        st.markdown("---")
-        st.markdown("#### Campos Padrão (Standard Fields)")
-        st.caption("Selecione os campos padrão do Jira que deseja disponibilizar para análise.")
-        
-        valid_defaults = [field for field in saved_standard_fields.keys() if field in standard_fields]
-        selected_standard_names = st.multiselect(
-            "Campos Padrão", options=sorted(standard_fields.keys()),
-            default=valid_defaults, label_visibility="collapsed"
-        )
-        
-        st.markdown("---")
-        st.markdown("#### Campos Personalizados (Custom Fields)")
-        st.caption("Adicione e nomeie os campos personalizados que são importantes para o seu negócio.")
-
-        df_custom = pd.DataFrame(custom_fields)
-
-        # Verifica se o DataFrame não está vazio e se contém as colunas necessárias
-        if not df_custom.empty and all(col in df_custom.columns for col in ['id', 'name']):
-            df_custom_to_edit = df_custom[['id', 'name']].copy()
-            df_custom_to_edit.rename(columns={'id': 'ID (Não editável)', 'name': 'Nome do Campo'}, inplace=True)
-        else:
-            # Se não houver campos personalizados, cria um DataFrame vazio com as colunas certas
-            # para evitar que o st.data_editor cause um erro.
-            df_custom_to_edit = pd.DataFrame(columns=['ID (Não editável)', 'Nome do Campo'])
-            st.info("Nenhum campo personalizado editável foi encontrado nesta instância do Jira.")
-
-        edited_custom_fields_df = st.data_editor(
-            df_custom_to_edit, use_container_width=True, hide_index=True,
-            column_config={
-                "ID (Não editável)": st.column_config.TextColumn("ID (Não editável)", disabled=True),
-                "Nome do Campo": st.column_config.TextColumn("Nome do Campo (Pode renomear)", required=True)
-            }
-        )
-        
-        st.divider()
-
-        if st.button("Salvar Configurações de Campos Globais", type="primary", width='stretch'):
-            new_standard_fields = {name: standard_fields[name] for name in selected_standard_names}
-            configs['available_standard_fields'] = new_standard_fields
-            
-            final_custom_list = []
-            original_custom_map = {f['id']: f for f in custom_fields}
-            for index, row in edited_custom_fields_df.iterrows():
-                field_id = row["ID (Não editável)"]
-                original_field_data = original_custom_map.get(field_id, {})
-                final_custom_list.append({
-                    "id": field_id,
-                    "name": row["Nome do Campo"],
-                    "type": original_field_data.get('type', 'Desconhecido')
-                })
-            configs['custom_fields'] = final_custom_list
-            
-            update_global_configs_and_rerun(configs)
-
-with tab_email:
-    st.subheader("Configuração de Envio de E-mail")
-    st.caption("Configure as credenciais para que a aplicação possa enviar e-mails em seu nome.")
-    
-    current_smtp_configs = get_smtp_configs() or {}
-    current_provider = current_smtp_configs.get('provider', 'SendGrid')
-
-    st.markdown("##### 1. Provedor de E-mail")
-    provider_options = ["SendGrid", "Gmail (SMTP)"]
-    provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
-    email_provider = st.radio("Selecione o seu provedor:", provider_options, horizontal=True, index=provider_index)
-    
-    with st.form("smtp_config_form"):
-        st.markdown("##### 2. Credenciais")
-        
-        if email_provider == 'Gmail (SMTP)':
-            st.info("Para usar o Gmail, você precisa de criar uma 'app password' na sua conta. Não use a sua senha normal.")
-            from_email = st.text_input("E-mail de Origem", value=current_smtp_configs.get('from_email', '') if current_provider == 'Gmail (SMTP)' else '')
-            app_password = st.text_input("Senha de Aplicação (App Password)", value=current_smtp_configs.get('app_password', '') if current_provider == 'Gmail (SMTP)' else '', type="password")
-            
-            smtp_configs_to_save = {
-                'provider': 'Gmail (SMTP)', 'from_email': from_email, 'app_password': app_password
-            }
-            
-        elif email_provider == 'SendGrid':
-            st.info("Obtenha a sua API Key na sua conta do SendGrid.")
-            from_email = st.text_input("E-mail de Origem", value=current_smtp_configs.get('from_email', '') if current_provider == 'SendGrid' else '')
-            sendgrid_api_key = st.text_input("SendGrid API Key", value=current_smtp_configs.get('api_key', '') if current_provider == 'SendGrid' else '', type="password")
-            
-            smtp_configs_to_save = {
-                'provider': 'SendGrid', 'from_email': from_email, 'api_key': sendgrid_api_key
-            }
-        
-        if st.form_submit_button("Salvar Credenciais", width='stretch', type="primary"):
-            if from_email:
-                save_smtp_configs(smtp_configs_to_save)
-                st.success("Configurações de e-mail salvas com sucesso!")
-                st.session_state['smtp_configs'] = get_smtp_configs()
+            if st.button("Salvar Campo Estratégico", key="save_strategic_field", width='stretch'):
+                configs_to_save = get_global_configs()
+                configs_to_save['strategic_grouping_field'] = selected_field
+                save_global_configs(configs_to_save)
+                get_global_configs.clear()
+                st.success(f"O campo '{selected_field}' foi definido como o campo de agrupamento estratégico!")
                 st.rerun()
+        # --- FIM DO CÓDIGO MOVIDO ---
+
+    except Exception as e:
+        st.error("Não foi possível carregar os campos de estimativa do Jira.")
+        st.expander("Detalhes do Erro").error(e)
+
+
+with tab_time_in_status:
+    st.subheader("Cálculo de Tempo por Status")
+    st.info("Ative esta opção para que a aplicação calcule o tempo que cada issue permaneceu em cada status do workflow.")
+    calculate_time = st.toggle("Ativar cálculo de tempo por status", value=project_config.get('calculate_time_in_status', False))
+    if st.button("Salvar Configuração de Tempo", type="primary", width='stretch'):
+        project_config['calculate_time_in_status'] = calculate_time
+        save_project_config(project_key, project_config)
+        st.success("Configuração de cálculo de tempo salva com sucesso!")
+
+with tab_colors:
+    st.subheader("Personalização de Cores dos Gráficos")
+    st.info("Personalize as cores associadas aos Status e Tipos de Issue para os seus gráficos.")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### 🎨 Cores por Status")
+        status_colors = project_config.get('status_colors', DEFAULT_COLORS['status_colors']).copy()
+        try:
+            statuses = get_jira_statuses(st.session_state.jira_client, project_key)
+            if statuses:
+                status_names = sorted(list(set([status.name for status in statuses])))
+                for status_name in status_names:
+                    status_colors[status_name] = st.color_picker(
+                        f"Cor para '{status_name}'", 
+                        value=status_colors.get(status_name, "#000000"), 
+                        key=f"status_color_{status_name}"
+                    )
             else:
-                st.error("Por favor, preencha o e-mail de origem.")
+                st.warning("Nenhum status foi encontrado para este projeto no Jira.")
+        except Exception as e:
+            st.error(f"Ocorreu um erro ao processar os status.")
+            st.expander("Detalhes do Erro").error(e)
+
+    with col2:
+        st.markdown("##### 🎨 Cores por Tipo de Issue")
+        type_colors = project_config.get('type_colors', DEFAULT_COLORS['type_colors']).copy()
+        try:
+            issue_types = get_project_issue_types(st.session_state.jira_client, project_key)
+            if issue_types:
+                type_names = sorted(list(set([it.name for it in issue_types])))
+                for type_name in type_names:
+                    type_colors[type_name] = st.color_picker(
+                        f"Cor para '{type_name}'", 
+                        value=type_colors.get(type_name, "#000000"), 
+                        key=f"type_color_{type_name}"
+                    )
+            else:
+                st.warning("Nenhum tipo de issue foi encontrado para este projeto no Jira.")
+        except Exception as e:
+            st.error(f"Ocorreu um erro ao processar os tipos de issue.")
+            st.expander("Detalhes do Erro").error(e)
+
+    if st.button("Salvar Cores Personalizadas", type="primary", width='stretch'):
+        project_config['status_colors'] = status_colors
+        project_config['type_colors'] = type_colors
+        save_project_config(project_key, project_config)
+        st.success("Cores personalizadas salvas com sucesso!")

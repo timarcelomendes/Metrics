@@ -1,4 +1,4 @@
-# utils.py (VERSÃO FINAL CORRIGIDA E OTIMIZADA)
+# utils.py (VERSÃO CORRIGIDA)
 
 import streamlit as st
 import json, os, pandas as pd
@@ -8,8 +8,9 @@ from fpdf import FPDF
 import pandas as pd
 import uuid
 import base64
+from jira import JIRA
 import google.generativeai as genai
-from security import find_user, decrypt_token
+from security import find_user, decrypt_token, get_project_config, get_global_configs
 from datetime import datetime, date, timedelta
 import openai
 from sklearn.linear_model import LinearRegression
@@ -35,67 +36,144 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 import unicodedata
+from stqdm import stqdm
 
+# utils.py
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_and_process_project_data(_jira_client: JIRA, project_key: str):
+    """
+    Carrega, processa e enriquece os dados de um projeto Jira, incluindo os campos 
+    padrão e personalizados que o utilizador ativou no seu perfil.
+    """
+    from jira_connector import get_project_issues, get_jira_fields
+    from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time
+    from security import find_user, get_project_config 
+    import pandas as pd 
+    from stqdm import stqdm 
+    from security import get_global_configs
+
+    user_data = find_user(st.session_state['email'])
+    project_config = get_project_config(project_key) or {}
+    user_enabled_standard_fields = user_data.get('standard_fields', [])
+    user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+
+    if 'project_name' not in st.session_state or not st.session_state.project_name:
+        try:
+            project_details = _jira_client.project(project_key)
+            st.session_state.project_name = project_details.name
+        except Exception:
+            st.session_state.project_name = project_key
+
+    with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
+        # Use a variável correta _jira_client (com sublinhado)
+        raw_issues_list = get_project_issues(_jira_client, project_key)
+        issues = filter_ignored_issues(raw_issues_list, project_config)
+    
+    if not issues:
+        st.warning("Nenhuma issue foi encontrada para este projeto (ou todas foram ignoradas pela sua configuração de status).")
+        return pd.DataFrame(), []
+
+    all_jira_fields = get_jira_fields(_jira_client) # Corrigido aqui também
+    field_name_to_id_map = {field['name']: field['id'] for field in all_jira_fields}
+    
+    global_configs = get_global_configs()
+    custom_field_id_to_name_map = {
+        field['id']: field['name'] 
+        for field in global_configs.get('custom_fields', []) 
+        if field.get('name') in user_enabled_custom_fields
+    }
+
+    def extract_value(raw_value):
+        if raw_value is None: return None
+        if hasattr(raw_value, 'displayName'): return raw_value.displayName
+        if hasattr(raw_value, 'value'): return raw_value.value
+        if hasattr(raw_value, 'name'): return raw_value.name
+        if isinstance(raw_value, list):
+            return ', '.join(filter(None, [str(extract_value(item)) for item in raw_value]))
+        return str(raw_value)
+
+    processed_issues_data = []
+    for issue in stqdm(issues, desc="A processar issues"):
+        fields = issue.fields
+        
+        issue_data = {
+            'ID': issue.key,
+            'Issue': fields.summary,
+            'Tipo de Issue': getattr(fields.issuetype, 'name', None),
+            'Status': getattr(fields.status, 'name', None),
+            'Responsável': getattr(fields.assignee, 'displayName', 'Não atribuído'),
+            'Prioridade': getattr(fields.priority, 'name', None),
+            'Categoria de Status': getattr(getattr(fields.status, 'statusCategory', None), 'name', None),
+            'Data de Criação': pd.to_datetime(fields.created).tz_localize(None).normalize(),
+        }
+
+        completion_date_raw = find_completion_date(issue, project_config)
+        completion_date_dt = pd.to_datetime(completion_date_raw, errors='coerce')
+
+        if pd.notna(completion_date_dt):
+            issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize()
+        else:
+            issue_data['Data de Conclusão'] = pd.NaT
+
+        issue_data['Lead Time (dias)'] = (issue_data['Data de Conclusão'] - issue_data['Data de Criação']).days if pd.notna(issue_data['Data de Conclusão']) else None
+        issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
+
+        for field_name in user_enabled_standard_fields:
+            field_id = field_name_to_id_map.get(field_name)
+            if field_id:
+                issue_data[field_name] = extract_value(getattr(fields, field_id, None))
+        
+        for field_id, field_name in custom_field_id_to_name_map.items():
+            issue_data[field_name] = extract_value(getattr(fields, field_id, None))
+
+        processed_issues_data.append(issue_data)
+
+    df = pd.DataFrame(processed_issues_data)
+    
+    all_expected_fields = user_enabled_standard_fields + user_enabled_custom_fields
+    for field in all_expected_fields:
+        if field not in df.columns:
+            df[field] = None
+            
+    return df, issues
 
 def apply_filters(df, filters):
-    """Aplica a lista de filtros do construtor de gráficos a um DataFrame."""
+    """Aplica uma lista de filtros a um DataFrame de forma segura."""
     if not filters:
         return df
-        
-    df_filtered = df.copy()
     
+    df_filtered = df.copy()
     for f in filters:
-        field = f.get('field')
-        op = f.get('operator')
-        value = f.get('value')
-
-        if not field or not op or value is None or (isinstance(value, list) and not value):
+        if not isinstance(f, dict) or 'column' not in f or 'operator' not in f:
             continue
 
-        if field not in df_filtered.columns:
-            st.warning(f"Não foi possível aplicar o filtro: o campo '{field}' não foi encontrado nos dados atuais.")
+        col = f['column']
+        op = f['operator']
+        val = f.get('value')
+
+        if col not in df_filtered.columns:
+            st.warning(f"A coluna de filtro '{col}' não foi encontrada nos dados. O filtro será ignorado.")
             continue
 
         try:
-            if pd.api.types.is_datetime64_any_dtype(df_filtered[field]):
-                 df_filtered[field] = pd.to_datetime(df_filtered[field], errors='coerce').dt.normalize()
-
-            if op == 'é igual a':
-                df_filtered = df_filtered[df_filtered[field] == value]
-            elif op == 'não é igual a':
-                df_filtered = df_filtered[df_filtered[field] != value]
-            elif op == 'está em':
-                df_filtered = df_filtered[df_filtered[field].isin(value)]
-            elif op == 'não está em':
-                df_filtered = df_filtered[~df_filtered[field].isin(value)]
-            
-            elif op == 'maior que':
-                df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce') > value]
-            elif op == 'menor que':
-                df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce') < value]
-            elif op == 'entre' and len(value) == 2:
-                df_filtered = df_filtered[pd.to_numeric(df_filtered[field], errors='coerce').between(value[0], value[1])]
-            
-            elif op == 'Período Personalizado' and isinstance(value, (list, tuple)) and len(value) == 2:
-                start_date = pd.to_datetime(value[0]).normalize()
-                end_date = pd.to_datetime(value[1]).normalize()
-                df_filtered = df_filtered[df_filtered[field].between(start_date, end_date)]
-            
-            elif op == 'Períodos Relativos':
-                days_map = {
-                    "Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30,
-                    "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120,
-                    "Últimos 150 dias": 150, "Últimos 180 dias": 180
-                }
-                days = days_map.get(value)
-                if days:
-                    end_date = pd.to_datetime(datetime.now().date())
-                    start_date = end_date - timedelta(days=days)
-                    df_filtered = df_filtered[df_filtered[field].between(start_date, end_date)]
-        
+            series = df_filtered[col].astype(str)
+            if op == 'equals':
+                df_filtered = df_filtered[series == str(val)]
+            elif op == 'not_equals':
+                df_filtered = df_filtered[series != str(val)]
+            elif op == 'contains':
+                df_filtered = df_filtered[series.str.contains(str(val), na=False)]
+            elif op == 'not_contains':
+                df_filtered = df_filtered[~series.str.contains(str(val), na=False)]
+            elif op == 'is_in' and isinstance(val, list):
+                val_list = [str(v).strip() for v in val]
+                df_filtered = df_filtered[series.isin(val_list)]
+            elif op == 'is_not_in' and isinstance(val, list):
+                val_list = [str(v).strip() for v in val]
+                df_filtered = df_filtered[~series.isin(val_list)]
         except Exception as e:
-            st.warning(f"Ocorreu um erro inesperado ao aplicar o filtro no campo '{field}': {e}")
-            continue
+            st.warning(f"Não foi possível aplicar o filtro na coluna '{col}'. Erro: {e}")
             
     return df_filtered
 
@@ -173,6 +251,24 @@ def calculate_trendline(df, x_col, y_col):
     model.fit(X, y)
     trend_y = model.predict(X)
     return df_cleaned[x_col], trend_y
+
+def get_chart_colors(chart_config, df, color_col):
+    """Obtém um esquema de cores para o gráfico."""
+    project_key = st.session_state.get('project_key')
+    if project_key:
+        from security import get_project_config
+        project_config = get_project_config(project_key)
+        if project_config:
+            if color_col == 'Status':
+                return project_config.get('status_colors', {})
+            elif color_col == 'Tipo de Issue':
+                return project_config.get('type_colors', {})
+
+    if color_col in df.columns:
+        unique_values = df[color_col].unique()
+        color_sequence = px.colors.qualitative.Plotly
+        return {val: color_sequence[i % len(color_sequence)] for i, val in enumerate(unique_values)}
+    return {}
 
 def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     """Aplica um tema de cores a uma figura Plotly, extraindo a sequência de cores correta."""
@@ -1423,90 +1519,6 @@ def is_valid_email(email):
     # Expressão regular para validar e-mails
     regex = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
     return re.fullmatch(regex, email)
-
-def load_and_process_project_data(jira_client, project_key):
-    """
-    Carrega, processa, enriquece e armazena em cache os dados de um projeto Jira.
-    Esta versão agora calcula e inclui o Cycle Time no DataFrame principal.
-    """
-    from jira_connector import get_project_issues, get_jira_fields
-    from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time
-
-    user_data = find_user(st.session_state['email'])
-    project_config = get_project_config(project_key) or {}
-    user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
-    
-    raw_issues_list = get_project_issues(jira_client, project_key, user_custom_fields=user_enabled_custom_fields)
-    issues = filter_ignored_issues(raw_issues_list, project_config)
-    
-    if not issues:
-        st.warning("Nenhuma issue foi encontrada para este projeto (ou todas foram ignoradas pela sua configuração de status).")
-        return pd.DataFrame(), []
-
-    all_jira_fields = get_jira_fields(jira_client)
-    field_id_to_name_map = {field['id']: field['name'] for field in all_jira_fields}
-
-    processed_issues_data = []
-    for issue in issues:
-        fields_data = issue.raw['fields'].copy()
-        fields_data['key'] = issue.key
-        
-        completion_date = find_completion_date(issue, project_config)
-        fields_data['calculated_completion_date'] = completion_date
-        
-        # Calcula o Cycle Time se houver data de conclusão
-        if completion_date:
-            completion_datetime = pd.to_datetime(completion_date)
-            fields_data['calculated_cycle_time'] = calculate_cycle_time(issue, completion_datetime, project_config)
-        else:
-            fields_data['calculated_cycle_time'] = None
-            
-        processed_issues_data.append(fields_data)
-
-    df = pd.DataFrame(processed_issues_data)
-
-    global_configs = st.session_state.get('global_configs', {})
-    available_custom_fields = global_configs.get('custom_fields', [])
-    enabled_field_name_to_type_map = {
-        field['name']: field.get('type', 'Texto') 
-        for field in available_custom_fields 
-        if field['name'] in user_enabled_custom_fields
-    }
-
-    for col in df.columns:
-        if col.startswith('customfield_'):
-            field_name = field_id_to_name_map.get(col)
-            if field_name and field_name in enabled_field_name_to_type_map:
-                field_type = enabled_field_name_to_type_map[field_name]
-                df[field_name] = df[col].apply(lambda x: x.get('value') if isinstance(x, dict) else x)
-                if field_type == 'Numérico':
-                    df[field_name] = pd.to_numeric(df[field_name], errors='coerce')
-                elif field_type == 'Data':
-                    df[field_name] = pd.to_datetime(df[field_name], errors='coerce').dt.date
-
-    df.rename(columns={'summary': 'Issue', 'key': 'ID'}, inplace=True)
-    df['Tipo de Issue'] = df['issuetype'].apply(lambda x: x['name'] if x else None)
-    df['Status'] = df['status'].apply(lambda x: x['name'] if x else None)
-    df['Responsável'] = df['assignee'].apply(lambda x: x['displayName'] if x else 'Não atribuído')
-    df['Prioridade'] = df['priority'].apply(lambda x: x['name'] if x else None)
-    df['Categoria de Status'] = df['status'].apply(lambda x: x['statusCategory']['name'] if x and 'statusCategory' in x else None)
-    
-    data_criacao_dt = pd.to_datetime(df['created']).dt.tz_localize(None)
-    data_conclusao_dt = pd.to_datetime(df['calculated_completion_date'], errors='coerce').dt.tz_localize(None)
-
-    df['Lead Time (dias)'] = (data_conclusao_dt - data_criacao_dt).dt.days
-    df['Cycle Time (dias)'] = df['calculated_cycle_time'] # Adiciona a nova coluna
-    
-    df['Data de Criação'] = data_criacao_dt.dt.normalize()
-    df['Data de Conclusão'] = data_conclusao_dt.dt.normalize()
-
-    final_columns = ['ID', 'Issue', 'Tipo de Issue', 'Status', 'Responsável', 'Prioridade', 'Categoria de Status', 'Data de Criação', 'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)']
-    
-    final_columns.extend([name for name in enabled_field_name_to_type_map.keys() if name in df.columns])
-    
-    df_final = df[[col for col in final_columns if col in df.columns]].copy()
-
-    return df_final, issues
 
 def get_ai_product_vision(project_name, issues_data):
     """

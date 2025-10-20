@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from collections import defaultdict
 from security import find_user, get_global_configs, get_project_config, save_global_configs
 from utils import get_start_end_states, find_date_for_status
-# --- IMPORTAÇÃO DAS FUNÇÕES CORRIGIDAS ---
 from metrics_calculator import find_completion_date, calculate_lead_time, calculate_cycle_time
 
 @lru_cache(maxsize=32)
@@ -90,7 +89,6 @@ def get_sprint_issues(_client, sprint_id):
     except Exception as e:
         st.error(f"Erro ao buscar issues da sprint {sprint_id}: {e}")
         return []
-
 
 def get_issues_by_date_range(jira_client, project_key, start_date=None, end_date=None):
     """Busca issues ATUALIZADAS dentro de um intervalo de datas."""
@@ -268,14 +266,30 @@ def get_issues_by_board(jira_client, board_id):
             return []
     return all_issues
 
-@lru_cache(maxsize=128)
-def get_project_issue_types(jira_client, project_key):
-    """Busca os tipos de issues disponíveis para um projeto, excluindo sub-tarefas."""
+@st.cache_data(ttl=3600)
+def get_project_issue_types(_jira_client, project_key):
+    """Busca os objetos de tipos de issues disponíveis para um projeto, excluindo sub-tarefas."""
     try:
-        project_details = jira_client.project(project_key)
-        return [i.name for i in project_details.issueTypes if not i.subtask]
+        project_details = _jira_client.project(project_key)
+        # Retorna a lista de OBJETOS, e não apenas os nomes
+        return [it for it in project_details.issueTypes if not it.subtask]
     except Exception as e:
-        print(f"Erro ao buscar tipos de issues para o projeto {project_key}: {e}")
+        st.error(f"Erro ao buscar tipos de issue para o projeto {project_key}: {e}")
+        return []
+    
+@st.cache_data(ttl=3600, show_spinner="A obter os status do Jira...")
+def get_jira_statuses(_jira_client, project_key):
+    """
+    Retorna uma lista de todos os objetos de status disponíveis na instância Jira.
+    Nota: A API padrão não filtra status por projeto de forma simples, então esta função
+    retorna todos os status da instância, que é o comportamento mais comum e esperado.
+    """
+    try:
+        # A chamada jira.statuses() retorna todos os status da instância.
+        # O argumento project_key é mantido para consistência da interface, mas não é usado na chamada.
+        return _jira_client.statuses()
+    except Exception as e:
+        st.error(f"Erro ao buscar os status do Jira: {e}")
         return []
     
 def get_issue(jira_client, issue_key):

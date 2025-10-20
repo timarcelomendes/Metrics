@@ -1,0 +1,35 @@
+{
+    "available_standard_fields": {
+        "Status": {},
+        "Parent": {},
+        "StatusCategory": {},
+        "Updated": {}
+    },
+    "custom_fields": [
+        {
+            "id": "customfield_10064",
+            "name": "Cliente"
+        },
+        {
+            "id": "customfield_10009",
+            "name": "Actual end"
+        },
+        {
+            "id": "customfield_10008",
+            "name": "Actual start"
+        },
+        {
+            "id": "customfield_10091",
+            "name": "Aprova\u00e7\u00f5es"
+        },
+        {
+            "id": "customfield_10246",
+            "name": "Cliente"
+        },
+        {
+            "id": "customfield_10684",
+            "name": "Cliente"
+        }
+    ],
+    "strategic_grouping_field": "Cliente"
+}

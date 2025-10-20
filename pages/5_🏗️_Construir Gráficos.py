@@ -93,9 +93,11 @@ df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
 
 if df is None or df.empty or not current_project_key:
-    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Construir Gráficos' para começar.")
+    st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Carregar/Atualizar Dados' para começar.")
     st.stop()
 
+# Mensagem de ajuda para o utilizador
+st.info("ℹ️ Se você alterou suas preferências de campos na página 'Minha Conta', clique em 'Carregar/Atualizar Dados' na barra lateral para que os novos campos apareçam nas opções abaixo.", icon="🔄")
 st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
 
 global_configs = st.session_state.get('global_configs', {}); user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
@@ -207,7 +209,7 @@ with st.container():
                     value = cols[2].date_input("Intervalo", value=value_to_pass, key=f"filter_val_date_range_{i}")
             st.session_state.creator_filters[i]['operator'] = operator
             st.session_state.creator_filters[i]['value'] = value
-        cols[3].button("❌", key=f"remove_filter_{i}", on_click=lambda i=i: st.session_state.creator_filters.pop(i), use_container_width=True)
+        cols[3].button("❌", key=f"remove_filter_{i}", on_click=lambda i=i: st.session_state.creator_filters.pop(i), width='stretch')
 
 def add_new_filter():
     st.session_state.creator_filters.append({})
@@ -607,7 +609,7 @@ else: # Modo IA
     st.subheader("🤖 Assistente de Geração de Gráficos com IA")
     with st.container(border=True):
         ia_prompt = st.text_input("Descreva a visualização que você deseja criar:", placeholder="Ex: 'gráfico de barras com a contagem de issues por status' ou 'qual o lead time médio?'")
-        if st.button("Gerar com IA", key="ia_generate_button", type="primary", use_container_width=True):
+        if st.button("Gerar com IA", key="ia_generate_button", type="primary", width='stretch'):
             if 'chart_config_ia' in st.session_state:
                 del st.session_state['chart_config_ia']
             if ia_prompt:

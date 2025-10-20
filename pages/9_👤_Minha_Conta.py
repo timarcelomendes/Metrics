@@ -1,4 +1,4 @@
-# pages/7_👤_Minha_Conta.py
+# pages/9_👤_Minha_Conta.py
 
 import streamlit as st
 import os
@@ -14,50 +14,29 @@ st.header("👤 Minha Conta", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
 if check_session_timeout():
-    # Usa uma f-string para formatar a mensagem com o valor da variável
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
-    st.stop()
-
-# --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
-    user_connections = get_user_connections(st.session_state['email'])
-    
-    if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
+    st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
 email = st.session_state['email']
 user_data = find_user(email)
-global_configs = st.session_state.get('global_configs', {})
+
+# Força a leitura das configurações globais mais recentes usando a função cacheada,
+# em vez de depender de uma versão potencialmente desatualizada no session_state.
+global_configs = get_global_configs()
 
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(
-            logo_path, 
-            size="large")
-    except FileNotFoundError:
+        st.logo(logo_path, size="large")
+    except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
     
     if st.session_state.get("email"):
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    else:
-        st.info("⚠️ Usuário não conectado!")
-
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
@@ -83,7 +62,7 @@ with tab_perfil:
                 if st.form_submit_button("Alterar Senha", use_container_width=True, type="primary"):
                     if not all([current_password, new_password, confirm_password]):
                         st.warning("Por favor, preencha todos os campos.")
-                    elif not verify_password(current_password, user_data['hashed_password']):
+                    elif not verify_password(current_password, user_data.get('hashed_password') or user_data.get('password')):
                         st.error("A 'Senha Atual' está incorreta.")
                     elif len(new_password) < 8:
                         st.error("A nova senha deve ter pelo menos 8 caracteres.")
@@ -94,96 +73,54 @@ with tab_perfil:
                         update_user_password(email, new_hashed_password)
                         st.success("Senha alterada com sucesso!")
 
-                        # --- ENVIO DO E-MAIL DE NOTIFICAÇÃO ---
-                        subject = "Alerta de Segurança: A sua senha foi alterada"
-                        body_html = f"""
-                        <html><body>
-                            <h2>Olá,</h2>
-                            <p>Este é um e-mail para confirmar que a senha da sua conta ({email}) na plataforma Gauge Metrics foi alterada com sucesso.</p>
-                            <p>Se não foi você que fez esta alteração, por favor, contacte o suporte imediatamente.</p>
-                            <p>Atenciosamente,<br>A Equipe Gauge Metrics</p>
-                        </body></html>
-                        """
-                        success, message = send_email_with_attachment(to_address=email, subject=subject, body=body_html)
-                        
-                        # --- MENSAGEM SIMPLIFICADA AQUI ---
-                        if success:
-                            st.info("Um e-mail de notificação foi enviado.")
-                        else:
-                            st.error(f"A senha foi alterada, mas falhou o envio do e-mail de notificação: {message}")
-
 with tab_campos:
     st.subheader("Preferências de Campos para Análise")
     st.caption("Ative os campos que você deseja que apareçam como opções nas páginas de análise. As alterações são guardadas para o seu perfil.")
 
-    # Define as variáveis num escopo mais alto, acessível ao botão "Salvar"
-    available_custom_fields = global_configs.get('custom_fields', [])
-    user_selected_custom = user_data.get('enabled_custom_fields', [])
-    id_to_name_map = {field['id']: field['name'] for field in available_custom_fields}
-    
-    toggles_std = {}
-    toggles_custom = {}
-
-    # --- ABAS INTERNAS PARA ORGANIZAÇÃO ---
+    toggles_std, toggles_custom = {}, {}
     tab_std, tab_custom = st.tabs(["🗂️ Campos Padrão", "✨ Campos Personalizados"])
     
     with tab_std:
-        available_standard_fields = global_configs.get('available_standard_fields', {})
+        available_standard_fields_config = global_configs.get('available_standard_fields', {})
+        available_standard_fields_names = list(available_standard_fields_config.keys())
         user_selected_standard = user_data.get('standard_fields', [])
         
-        if not available_standard_fields:
+        if not available_standard_fields_names:
             st.info("Nenhum campo padrão foi configurado pelo administrador.")
         else:
-            search_term_std = st.text_input("Filtrar campos padrão:", placeholder="Digite para pesquisar...", key="search_std")
-            
-            filtered_standard_fields = {
-                name: details for name, details in available_standard_fields.items()
-                if search_term_std.lower() in name.lower()
-            }
-            
             st.markdown("**Ative os campos padrão que deseja usar:**")
-            for name in sorted(filtered_standard_fields.keys()):
+            for name in sorted(available_standard_fields_names):
                 toggles_std[name] = st.toggle(name, value=(name in user_selected_standard), key=f"toggle_std_{name}")
 
     with tab_custom:
+        available_custom_fields = global_configs.get('custom_fields', [])
+        user_selected_custom = user_data.get('enabled_custom_fields', [])
+        
         if not available_custom_fields:
             st.info("Nenhum campo personalizado foi configurado pelo administrador.")
         else:
-            search_term_custom = st.text_input("Filtrar campos personalizados:", placeholder="Digite para pesquisar...", key="search_custom")
-
-            filtered_custom_fields = [
-                field for field in available_custom_fields
-                if search_term_custom.lower() in field.get('name', '').lower()
-            ]
-
             st.markdown("**Ative os campos personalizados que deseja usar:**")
-            
-            for field in sorted(filtered_custom_fields, key=lambda x: x['name']):
-                field_id = field['id']
-                name = field['name']
-                toggles_custom[field_id] = st.toggle(
-                    name, 
-                    value=(name in user_selected_custom), 
-                    key=f"toggle_custom_{field_id}"
+            for field in sorted(available_custom_fields, key=lambda x: x['name']):
+                toggles_custom[field['id']] = st.toggle(
+                    f"{field['name']} ({field['id']})", 
+                    value=(field['name'] in user_selected_custom), 
+                    key=f"toggle_custom_{field['id']}"
                 )
     
     st.divider()
-    if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary", key="save_field_prefs_button"):
-        # Lógica para campos padrão
+    if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary"):
         new_selection_std = [name for name, is_on in toggles_std.items() if is_on]
-        unchanged_std = [name for name in user_selected_standard if name not in toggles_std]
-        save_user_standard_fields(email, new_selection_std + unchanged_std)
         
-        # Lógica para campos personalizados
-        if toggles_custom:
-            new_selection_custom_ids = [field_id for field_id, is_on in toggles_custom.items() if is_on]
-            new_selection_custom_names = [id_to_name_map[fid] for fid in new_selection_custom_ids]
-            
-            unchanged_custom_names = [
-                name for name in user_selected_custom 
-                if name not in [id_to_name_map.get(fid) for fid in toggles_custom.keys()]
-            ]
-            save_user_custom_fields(email, new_selection_custom_names + unchanged_custom_names)
+        id_to_name_map = {field['id']: field['name'] for field in global_configs.get('custom_fields', [])}
+        new_selection_custom_names = [id_to_name_map[fid] for fid, is_on in toggles_custom.items() if is_on]
+        
+        updates_to_save = {
+            'standard_fields': new_selection_std,
+            'enabled_custom_fields': new_selection_custom_names
+        }
+        
+        # Esta função (que deve existir em security.py) atualiza o documento do utilizador
+        update_user_configs(email, updates_to_save)
 
         st.success("Suas preferências de campos foram guardadas!")
         st.rerun()
@@ -202,10 +139,6 @@ with tab_ai:
         horizontal=True
     )
 
-    if selected_provider != user_provider:
-        update_user_configs(email, {'ai_provider_preference': selected_provider})
-        st.rerun()
-
     st.divider()
 
     if selected_provider == "Google Gemini":
@@ -216,10 +149,7 @@ with tab_ai:
         with st.form("gemini_form"):
             api_key_input = st.text_input("Chave de API do Google Gemini", type="password", placeholder="Cole a sua chave aqui para adicionar ou alterar")
             
-            GEMINI_MODELS = {
-                "Flash (Rápido, Multimodal)": "gemini-flash-latest",
-                "Pro (Avançado, Estável)": "gemini-pro-latest"
-            }
+            GEMINI_MODELS = {"Flash (Rápido, Multimodal)": "gemini-flash-latest", "Pro (Avançado, Estável)": "gemini-pro-latest"}
             current_model_id = user_data.get('ai_model_preference', 'gemini-1.5-flash-latest')
             model_names_list = list(GEMINI_MODELS.keys())
             default_model_index = model_names_list.index(next((name for name, model_id in GEMINI_MODELS.items() if model_id == current_model_id), "Flash (Rápido, Multimodal)"))
@@ -229,7 +159,7 @@ with tab_ai:
             
             s1, s2 = st.columns(2)
             if s1.form_submit_button("Salvar Configurações Gemini", use_container_width=True, type="primary"):
-                updates = {'ai_model_preference': GEMINI_MODELS[selected_model_name]}
+                updates = {'ai_provider_preference': selected_provider, 'ai_model_preference': GEMINI_MODELS[selected_model_name]}
                 if api_key_input:
                     updates['encrypted_gemini_key'] = encrypt_token(api_key_input)
                 update_user_configs(email, updates)
@@ -251,8 +181,10 @@ with tab_ai:
 
             s1, s2 = st.columns(2)
             if s1.form_submit_button("Salvar Chave OpenAI", use_container_width=True, type="primary"):
+                updates = {'ai_provider_preference': selected_provider}
                 if api_key_input:
-                    update_user_configs(email, {'encrypted_openai_key': encrypt_token(api_key_input)})
+                    updates['encrypted_openai_key'] = encrypt_token(api_key_input)
+                    update_user_configs(email, updates)
                     st.success("Chave da OpenAI guardada!"); st.rerun()
                 else:
                     st.warning("Por favor, insira uma chave para salvar.")
@@ -270,18 +202,12 @@ with tab_tokens:
         
         st.caption(f"Status do Token do Figma: {figma_token_status}")
         
-        figma_token = st.text_input(
-            "Seu Token de Acesso Pessoal do Figma",
-            type="password",
-            placeholder="Insira aqui para salvar ou atualizar",
-            help="Pode gerar um novo token nas configurações do seu perfil no Figma."
-        )
+        figma_token = st.text_input("Seu Token de Acesso Pessoal do Figma", type="password", placeholder="Insira aqui para salvar ou atualizar", help="Pode gerar um novo token nas configurações do seu perfil no Figma.")
 
         if st.form_submit_button("Salvar Token do Figma", use_container_width=True, type="primary"):
             if figma_token:
                 updates = {'encrypted_figma_token': encrypt_token(figma_token)}
                 update_user_configs(st.session_state['email'], updates)
-                st.success("O seu token do Figma foi salvo com sucesso!")
-                st.rerun()
+                st.success("O seu token do Figma foi salvo com sucesso!"); st.rerun()
             else:
                 st.warning("Por favor, insira um token para salvar.")
