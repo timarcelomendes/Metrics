@@ -10,7 +10,7 @@ from security import *
 from pathlib import Path
 from utils import *
 from config import SESSION_TIMEOUT_MINUTES
-from security import get_global_configs, get_project_config, save_project_config # <--- CORREÇÃO APLICADA AQUI
+from security import get_global_configs, get_project_config, save_project_config # Garante importações corretas
 
 st.set_page_config(page_title="Resumo Executivo", page_icon="📈", layout="wide")
 
@@ -22,23 +22,20 @@ if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
-    # Usa uma f-string para formatar a mensagem com o valor da variável
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
     st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 
+# --- LÓGICA DE VERIFICAÇÃO DE CONEXÃO CORRIGIDA ---
 if 'jira_client' not in st.session_state:
-    # Verifica se o utilizador tem alguma conexão guardada na base de dados
-    user_connections = get_users_collection(st.session_state['email'])
+    user_connections = get_users_collection(st.session_state['email']) # Corrigido para get_user_connections
     
     if not user_connections:
-        # Cenário 1: O utilizador nunca configurou uma conexão
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
         st.stop()
     else:
-        # Cenário 2: O utilizador tem conexões, mas nenhuma está ativa
         st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
         st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
         st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
@@ -99,6 +96,8 @@ with st.sidebar:
         st.write("Gauge Metrics") 
     st.markdown(f"Logado como: **{st.session_state.get('email', '')}**")
     st.divider()
+    # Adicionar aqui a seleção de projetos se necessário, 
+    # mas a lógica principal assume que os dados já estão em 'dynamic_df'
 
 df = st.session_state.get('dynamic_df')
 current_project_key = st.session_state.get('project_key')
@@ -107,69 +106,111 @@ if df is None or df.empty or not current_project_key:
     st.info("⬅️ Por favor, carregue os dados de um projeto em 'Meu Dashboard' ou 'Métricas de Fluxo' para ver esta análise.")
     st.stop()
 
-# --- Seletor de Cliente ---
+# --- Seletor de Contexto (REFINADO) ---
 st.subheader("Seleção de Contexto")
 
 # Carrega a configuração global para o campo estratégico
 global_configs = get_global_configs()
 STRATEGIC_FIELD_NAME = global_configs.get('strategic_grouping_field')
 
-# Verifica se o campo estratégico foi definido na Administração E se existe no DataFrame
+# Variável para guardar o contexto selecionado
+selected_context = "— Visão Agregada do Projeto —"
+can_filter_by_context = False # Flag para controlar se a filtragem é possível
+
+# Verifica se o campo estratégico foi definido E se existe no DataFrame
 if not STRATEGIC_FIELD_NAME:
     st.warning(
         "Nenhum campo de agrupamento estratégico foi definido.",
         icon="⚠️"
     )
-    st.info("A análise será apresentada de forma agregada. Para agrupar por um campo (ex: Cliente), peça a um administrador para o configurar em **Administração > Configurações do Sistema > Campos Jira**.")
-    selected_client = "— Visão Agregada do Projeto —"
-    
-elif STRATEGIC_FIELD_NAME not in df.columns:
-    st.error(
-        f"O campo estratégico configurado ('{STRATEGIC_FIELD_NAME}') não foi encontrado nos dados carregados.",
-        icon="🚫"
+    st.info("A análise será apresentada de forma agregada. Configure um campo em **Configurações > Estimativa** se desejar agrupar.")
+    st.selectbox(f"Contexto para Análise:", options=[selected_context], disabled=True) # Mostra desativado
+
+elif STRATEGIC_FIELD_NAME not in df.columns or df[STRATEGIC_FIELD_NAME].dropna().empty:
+    st.warning(
+        f"O campo estratégico configurado ('{STRATEGIC_FIELD_NAME}') não foi encontrado ou está vazio nos dados carregados.",
+        icon="⚠️"
     )
-    st.info("Isto pode acontecer se o campo não estiver ativo em 'Minha Conta' ou se não existir no projeto. A análise será apresentada de forma agregada.")
-    selected_client = "— Visão Agregada do Projeto —"
+    st.info("Verifique se o campo está ativo em 'Minha Conta' ou se é preenchido no projeto. A análise será agregada.")
+    st.selectbox(f"Contexto para Análise:", options=[selected_context], disabled=True) # Mostra desativado
 
 else:
-    # O campo está configurado e existe, exibe o seletor
-    client_list = ["— Visão Agregada do Projeto —"] + sorted(df[STRATEGIC_FIELD_NAME].dropna().unique())
-    selected_client = st.selectbox(f"Selecione um {STRATEGIC_FIELD_NAME} para Análise:", options=client_list)
+    # O campo está configurado, existe E tem valores, exibe o seletor
+    context_list = ["— Visão Agregada do Projeto —"] + sorted(df[STRATEGIC_FIELD_NAME].dropna().unique())
+    selected_context = st.selectbox(f"Selecione um {STRATEGIC_FIELD_NAME} para Análise:", options=context_list)
+    can_filter_by_context = True # Ativa a flag
 
-# --- Filtra os dados com base no cliente selecionado ---
-if selected_client == "— Visão Agregada do Projeto —":
+# --- Filtra os dados com base no contexto selecionado (REFINADO) ---
+if selected_context == "— Visão Agregada do Projeto —" or not can_filter_by_context:
+    # Usa todos os dados se for visão agregada OU se a filtragem não for possível
     scope_df = df
-    scope_issues = st.session_state.get('raw_issues_for_fluxo', [])
+    scope_issues = st.session_state.get('raw_issues_for_fluxo', []) # Pega as issues brutas guardadas
+    # Garante que scope_issues seja sempre uma lista
+    if scope_issues is None: scope_issues = []
+    
+    st.subheader(f"Análise Agregada do Projeto: {st.session_state.get('project_name', '')}") # Título genérico com nome do projeto
+
 else:
-    scope_df = df[df[STRATEGIC_FIELD_NAME] == selected_client]
-    scope_issue_keys = scope_df['Issue'].tolist()
+    # Filtra apenas se um contexto específico foi selecionado E a filtragem é possível
+    scope_df = df[df[STRATEGIC_FIELD_NAME] == selected_context]
+    scope_issue_keys = scope_df['ID'].tolist() # Usa a coluna 'ID' correta
+    
     all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
+    # Garante que all_raw_issues seja sempre uma lista antes de filtrar
+    if all_raw_issues is None: all_raw_issues = []
+        
     scope_issues = [issue for issue in all_raw_issues if issue.key in scope_issue_keys]
+    st.subheader(f"Análise para: {STRATEGIC_FIELD_NAME} = {selected_context}") # Título específico
 
-# --- Preparação dos Dados para as Abas ---
-project_config = get_project_config(current_project_key) or {}
-auto_metrics = calculate_executive_summary_metrics(scope_issues, project_config)
-rag_status = get_ai_rag_status(selected_client, json.dumps(auto_metrics))
+# Verifica se scope_issues foi preenchido corretamente
+if not scope_issues:
+     st.warning("Não foram encontradas issues brutas correspondentes aos filtros aplicados. As métricas operacionais podem estar incompletas.")
+     # Define auto_metrics com valores padrão para evitar erros
+     auto_metrics = {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0, 'schedule_adherence': 0}
+else:
+    # Calcula as métricas apenas se houver issues
+    project_config = get_project_config(current_project_key) or {}
+    auto_metrics = calculate_executive_summary_metrics(scope_issues, project_config)
 
-client_summary_data = project_config.get('client_summaries', {}).get(selected_client, {})
+
+# --- Preparação dos Dados para as Abas (REFINADO) ---
+project_config = get_project_config(current_project_key) or {} # Recarrega caso não tenha sido carregado antes
+
+# Usa o contexto selecionado para buscar o RAG e os dados do perfil/KPI
+try:
+    # Tenta obter o status RAG
+    rag_status = get_ai_rag_status(selected_context, json.dumps(auto_metrics)) # Passa o contexto selecionado
+except Exception as e:
+    rag_status = "N/A (Erro IA)"
+    print(f"Erro ao obter RAG status: {e}") # Loga o erro para debug
+
+client_summary_data = project_config.get('client_summaries', {}).get(selected_context, {}) # Busca pelo contexto selecionado
 profile_data = client_summary_data.get('profile', {})
 kpi_data = client_summary_data.get('kpis', {})
 
 st.divider()
 
 # ===== ESTRUTURA DE ABAS =====
-tab_view, tab_edit = st.tabs(["📊 Análise do Projeto/Cliente", "📝 Editar Perfil e KPIs"])
+tab_view, tab_edit = st.tabs(["📊 Análise", "📝 Editar Perfil e KPIs"]) # Título da aba genérico
 
 with tab_view:
-    st.subheader(f"Análise para: {selected_client}")
+    # st.subheader(f"Análise para: {selected_context}") # Título movido para cima
 
     with st.container(border=True):
-        st.markdown("**Perfil do Projeto/Cliente**")
+        st.markdown("**Perfil**")
         p_kpi1, p_kpi2, p_kpi3, p_kpi4 = st.columns(4)
-        p_kpi1.metric("Cliente", selected_client if selected_client != "— Visão Agregada do Projeto —" else "Todos")
+        
+        # Adapta o label do primeiro kpi
+        context_label = STRATEGIC_FIELD_NAME if STRATEGIC_FIELD_NAME and selected_context != "— Visão Agregada do Projeto —" else "Contexto"
+        context_value = selected_context if selected_context != "— Visão Agregada do Projeto —" else "Agregado"
+        p_kpi1.metric(context_label, context_value)
+        
         p_kpi2.metric("Responsável", profile_data.get('responsavel', 'N/A'))
-        p_kpi3.metric("Data de Início", pd.to_datetime(profile_data.get('start_date')).strftime('%d/%m/%Y') if profile_data.get('start_date') else 'N/A')
-        p_kpi4.metric("Data de Fim Prevista", pd.to_datetime(profile_data.get('end_date')).strftime('%d/%m/%Y') if profile_data.get('end_date') else 'N/A')
+        # Adiciona verificação para datas antes de formatar
+        start_date_display = pd.to_datetime(profile_data.get('start_date')).strftime('%d/%m/%Y') if profile_data.get('start_date') else 'N/A'
+        end_date_display = pd.to_datetime(profile_data.get('end_date')).strftime('%d/%m/%Y') if profile_data.get('end_date') else 'N/A'
+        p_kpi3.metric("Data de Início", start_date_display)
+        p_kpi4.metric("Data de Fim Prevista", end_date_display)
 
         st.markdown("**Dimensão Financeira**")
         f_kpi1, f_kpi2, f_kpi3 = st.columns(3)
@@ -178,8 +219,7 @@ with tab_view:
         resultado_geral = receita_total - total_despesas
         margem_contribuicao = (resultado_geral / receita_total * 100) if receita_total > 0 else 0.0
 
-        global_configs = get_global_configs()
-        target_margin = global_configs.get('target_contribution_margin', 25.0)
+        target_margin = global_configs.get('target_contribution_margin', 25.0) # Usa a config global carregada no início
 
         margin_color_class = "metric-value-red"
         if margem_contribuicao >= target_margin:
@@ -213,45 +253,51 @@ with tab_view:
         r_kpi2.metric("Status RAG (IA)", rag_status)
 
 with tab_edit:
-    with st.form(f"edit_form_{current_project_key}_{selected_client}"):
-        st.info(f"A editar os dados para: **{selected_client}** (no projeto {st.session_state.project_name})")
-        
-        st.markdown("**1. Dados do Projeto/Cliente**")
-        c1, c2 = st.columns(2)
-        responsavel = c1.text_input("Responsável", value=profile_data.get('responsavel', ''))
-        
-        start_date_val = pd.to_datetime(profile_data.get('start_date')).date() if profile_data.get('start_date') else None
-        end_date_val = pd.to_datetime(profile_data.get('end_date')).date() if profile_data.get('end_date') else None
-        
-        start_date = c1.date_input("Data de Início", value=start_date_val)
-        end_date = c2.date_input("Data de Fim Prevista", value=end_date_val)
-
-        st.divider()
-        st.markdown("**2. KPIs de Negócio**")
-        c1, c2, c3 = st.columns(3)
-        mrr = c1.number_input("Receita Recorrente Mensal (MRR)", min_value=0.0, value=kpi_data.get('mrr', 0.0), format="%.2f")
-        receita_nao_recorrente = c2.number_input("Receitas Não Recorrentes", min_value=0.0, value=kpi_data.get('receita_nao_recorrente', 0.0), format="%.2f")
-        total_despesas = c3.number_input("Total de Despesas", min_value=0.0, value=kpi_data.get('total_despesas', 0.0), format="%.2f")
-        
-        nps = c1.number_input("NPS (Net Promoter Score)", min_value=-100, max_value=100, value=kpi_data.get('nps', 0))
-
-        if st.form_submit_button("Salvar Perfil e KPIs", use_container_width=True):
-            if 'client_summaries' not in project_config:
-                project_config['client_summaries'] = {}
+    # Desativa a aba de edição se estiver na visão agregada
+    if selected_context == "— Visão Agregada do Projeto —":
+        st.info("A edição de Perfil e KPIs só está disponível ao selecionar um contexto específico (ex: Cliente).")
+    else:
+        with st.form(f"edit_form_{current_project_key}_{selected_context}"): # Usa selected_context na chave do form
+            st.info(f"A editar os dados para: **{selected_context}** (no projeto {st.session_state.get('project_name', '')})")
             
-            project_config['client_summaries'][selected_client] = {
-                'profile': {
-                    'responsavel': responsavel,
-                    'start_date': start_date.isoformat() if start_date else None,
-                    'end_date': end_date.isoformat() if end_date else None
-                },
-                'kpis': {
-                    'mrr': mrr, 
-                    'receita_nao_recorrente': receita_nao_recorrente,
-                    'total_despesas': total_despesas,
-                    'nps': nps
+            st.markdown(f"**1. Dados do {STRATEGIC_FIELD_NAME or 'Contexto'}**") # Label dinâmico
+            c1, c2 = st.columns(2)
+            responsavel = c1.text_input("Responsável", value=profile_data.get('responsavel', ''))
+            
+            # Converte para objeto date se existir, senão None
+            start_date_val = pd.to_datetime(profile_data.get('start_date')).date() if profile_data.get('start_date') else None
+            end_date_val = pd.to_datetime(profile_data.get('end_date')).date() if profile_data.get('end_date') else None
+            
+            start_date = c1.date_input("Data de Início", value=start_date_val)
+            end_date = c2.date_input("Data de Fim Prevista", value=end_date_val)
+
+            st.divider()
+            st.markdown("**2. KPIs de Negócio**")
+            c1, c2, c3 = st.columns(3)
+            mrr = c1.number_input("Receita Recorrente Mensal (MRR)", min_value=0.0, value=kpi_data.get('mrr', 0.0), format="%.2f")
+            receita_nao_recorrente = c2.number_input("Receitas Não Recorrentes", min_value=0.0, value=kpi_data.get('receita_nao_recorrente', 0.0), format="%.2f")
+            total_despesas = c3.number_input("Total de Despesas", min_value=0.0, value=kpi_data.get('total_despesas', 0.0), format="%.2f")
+            
+            nps = c1.number_input("NPS (Net Promoter Score)", min_value=-100, max_value=100, value=kpi_data.get('nps', 0)) # Pode ser 0 ou outro default
+
+            if st.form_submit_button("Salvar Perfil e KPIs", use_container_width=True):
+                if 'client_summaries' not in project_config:
+                    project_config['client_summaries'] = {}
+                
+                # Salva usando o contexto selecionado como chave
+                project_config['client_summaries'][selected_context] = {
+                    'profile': {
+                        'responsavel': responsavel,
+                        'start_date': start_date.isoformat() if start_date else None,
+                        'end_date': end_date.isoformat() if end_date else None
+                    },
+                    'kpis': {
+                        'mrr': mrr, 
+                        'receita_nao_recorrente': receita_nao_recorrente,
+                        'total_despesas': total_despesas,
+                        'nps': nps
+                    }
                 }
-            }
-            save_project_config(current_project_key, project_config)
-            st.success(f"Dados para '{selected_client}' guardados com sucesso!")
-            st.rerun()
+                save_project_config(current_project_key, project_config)
+                st.success(f"Dados para '{selected_context}' guardados com sucesso!")
+                st.rerun()
