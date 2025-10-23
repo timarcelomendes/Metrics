@@ -40,6 +40,7 @@ from stqdm import stqdm
 from jira_connector import get_project_issues, get_jira_fields
 from security import find_user, get_project_config, get_global_configs
 from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
+
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str):
     """
@@ -99,9 +100,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
         return str(raw_value)
 
     processed_issues_data = []
-    # Verifica se a função find_completion_date está importada corretamente (deve estar no topo agora)
-    # Lembre-se que você precisa ter `from metrics_calculator import find_completion_date` no topo do arquivo utils.py
-    # Se ainda não estiver, adicione lá.
+
     try:
         # Tenta usar a função para garantir que foi importada
         _ = find_completion_date 
@@ -113,16 +112,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
     all_project_statuses = []
     if should_calc_time_in_status:
         try:
-            # Busca todos os status disponíveis para este projeto e remove duplicados
-            all_project_statuses = list(set([status.name for status in _jira_client.project_statuses(project_key)]))
+
+            all_project_statuses = list(set([status.name for status in _jira_client.statuses()]))
         except Exception as e:
             print(f"Aviso: Não foi possível buscar todos os status do projeto {project_key}. O cálculo de tempo no status pode falhar. Erro: {e}")
-            # Fallback para os status mapeados se a busca falhar
-            status_mapping = project_config.get('status_mapping', {})
-            if status_mapping:
-                all_project_statuses = list(set([s for statuses in status_mapping.values() for s in statuses]))
-            else:
-                should_calc_time_in_status = False # Desativa se não conseguir os status
         
     for issue in stqdm(issues, desc="A processar issues"):
         fields = issue.fields

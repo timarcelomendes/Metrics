@@ -22,37 +22,17 @@ if 'new_chart_config' not in st.session_state or not isinstance(st.session_state
 
 def on_chart_type_change():
     """Limpa a configuração específica do gráfico ao trocar o tipo no construtor visual."""
-    # Preserva o título e o ID se estiverem em modo de edição, mas limpa o resto
     current_config = st.session_state.new_chart_config
-    st.session_state.new_chart_config = {
+
+    editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
+    
+    new_config = {
         'creator_type': st.session_state.visual_creator_type,
-        'title': current_config.get('title', ''),
-        'id': current_config.get('id')
+        'id': current_config.get('id') # Preserva o ID (necessário para o modo de edição)
     }
-
-# --- Callback para atualizar títulos dos eixos ---
-def update_axis_titles():
-    config = st.session_state.new_chart_config
     
-    # Atualiza a seleção do Eixo X no config PRIMEIRO
-    current_x_selection = st.session_state.get('x_axis_selector') 
-    previous_x_selection = config.get('x') # Pega o valor ANTES da mudança
-    config['x'] = current_x_selection # Guarda a nova seleção
-    
-    # Atualiza o título do Eixo X SE ele estiver vazio ou igual à seleção anterior
-    current_x_title = config.get('x_axis_title', '')
-    if not current_x_title or current_x_title == previous_x_selection:
-        config['x_axis_title'] = current_x_selection # Atualiza título para nova seleção
-
-    # Atualiza a seleção do Eixo Y no config PRIMEIRO
-    current_y_selection = st.session_state.get('y_axis_selector')
-    previous_y_selection = config.get('y')
-    config['y'] = current_y_selection
-    
-    # Atualiza o título do Eixo Y SE ele estiver vazio ou igual à seleção anterior
-    current_y_title = config.get('y_axis_title', '')
-    if not current_y_title or current_y_title == previous_y_selection:
-        config['y_axis_title'] = current_y_selection
+    if editing_mode:
+        new_config['title'] = current_config.get('title', '')
 
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
@@ -64,7 +44,6 @@ if editing_mode:
 else:
     if 'creator_filters' not in st.session_state:
         st.session_state.creator_filters = []
-
 
 if editing_mode:
     st.header(f"✏️ Editando: {st.session_state.new_chart_config.get('title', 'Visualização')}", divider='orange')
@@ -320,7 +299,7 @@ if creation_mode == "Construtor Visual":
     
     creator_type_options = ["Gráfico X-Y", "Gráfico Agregado", "Indicador (KPI)", "Tabela Dinâmica", "Gráfico de Tendência"]
     default_creator_index = creator_type_options.index(config.get('creator_type')) if config.get('creator_type') in creator_type_options else 0
-    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index)
+    chart_creator_type = st.radio("Selecione o tipo de visualização:", creator_type_options, key="visual_creator_type", horizontal=True, index=default_creator_index, on_change=on_chart_type_change)
     config['creator_type'] = chart_creator_type
 
     with st.container(border=True):
@@ -335,19 +314,14 @@ if creation_mode == "Construtor Visual":
             y_idx = y_options.index(config.get('y')) if config.get('y') in y_options else 0
             type_idx = type_options.index(config.get('type', 'dispersão').capitalize()) if config.get('type','').capitalize() in type_options else 0
 
-            c1.selectbox(
+            config['x'] = c1.selectbox(
                 "Eixo X", x_options, index=x_idx, 
-                key='x_axis_selector', 
-                on_change=update_axis_titles 
-            ) 
-            c2.selectbox(
+                key='x_axis_selector'
+            )
+            config['y'] = c2.selectbox(
                 "Eixo Y", y_options, index=y_idx, 
                 key='y_axis_selector',
-                on_change=update_axis_titles
             )
-
-            config['x'] = st.session_state.new_chart_config.get('x')
-            config['y'] = st.session_state.new_chart_config.get('y')
             
             config['type'] = c3.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
             
@@ -386,41 +360,37 @@ if creation_mode == "Construtor Visual":
             default_theme_name = config.get('color_theme', theme_options[0])
             config['color_theme'] = st.selectbox("Esquema de Cores", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="xy_color_theme")
             st.divider()
-            
+
             st.markdown("###### **Títulos e Rótulos**")
             title_c1, title_c2, title_c3 = st.columns(3)
 
+            # Define os valores automáticos com base nas seleções atuais
+            auto_x_title = config.get('x', 'Eixo X')
+            auto_y_title = config.get('y', 'Eixo Y')
+            auto_chart_title = f"{auto_y_title} vs {auto_x_title}"
+            
+            # Se um título já existir no config (ex: modo de edição), usa-o.
+            # Caso contrário, usa o título automático.
+            default_chart_title = config.get('title', auto_chart_title)
+            default_x_title = config.get('x_axis_title', auto_x_title)
+            default_y_title = config.get('y_axis_title', auto_y_title)
+
+            # Renderiza os widgets
             config['title'] = title_c1.text_input(
                 "Título do Gráfico:",
-                value=config.get('title', f"{config.get('y', 'Y')} vs {config.get('x', 'X')}"),
-                key="chart_title_input_xy" # Mantém a key para o título principal
+                value=default_chart_title,
+                key="chart_title_input_xy" 
             )
-
-            custom_x_title = config.get('x_axis_title')
-            current_x_selection = config.get('x', '')
-            if custom_x_title and custom_x_title != current_x_selection:
-                x_value = custom_x_title # Usa o título personalizado se for diferente da seleção do eixo
-            else:
-                x_value = current_x_selection # Caso contrário, usa a seleção atual do eixo (atualização automática)
-                
             config['x_axis_title'] = title_c2.text_input(
                 "Título do Eixo X:",
-                value=x_value # Usa o valor calculado acima
+                value=default_x_title,
+                key="xy_x_axis_title_input"
             )
-
-            # Define o valor do text_input para Eixo Y (mesma lógica)
-            custom_y_title = config.get('y_axis_title')
-            current_y_selection = config.get('y', '')
-            if custom_y_title and custom_y_title != current_y_selection:
-                y_value = custom_y_title
-            else:
-                y_value = current_y_selection
-
             config['y_axis_title'] = title_c3.text_input(
                 "Título do Eixo Y:",
-                value=y_value
+                value=default_y_title,
+                key="xy_y_axis_title_input"
             )
-            # --- FIM DA CORREÇÃO ---
             
             label_c1, label_c2 = st.columns(2)
             config['show_data_labels'] = label_c1.toggle("Exibir Rótulos de Dados", key="xy_labels", value=config.get('show_data_labels', False))
@@ -441,7 +411,8 @@ if creation_mode == "Construtor Visual":
                 COMBINED_DIMENSION_OPTION = "— Criar Dimensão Combinada —"
                 dim_options = [COMBINED_DIMENSION_OPTION] + categorical_cols
                 dim_idx = dim_options.index(config.get('dimension')) if config.get('dimension') in dim_options else 0
-                dim_selection = st.selectbox("Dimensão (Agrupar por)", options=dim_options, index=dim_idx)
+                dim_selection = st.selectbox("Dimensão (Agrupar por)", options=dim_options, index=dim_idx, 
+                                             key="agg_dimension_selector")
                 if dim_selection == COMBINED_DIMENSION_OPTION:
                     with st.container(border=True):
                         config['dimension'], df_for_preview = combined_dimension_ui(df, categorical_cols, date_cols, key_suffix="agg")
@@ -469,6 +440,31 @@ if creation_mode == "Construtor Visual":
             else:
                 config['measure'] = config.get('measure_selection')
             # --- FIM DA CORREÇÃO ---
+
+            # --- CORREÇÃO: Bloco do Título movido para CIMA ---
+            # Calcula o título automático com base nas seleções atuais
+            dimension = config.get('dimension', 'Dimensão')
+            measure = config.get('measure') # 'measure' é definido na linha 622
+            agg = config.get('agg', 'Agregação')
+            chart_type = config.get('type')
+            
+            if chart_type == 'tabela':
+                auto_title = f"Tabela de Dados por {dimension}"
+            else:
+                measure_name = measure if measure else config.get('measure_selection', 'Medida')
+                auto_title = f"{agg} de '{measure_name}' por '{dimension}'"
+
+            # Se um título já existir no config (ex: modo de edição), usa-o.
+            # Caso contrário, usa o título automático.
+            default_title = config.get('title', auto_title)
+
+            # Renderiza o widget
+            config['title'] = st.text_input(
+                "Título do Gráfico:",
+                value=default_title,
+                key="agg_chart_title_input"
+            )
+            # --- FIM DO BLOCO MOVIDO ---
 
             if config.get('dimension') and config.get('measure'):
                 st.divider()
@@ -507,32 +503,6 @@ if creation_mode == "Construtor Visual":
                 theme_options = list(COLOR_THEMES.keys())
                 default_theme_name = config.get('color_theme', theme_options[0])
                 config['color_theme'] = st.selectbox("Esquema de Cores", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="agg_color_theme")
-                
-                # Calcula o título automático com base nas seleções atuais
-                dimension = config.get('dimension', 'Dimensão')
-                measure = config.get('measure', 'Medida')
-                agg = config.get('agg', 'Agregação')
-                chart_type = config.get('type')
-                
-                if chart_type == 'tabela':
-                    auto_title = f"Tabela de Dados por {dimension}"
-                else:
-                    auto_title = f"{agg} de '{measure}' por '{dimension}'"
-
-                # 1. Obtém o título guardado (pode ser personalizado)
-                current_title = config.get('title')
-                
-                # 2. Define o valor a exibir:
-                if current_title and current_title != auto_title:
-                     title_value = current_title
-                else:
-                     title_value = auto_title
-                     
-                # 3. Atualiza o config com o valor do text_input (que pode ser auto ou editado)
-                config['title'] = st.text_input(
-                    "Título do Gráfico:",
-                    value=title_value
-                )
                 
                 config['show_data_labels'] = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=config.get('show_data_labels', False))
 
