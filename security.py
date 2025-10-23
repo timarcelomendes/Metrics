@@ -87,15 +87,41 @@ def get_password_hash(password):
     hashed_bytes = bcrypt.hashpw(truncated_bytes, salt)
     return hashed_bytes.decode('utf-8')
 
+secret_key_value = st.secrets.get("SECRET_KEY")
+
+cipher_suite = None 
+if secret_key_value:
+    try:
+        cipher_suite = Fernet(secret_key_value.encode())
+    except Exception as e:
+        st.error(f"Erro ao inicializar o cifrador com a chave fornecida (SECRET_KEY): {e}")
+else:
+    st.error("Chave de criptografia (SECRET_KEY) não encontrada. Verifique secrets.toml.")
+
 def encrypt_token(token):
-    """Encripta um token/senha de API."""
-    return cipher_suite.encrypt(token.encode()).decode()
+    if not cipher_suite:
+        st.error("Criptografia não inicializada. Não é possível encriptar o token.")
+        return None 
+    try:
+        return cipher_suite.encrypt(token.encode()).decode()
+    except Exception as e:
+        st.error(f"Erro ao encriptar token: {e}")
+        return None
 
 def decrypt_token(encrypted_token):
-    """Desencripta um token/senha de API."""
+    if not cipher_suite:
+        st.error("Criptografia não inicializada. Não é possível decriptar o token.")
+        return None 
     if not encrypted_token:
-        return ""
-    return cipher_suite.decrypt(encrypted_token.encode()).decode()
+        return None
+    try:
+        return cipher_suite.decrypt(encrypted_token.encode()).decode()
+    except InvalidToken:
+        st.warning("Token inválido ou chave de criptografia incorreta ao tentar decriptar.")
+        return None
+    except Exception as e:
+        st.error(f"Erro inesperado ao decriptar token: {e}")
+        return None
 
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
