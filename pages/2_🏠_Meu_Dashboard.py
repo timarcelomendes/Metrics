@@ -379,64 +379,94 @@ if edit_mode and can_edit:
             with st.container(border=True):
                 st.markdown("**2. Gerir Abas e Gráficos do Dashboard Atual**")
                 st.markdown("###### Gerir Abas")
-                tab_names = list(tabs_layout.keys())
+                                
+                # 1. Usar 'updated_tabs_layout' se existir (para manter as alterações
+                #    feitas pelos botões antes do 'Salvar' no final da página)
+                if 'updated_tabs_layout' in st.session_state:
+                    current_tabs_layout = st.session_state.updated_tabs_layout
+                else:
+                    # Carrega o layout original se for a primeira vez
+                    current_tabs_layout = copy.deepcopy(tabs_layout)
+                    st.session_state.updated_tabs_layout = current_tabs_layout
                 
-                for i, tab_name in enumerate(tab_names):
+                # Usamos uma cópia dos items (nome_aba, lista_de_charts) para iterar
+                tab_items = list(current_tabs_layout.items())
+                
+                for i, (tab_name, charts) in enumerate(tab_items):
+                    
                     cols = st.columns([0.7, 0.1, 0.1, 0.1])
-                    new_name = cols[0].text_input("Nome da Aba", value=tab_name, key=f"tab_name_{i}")
                     
-                    if cols[1].button("🔼", key=f"up_tab_{i}", help="Mover para cima", width='stretch', disabled=(i == 0)):
-                        current_items = list(tabs_layout.items())
-                        moved_items = move_item(current_items, i, i - 1)
-                        project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
-                        all_layouts[current_project_key] = project_layouts
-                        save_user_dashboard(st.session_state['email'], all_layouts)
-                        st.rerun()
+                    # A key DEVE ser única para a aba (o nome) e não para o índice (i).
+                    # Isto impede que os valores dos text_inputs sejam trocados
+                    # quando as abas são reordenadas.
+                    # Usamos o tab_name original como a key.
+                    new_name = cols[0].text_input(
+                        "Nome da Aba", 
+                        value=tab_name, 
+                        key=f"tab_rename_key_{tab_name}" # Key baseada no nome
+                    )
                     
-                    if cols[2].button("🔽", key=f"down_tab_{i}", help="Mover para baixo", width='stretch', disabled=(i == len(tab_names) - 1)):
-                        current_items = list(tabs_layout.items())
-                        moved_items = move_item(current_items, i, i + 1)
-                        project_layouts['dashboards'][active_dashboard_id]['tabs'] = dict(moved_items)
-                        all_layouts[current_project_key] = project_layouts
-                        save_user_dashboard(st.session_state['email'], all_layouts)
+                    # LÓGICA DE MOVER (só mexe no session_state e dá rerun)
+                    if cols[1].button("🔼", key=f"up_tab_{tab_name}", help="Mover para cima", width='stretch', disabled=(i == 0)):
+                        moved_items = move_item(list(current_tabs_layout.items()), i, i - 1)
+                        st.session_state.updated_tabs_layout = dict(moved_items)
                         st.rerun()
 
-                    if cols[3].button("❌", key=f"del_tab_{i}", help="Apagar aba", width='stretch', disabled=(len(tab_names) <= 1)):
-                        if tab_name in tabs_layout:
-                            charts_to_move = tabs_layout.pop(tab_name)
-                            first_tab_name = next(iter(tabs_layout))
-                            tabs_layout[first_tab_name].extend(charts_to_move)
-                            project_layouts['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
-                            all_layouts[current_project_key] = project_layouts
-                            save_user_dashboard(st.session_state['email'], all_layouts)
-                            st.rerun()
+                    if cols[2].button("🔽", key=f"down_tab_{tab_name}", help="Mover para baixo", width='stretch', disabled=(i == len(tab_items) - 1)):
+                        moved_items = move_item(list(current_tabs_layout.items()), i, i + 1)
+                        st.session_state.updated_tabs_layout = dict(moved_items)
+                        st.rerun()
+
+                    # LÓGICA DE APAGAR (só mexe no session_state e dá rerun)
+                    if cols[3].button("❌", key=f"del_tab_{tab_name}", help="Apagar aba", width='stretch', disabled=(len(tab_items) <= 1)):
+                        charts_to_move = current_tabs_layout.pop(tab_name)
+                        first_tab_name = next(iter(current_tabs_layout))
+                        current_tabs_layout[first_tab_name].extend(charts_to_move)
+                        st.session_state.updated_tabs_layout = current_tabs_layout
+                        st.rerun()
                     
-                    if new_name != tab_name:
-                        items = list(tabs_layout.items())
-                        items[i] = (new_name, items[i][1])
-                        tabs_layout = dict(items)
-                        st.session_state.updated_tabs_layout = tabs_layout
+                    # LÓGICA DE RENOMEAR (só mexe no session_state e dá rerun)
+                    if new_name != tab_name and new_name:
+                        # Recria a lista de items com o nome novo
+                        current_items_list = list(current_tabs_layout.items())
+                        current_items_list[i] = (new_name, charts) # (new_name, lista_de_charts)
+                        st.session_state.updated_tabs_layout = dict(current_items_list)
+                        st.rerun()
 
                 if st.button("➕ Adicionar Nova Aba", width='stretch'):
-                    new_tab_name = f"Nova Aba {len(tab_names) + 1}"
-                    tabs_layout[new_tab_name] = []
-                    project_layouts['dashboards'][active_dashboard_id]['tabs'] = tabs_layout
-                    all_layouts[current_project_key] = project_layouts
-                    save_user_dashboard(st.session_state['email'], all_layouts)
+                    new_tab_name = f"Nova Aba {len(current_tabs_layout) + 1}"
+                    current_tabs_layout[new_tab_name] = []
+                    st.session_state.updated_tabs_layout = current_tabs_layout
                     st.rerun()
                 
                 st.divider()
 
                 st.markdown("###### Atribuir Gráficos às Abas")
-                if not all_charts:
+                
+                
+                # 1. LER OS GRÁFICOS DO MESMO SÍTIO QUE AS ABAS (current_tabs_layout)
+                all_charts_in_state = [chart for tab_charts in current_tabs_layout.values() for chart in tab_charts]
+
+                if not all_charts_in_state:
                     st.info("Nenhum gráfico neste dashboard. Adicione um para começar a organizar.")
+                    updated_chart_assignments = {}
                 else:
                     updated_chart_assignments = {}
-                    for chart in all_charts:
+                    # 2. As opções do selectbox vêm do current_tabs_layout (isto estava correto)
+                    tab_options = list(current_tabs_layout.keys())
+                    
+                    for chart in all_charts_in_state: # 3. Iterar sobre os gráficos em ESTADO
                         chart_id = chart['id']
-                        current_tab = next((tab for tab, charts in tabs_layout.items() if chart_id in [c['id'] for c in charts]), None)
-                        tab_options = list(tabs_layout.keys())
-                        default_index = tab_options.index(current_tab) if current_tab in tab_options else 0
+                        
+                        # Encontra a aba atual no layout MODIFICADO (current_tabs_layout)
+                        current_tab_in_state = next((tab for tab, charts in current_tabs_layout.items() if chart_id in [c['id'] for c in charts]), None)
+                        
+                        if current_tab_in_state is None:
+                            if not tab_options:
+                                continue
+                            current_tab_in_state = tab_options[0]
+
+                        default_index = tab_options.index(current_tab_in_state)
                         
                         cols = st.columns([3, 2])
                         cols[0].write(f"📊 {chart.get('title', 'Gráfico sem título')}")
@@ -445,26 +475,38 @@ if edit_mode and can_edit:
 
                 st.divider()
 
+                # O BOTÃO DE SALVAR É A ÚNICA FONTE DE SALVAMENTO
                 if st.button("Salvar Alterações de Organização", type="primary", width='stretch'):
-                    if 'updated_tabs_layout' in st.session_state:
-                        tabs_layout = st.session_state.pop('updated_tabs_layout')
                     
-                    new_tabs_layout = {name: [] for name in tabs_layout.keys()}
-                    for chart in all_charts:
+                    # Constrói o layout final a partir do zero
+                    final_tabs_layout = {name: [] for name in current_tabs_layout.keys()}
+                    
+                    # 4. Iterar sobre os gráficos em ESTADO (all_charts_in_state)
+                    for chart in all_charts_in_state:
                         assigned_tab = updated_chart_assignments.get(chart['id'])
-                        if assigned_tab in new_tabs_layout:
-                            new_tabs_layout[assigned_tab].append(chart)
+                        if assigned_tab in final_tabs_layout:
+                            final_tabs_layout[assigned_tab].append(chart)
                     
-                    project_layouts['dashboards'][active_dashboard_id]['tabs'] = new_tabs_layout
+                    # Salva o layout final na base de dados (users.json)
+                    project_layouts['dashboards'][active_dashboard_id]['tabs'] = final_tabs_layout
                     all_layouts[current_project_key] = project_layouts
                     save_user_dashboard(st.session_state['email'], all_layouts)
+                    
+                    # Limpa o estado temporário
+                    if 'updated_tabs_layout' in st.session_state:
+                        del st.session_state.updated_tabs_layout
+                        
                     st.success("Organização do dashboard salva com sucesso!")
                     st.rerun()
-
+                                                
     with view_tab:
         render_dashboard_view(is_edit_mode=True)
         
 else:
+    # Limpa o estado temporário sempre que o modo edição estiver desligado
+    if 'updated_tabs_layout' in st.session_state:
+        del st.session_state.updated_tabs_layout
+    
     render_dashboard_view(is_edit_mode=False)
 
 # --- EXECUTOR DE SINAL ---

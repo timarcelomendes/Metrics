@@ -1,4 +1,4 @@
-# jira_connector.py (VERSÃO CORRIGIDA)
+# jira_connector.py
 
 import streamlit as st
 from jira import JIRA, Issue, JIRAError
@@ -10,8 +10,7 @@ from requests.auth import HTTPBasicAuth
 import json
 from datetime import datetime, timezone
 from collections import defaultdict
-from security import find_user, get_global_configs, get_project_config, save_global_configs
-from utils import get_start_end_states, find_date_for_status
+from security import get_project_config
 from metrics_calculator import find_completion_date, calculate_lead_time, calculate_cycle_time
 
 @lru_cache(maxsize=32)

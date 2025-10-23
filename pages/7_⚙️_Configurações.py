@@ -129,7 +129,6 @@ with tab_estimation:
             save_project_config(project_key, project_config)
             st.success("Campo de estimativa salvo com sucesso!")
 
-        # --- INÍCIO DO CÓDIGO MOVIDO ---
         st.divider()
         
         st.markdown("###### 🎯 Campo de Agrupamento Estratégico")
@@ -140,44 +139,56 @@ with tab_estimation:
         saved_custom_fields = configs.get('custom_fields', [])
         if not isinstance(saved_custom_fields, list): saved_custom_fields = []
         
-        field_options_strategic = []
+        # --- LÓGICA PARA GARANTIR NOMES ÚNICOS ---
+        unique_field_options = []
         field_format_map = {}
-        
+        seen_names = set() # Conjunto para rastrear nomes já adicionados
+
         for field in saved_custom_fields:
             if isinstance(field, dict) and 'name' in field and 'id' in field:
-                field_options_strategic.append(field['name'])
-                field_format_map[field['name']] = f"{field['name']} ({field['id']})"
-        
-        if not field_options_strategic:
+                field_name = field['name']
+                field_id = field['id']
+                # Se o nome ainda não foi visto, adiciona à lista de opções e ao mapa
+                if field_name not in seen_names:
+                    unique_field_options.append(field_name)
+                    field_format_map[field_name] = f"{field_name} ({field_id})"
+                    seen_names.add(field_name)
+                # Se o nome já foi visto, apenas atualiza/adiciona ao mapa para exibição (opcional, pode manter o primeiro ID)
+                # Se quiser mostrar MÚLTIPLOS IDs para o mesmo nome (não recomendado para selectbox), a lógica seria mais complexa.
+                # Para manter simples, vamos mostrar o primeiro ID encontrado para cada nome único.
+        # --- FIM DA LÓGICA PARA NOMES ÚNICOS ---
+
+        if not unique_field_options:
             st.warning("Nenhum campo personalizado foi ativado na 'Administração' global. Ative-os lá para poder selecionar um campo de agrupamento.")
         else:
             current_strategic_field = configs.get('strategic_grouping_field')
             
             try:
-                default_index = field_options_strategic.index(current_strategic_field) if current_strategic_field in field_options_strategic else 0
+                # Usa a lista de opções únicas para encontrar o índice
+                default_index = unique_field_options.index(current_strategic_field) if current_strategic_field in unique_field_options else 0
             except ValueError:
                 default_index = 0
 
             selected_field = st.selectbox(
                 "Selecione o campo para agrupamento estratégico:",
-                options=field_options_strategic,
+                options=unique_field_options, # Usa a lista de nomes únicos
                 index=default_index,
-                format_func=lambda name: field_format_map.get(name, name)
+                format_func=lambda name: field_format_map.get(name, name) # Usa o mapa para exibir o ID
             )
 
             if st.button("Salvar Campo Estratégico", key="save_strategic_field", width='stretch'):
                 configs_to_save = get_global_configs()
                 configs_to_save['strategic_grouping_field'] = selected_field
                 save_global_configs(configs_to_save)
-                get_global_configs.clear()
+                get_global_configs.clear() # Limpa a cache da função
                 st.success(f"O campo '{selected_field}' foi definido como o campo de agrupamento estratégico!")
+                # Força o recarregamento das configs na session_state se necessário, ou apenas rerun
+                st.session_state['global_configs'] = configs_to_save # Atualiza a sessão imediatamente
                 st.rerun()
-        # --- FIM DO CÓDIGO MOVIDO ---
 
     except Exception as e:
         st.error("Não foi possível carregar os campos de estimativa do Jira.")
         st.expander("Detalhes do Erro").error(e)
-
 
 with tab_time_in_status:
     st.subheader("Cálculo de Tempo por Status")

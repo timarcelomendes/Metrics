@@ -80,6 +80,7 @@ with tab_campos:
     toggles_std, toggles_custom = {}, {}
     tab_std, tab_custom = st.tabs(["🗂️ Campos Padrão", "✨ Campos Personalizados"])
     
+
     with tab_std:
         available_standard_fields_config = global_configs.get('available_standard_fields', {})
         available_standard_fields_names = list(available_standard_fields_config.keys())
@@ -94,36 +95,51 @@ with tab_campos:
 
     with tab_custom:
         available_custom_fields = global_configs.get('custom_fields', [])
-        user_selected_custom = user_data.get('enabled_custom_fields', [])
+        user_enabled_custom_aliases = user_data.get('enabled_custom_fields', []) 
         
         if not available_custom_fields:
             st.info("Nenhum campo personalizado foi configurado pelo administrador.")
         else:
             st.markdown("**Ative os campos personalizados que deseja usar:**")
-            for field in sorted(available_custom_fields, key=lambda x: x['name']):
-                toggles_custom[field['id']] = st.toggle(
-                    f"{field['name']} ({field['id']})", 
-                    value=(field['name'] in user_selected_custom), 
-                    key=f"toggle_custom_{field['id']}"
+            id_to_name_map = {field['id']: field['name'] for field in available_custom_fields if 'id' in field and 'name' in field}
+            
+            for field in sorted(available_custom_fields, key=lambda x: x.get('name', '')):
+                field_id = field.get('id')
+                field_name = field.get('name')
+                
+                if not field_id or not field_name:
+                    continue
+                    
+                display_label = f"{field_name} ({field_id})"
+                
+                is_currently_enabled = field_name in user_enabled_custom_aliases
+                
+                toggles_custom[field_id] = st.toggle(
+                    display_label, 
+                    value=is_currently_enabled, 
+                    key=f"toggle_custom_{field_id}"
                 )
-    
-    st.divider()
-    if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary"):
-        new_selection_std = [name for name, is_on in toggles_std.items() if is_on]
         
-        id_to_name_map = {field['id']: field['name'] for field in global_configs.get('custom_fields', [])}
-        new_selection_custom_names = [id_to_name_map[fid] for fid, is_on in toggles_custom.items() if is_on]
-        
-        updates_to_save = {
-            'standard_fields': new_selection_std,
-            'enabled_custom_fields': new_selection_custom_names
-        }
-        
-        # Esta função (que deve existir em security.py) atualiza o documento do utilizador
-        update_user_configs(email, updates_to_save)
+        st.divider()
+        if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary"):
+            new_selection_std = [name for name, is_on in toggles_std.items() if is_on]
+            
+            new_selection_custom_names = [
+                id_to_name_map[fid] 
+                for fid, is_on in toggles_custom.items() 
+                if is_on and fid in id_to_name_map
+            ]
+            new_selection_custom_names = sorted(list(set(new_selection_custom_names)))
+            
+            updates_to_save = {
+                'standard_fields': new_selection_std,
+                'enabled_custom_fields': new_selection_custom_names
+            }
+            
+            update_user_configs(email, updates_to_save) 
 
-        st.success("Suas preferências de campos foram guardadas!")
-        st.rerun()
+            st.success("Suas preferências de campos foram guardadas!")
+            st.rerun()
 
 with tab_ai:
     st.subheader("🤖 Configurações de Inteligência Artificial")

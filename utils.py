@@ -1,4 +1,4 @@
-# utils.py (VERSÃO CORRIGIDA)
+# utils.py
 
 import streamlit as st
 import json, os, pandas as pd
@@ -37,26 +37,28 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 import unicodedata
 from stqdm import stqdm
-
-# utils.py
-
+from jira_connector import get_project_issues, get_jira_fields
+from security import find_user, get_project_config, get_global_configs
+from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str):
     """
-    Carrega, processa e enriquece os dados de um projeto Jira, incluindo os campos 
-    padrão e personalizados que o utilizador ativou no seu perfil.
+    Carrega, processa e enriquece os dados de um projeto Jira, incluindo os campos
+    padrão e personalizados ativados pelo utilizador, E GARANTINDO o campo estratégico.
     """
-    from jira_connector import get_project_issues, get_jira_fields
-    from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time
-    from security import find_user, get_project_config 
-    import pandas as pd 
-    from stqdm import stqdm 
-    from security import get_global_configs
-
+    # --- REMOVER AS IMPORTAÇÕES DE DENTRO DA FUNÇÃO ---
+    # from jira_connector import get_project_issues, get_jira_fields # <-- REMOVER DAQUI
+    # from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time # <-- REMOVER DAQUI
+    # from security import find_user, get_project_config, get_global_configs # <-- REMOVER DAQUI
+    
     user_data = find_user(st.session_state['email'])
     project_config = get_project_config(project_key) or {}
     user_enabled_standard_fields = user_data.get('standard_fields', [])
     user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+
+    # Carrega configurações globais para saber qual é o campo estratégico
+    global_configs = get_global_configs() 
+    strategic_field_name = global_configs.get('strategic_grouping_field') 
 
     if 'project_name' not in st.session_state or not st.session_state.project_name:
         try:
@@ -66,23 +68,26 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
             st.session_state.project_name = project_key
 
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
-        # Use a variável correta _jira_client (com sublinhado)
         raw_issues_list = get_project_issues(_jira_client, project_key)
         issues = filter_ignored_issues(raw_issues_list, project_config)
-    
-    if not issues:
-        st.warning("Nenhuma issue foi encontrada para este projeto (ou todas foram ignoradas pela sua configuração de status).")
-        return pd.DataFrame(), []
 
-    all_jira_fields = get_jira_fields(_jira_client) # Corrigido aqui também
+    if not issues:
+        # Retorna a lista bruta vazia também
+        return pd.DataFrame(), [] 
+
+    all_jira_fields = get_jira_fields(_jira_client)
     field_name_to_id_map = {field['name']: field['id'] for field in all_jira_fields}
-    
-    global_configs = get_global_configs()
-    custom_field_id_to_name_map = {
-        field['id']: field['name'] 
-        for field in global_configs.get('custom_fields', []) 
-        if field.get('name') in user_enabled_custom_fields
+    all_custom_field_id_to_name_map = {
+        field['id']: field['name']
+        for field in global_configs.get('custom_fields', [])
+        if isinstance(field, dict) and 'id' in field and 'name' in field
     }
+    user_custom_field_id_to_name_map = {
+        field_id: field_name
+        for field_id, field_name in all_custom_field_id_to_name_map.items()
+        if field_name in user_enabled_custom_fields
+    }
+    strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
 
     def extract_value(raw_value):
         if raw_value is None: return None
@@ -94,9 +99,33 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
         return str(raw_value)
 
     processed_issues_data = []
+    # Verifica se a função find_completion_date está importada corretamente (deve estar no topo agora)
+    # Lembre-se que você precisa ter `from metrics_calculator import find_completion_date` no topo do arquivo utils.py
+    # Se ainda não estiver, adicione lá.
+    try:
+        # Tenta usar a função para garantir que foi importada
+        _ = find_completion_date 
+    except NameError:
+        st.error("Erro: A função 'find_completion_date' não foi importada corretamente em utils.py.")
+        st.stop()
+
+    should_calc_time_in_status = project_config.get('calculate_time_in_status', False)
+    all_project_statuses = []
+    if should_calc_time_in_status:
+        try:
+            # Busca todos os status disponíveis para este projeto e remove duplicados
+            all_project_statuses = list(set([status.name for status in _jira_client.project_statuses(project_key)]))
+        except Exception as e:
+            print(f"Aviso: Não foi possível buscar todos os status do projeto {project_key}. O cálculo de tempo no status pode falhar. Erro: {e}")
+            # Fallback para os status mapeados se a busca falhar
+            status_mapping = project_config.get('status_mapping', {})
+            if status_mapping:
+                all_project_statuses = list(set([s for statuses in status_mapping.values() for s in statuses]))
+            else:
+                should_calc_time_in_status = False # Desativa se não conseguir os status
+        
     for issue in stqdm(issues, desc="A processar issues"):
         fields = issue.fields
-        
         issue_data = {
             'ID': issue.key,
             'Issue': fields.summary,
@@ -107,71 +136,136 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
             'Categoria de Status': getattr(getattr(fields.status, 'statusCategory', None), 'name', None),
             'Data de Criação': pd.to_datetime(fields.created).tz_localize(None).normalize(),
         }
-
-        completion_date_raw = find_completion_date(issue, project_config)
+        completion_date_raw = find_completion_date(issue, project_config) # Usa a função importada
         completion_date_dt = pd.to_datetime(completion_date_raw, errors='coerce')
-
-        if pd.notna(completion_date_dt):
-            issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize()
-        else:
-            issue_data['Data de Conclusão'] = pd.NaT
-
+        issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize() if pd.notna(completion_date_dt) else pd.NaT
         issue_data['Lead Time (dias)'] = (issue_data['Data de Conclusão'] - issue_data['Data de Criação']).days if pd.notna(issue_data['Data de Conclusão']) else None
         issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
         for field_name in user_enabled_standard_fields:
-            field_id = field_name_to_id_map.get(field_name)
-            if field_id:
-                issue_data[field_name] = extract_value(getattr(fields, field_id, None))
-        
-        for field_id, field_name in custom_field_id_to_name_map.items():
+            standard_field_id = next((f['id'] for f in all_jira_fields if f['name'] == field_name and not f.get('custom')), None)
+            if standard_field_id:
+                 issue_data[field_name] = extract_value(getattr(fields, standard_field_id, None))
+
+        for field_id, field_name in user_custom_field_id_to_name_map.items():
             issue_data[field_name] = extract_value(getattr(fields, field_id, None))
+
+        if strategic_field_name and strategic_field_id and strategic_field_name not in issue_data:
+            issue_data[strategic_field_name] = extract_value(getattr(fields, strategic_field_id, None))
+        
+        # --- Início da Correção: Calcular Tempo em Status ---
+        if should_calc_time_in_status and all_project_statuses:
+            time_in_status_data = calculate_time_in_status(issue, all_project_statuses, issue_data['Data de Conclusão'])
+
+            for status_name, time_days in time_in_status_data.items():
+                issue_data[f'Tempo em: {status_name}'] = time_days
 
         processed_issues_data.append(issue_data)
 
     df = pd.DataFrame(processed_issues_data)
-    
-    all_expected_fields = user_enabled_standard_fields + user_enabled_custom_fields
+
+    all_expected_fields = user_enabled_standard_fields + list(user_custom_field_id_to_name_map.values())
+    if strategic_field_name and strategic_field_name not in all_expected_fields:
+         all_expected_fields.append(strategic_field_name) 
+
     for field in all_expected_fields:
         if field not in df.columns:
-            df[field] = None
-            
-    return df, issues
+            df[field] = None 
+
+    # Retorna o DataFrame e a lista BRUTA de issues
+    return df, raw_issues_list
 
 def apply_filters(df, filters):
-    """Aplica uma lista de filtros a um DataFrame de forma segura."""
+    """Aplica uma lista de filtros a um DataFrame de forma segura (VERSÃO CORRIGIDA)."""
     if not filters:
         return df
     
     df_filtered = df.copy()
-    for f in filters:
-        if not isinstance(f, dict) or 'column' not in f or 'operator' not in f:
-            continue
+    today = datetime.now().date()
 
-        col = f['column']
+    for f in filters:
+        # CORREÇÃO 1: Usar 'field' em vez de 'column'
+        if not isinstance(f, dict) or 'field' not in f or 'operator' not in f:
+            continue
+        
+        col = f['field']
         op = f['operator']
         val = f.get('value')
 
-        if col not in df_filtered.columns:
-            st.warning(f"A coluna de filtro '{col}' não foi encontrada nos dados. O filtro será ignorado.")
+        if not col or col not in df_filtered.columns:
+            # Ignora filtros vazios ou colunas que já não existem
             continue
 
+        # Identifica o tipo de coluna
+        if pd.api.types.is_numeric_dtype(df_filtered[col]):
+            field_type = 'numeric'
+        elif pd.api.types.is_datetime64_any_dtype(df_filtered[col]) or 'Data' in col or col in ['Data de Criação', 'Data de Conclusão']:
+            field_type = 'date'
+        else:
+            field_type = 'categorical'
+
         try:
-            series = df_filtered[col].astype(str)
-            if op == 'equals':
-                df_filtered = df_filtered[series == str(val)]
-            elif op == 'not_equals':
-                df_filtered = df_filtered[series != str(val)]
-            elif op == 'contains':
-                df_filtered = df_filtered[series.str.contains(str(val), na=False)]
-            elif op == 'not_contains':
-                df_filtered = df_filtered[~series.str.contains(str(val), na=False)]
-            elif op == 'is_in' and isinstance(val, list):
-                val_list = [str(v).strip() for v in val]
-                df_filtered = df_filtered[series.isin(val_list)]
-            elif op == 'is_not_in' and isinstance(val, list):
-                val_list = [str(v).strip() for v in val]
-                df_filtered = df_filtered[~series.isin(val_list)]
+            if field_type == 'categorical':
+                series = df_filtered[col].astype(str)
+                # CORREÇÃO 2: Usar operadores em Português
+                if op == 'é igual a':
+                    df_filtered = df_filtered[series == str(val)]
+                elif op == 'não é igual a':
+                    df_filtered = df_filtered[series != str(val)]
+                elif op == 'está em' and isinstance(val, list):
+                    val_list = [str(v).strip() for v in val]
+                    df_filtered = df_filtered[series.isin(val_list)]
+                elif op == 'não está em' and isinstance(val, list):
+                    val_list = [str(v).strip() for v in val]
+                    df_filtered = df_filtered[~series.isin(val_list)]
+            
+            # CORREÇÃO 3: Adicionada lógica para filtros NUMÉRICOS
+            elif field_type == 'numeric':
+                series = pd.to_numeric(df_filtered[col], errors='coerce')
+                # Remove NaNs numéricos para evitar erros na comparação
+                df_filtered = df_filtered[pd.notna(series)] 
+                series = series.dropna()
+                
+                if op == 'é igual a':
+                    df_filtered = df_filtered[series == float(val)]
+                elif op == 'não é igual a':
+                    df_filtered = df_filtered[series != float(val)]
+                elif op == 'maior que':
+                    df_filtered = df_filtered[series > float(val)]
+                elif op == 'menor que':
+                    df_filtered = df_filtered[series < float(val)]
+                elif op == 'entre' and isinstance(val, (list, tuple)):
+                    df_filtered = df_filtered[series.between(float(val[0]), float(val[1]))]
+            
+            # CORREÇÃO 4: Adicionada lógica para filtros de DATA
+            elif field_type == 'date':
+                series = pd.to_datetime(df_filtered[col], errors='coerce').dt.date
+                # Remove NaTs (datas nulas) para evitar erros na comparação
+                df_filtered = df_filtered[pd.notna(series)] 
+                series = series.dropna()
+
+                if op == "Períodos Relativos":
+                    days_map = {
+                        "Últimos 7 dias": 7, "Últimos 14 dias": 14, "Últimos 30 dias": 30,
+                        "Últimos 60 dias": 60, "Últimos 90 dias": 90, "Últimos 120 dias": 120,
+                        "Últimos 150 dias": 150, "Últimos 180 dias": 180
+                    }
+                    days_to_subtract = days_map.get(val, 0)
+                    start_date = today - timedelta(days=days_to_subtract)
+                    df_filtered = df_filtered[series.between(start_date, today)]
+                
+                elif op == "Período Personalizado" and isinstance(val, (list, tuple)):
+                    start_date = val[0]
+                    end_date = val[1]
+                    
+                    # Converte de str se vier de um JSON (embora na UI já deva ser date object)
+                    if isinstance(start_date, str):
+                        start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    if isinstance(end_date, str):
+                        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                    
+                    df_filtered = df_filtered[series.between(start_date, end_date)]
+
         except Exception as e:
             st.warning(f"Não foi possível aplicar o filtro na coluna '{col}'. Erro: {e}")
             
@@ -306,82 +400,193 @@ def render_chart(chart_config, df, chart_key):
         color_theme = chart_config.get('color_theme', default_theme)
         df_chart_filtered = apply_filters(df, chart_config.get('filters', []))
 
-        # --- INÍCIO DO BLOCO CORRIGIDO ---
+        # --- BLOCO DE GRÁFICO AGREGADO ---
         if chart_type in ['barra', 'barra_horizontal', 'linha_agregada', 'pizza', 'treemap', 'funil', 'tabela']:
             dimension = chart_config.get('dimension')
-            measure = chart_config.get('measure')
+            measure = chart_config.get('measure') # Pode ser o nome da coluna calculada (ex: "Média de tempo em...")
             agg = chart_config.get('agg')
+
+            # Verifica se a MEDIDA ORIGINAL selecionada foi "Tempo em Status"
+            original_measure_selection = chart_config.get('measure_selection')
+            is_time_in_status_measure = original_measure_selection == "Tempo em Status"
+
+            if is_time_in_status_measure:
+                # Tenta encontrar os status selecionados usando os prefixos conhecidos
+                selected_statuses = None
+                calc_method = None
+                possible_prefixes = ['agg', 'kpi_num', 'kpi_den', 'kpi_base', 'mc_measure']
+                for prefix in possible_prefixes:
+                    if f'{prefix}_selected_statuses' in chart_config:
+                        selected_statuses = chart_config.get(f'{prefix}_selected_statuses', [])
+                        calc_method = chart_config.get(f'{prefix}_calc_method', 'Soma')
+                        break # Encontrou a configuração correta
+
+                if selected_statuses is None: # Se não encontrou config específica, tenta sem prefixo (fallback)
+                     selected_statuses = chart_config.get('selected_statuses', [])
+                     calc_method = chart_config.get('calc_method', 'Soma')
+
+                if selected_statuses:
+                    cols_to_process = [f'Tempo em: {s}' for s in selected_statuses if f'Tempo em: {s}' in df_chart_filtered.columns]
+                    if cols_to_process:
+                        # O nome da coluna calculada JÁ ESTÁ em 'measure' vindo do config
+                        if calc_method == "Soma":
+                            df_chart_filtered[measure] = df_chart_filtered[cols_to_process].sum(axis=1)
+                        else: # Média
+                            df_chart_filtered[measure] = df_chart_filtered[cols_to_process].mean(axis=1)
+                    else:
+                        st.warning(f"Nenhuma coluna de status válida encontrada para '{measure}'. O gráfico pode ficar vazio.")
+                        measure = None
+                else:
+                     st.warning(f"Medida '{measure}' requer status selecionados, mas nenhum foi encontrado na configuração.")
+                     measure = None
+
+            # Continua a lógica original, mas agora 'measure' existe ou é None
             if not dimension or not measure or not agg:
-                st.warning("Configuração de gráfico agregado inválida.")
+                if not st.session_state.get('_measure_none_warned', False):
+                     st.warning(f"Configuração de gráfico agregado inválida ou medida '{chart_config.get('measure')}' não pôde ser calculada.")
+                     st.session_state._measure_none_warned = True # Evita warnings repetidos
+                if '_measure_none_warned' in st.session_state and measure: # Limpa o warning na próxima execução completa se measure for válido
+                    del st.session_state['_measure_none_warned']
                 return
-            
+
             group_by_cols = [dimension]
             secondary_dimension = chart_config.get('secondary_dimension')
-            if secondary_dimension: 
+            if secondary_dimension:
                 group_by_cols.append(secondary_dimension)
-            
+
+            # Lógica de Agregação (agora usa 'measure' que PODE ser a coluna calculada)
+            agg_col = None # Inicializa agg_col
             if measure == "Contagem de Issues":
                 agg_df = df_chart_filtered.groupby(group_by_cols).size().reset_index(name='Contagem')
                 agg_col = 'Contagem'
-            else:
-                agg_func_map = {'Soma': 'sum', 'Média': 'mean', 'Contagem': 'count', 'Contagem Distinta': 'nunique'}
-                agg_name_map = {'Soma': 'Soma de', 'Média': 'Média de', 'Contagem': 'Contagem de', 'Contagem Distinta': 'Contagem Distinta de'}
-                agg_df = df_chart_filtered.groupby(group_by_cols)[measure].agg(agg_func_map[agg]).reset_index()
-                agg_col = f"{agg_name_map[agg]} {measure}"
-                agg_df.rename(columns={measure: agg_col}, inplace=True)
+            elif agg == 'Contagem Distinta' and measure in df_chart_filtered.columns:
+                 agg_df = df_chart_filtered.groupby(group_by_cols)[measure].nunique().reset_index()
+                 agg_col = f"Contagem Distinta de {measure}"
+                 agg_df.rename(columns={measure: agg_col}, inplace=True)
+            elif measure in df_chart_filtered.columns: # Para medidas numéricas OU a coluna calculada de Tempo Status
+                agg_func_map = {'Soma': 'sum', 'Média': 'mean', 'Contagem': 'count'}
+                agg_name_map = {'Soma': 'Soma de', 'Média': 'Média de', 'Contagem': 'Contagem de'}
+                agg_function = agg_func_map.get(agg, 'sum')
 
-            y_axis_title_text = agg_col
-            if chart_config.get('y_axis_format') == 'hours' and agg_col in agg_df.columns:
-                agg_df[agg_col] = agg_df[agg_col] / 3600.0
-                y_axis_title_text = f"{agg_col} (horas)"
+                # Garante que a coluna é numérica antes de agregar
+                df_chart_filtered[measure] = pd.to_numeric(df_chart_filtered[measure], errors='coerce')
+                # Remove NaNs introduzidos pela conversão antes do groupby
+                valid_data_df = df_chart_filtered.dropna(subset=[measure] + group_by_cols)
+
+                if valid_data_df.empty:
+                     st.warning(f"Não há dados válidos para agregar a medida '{measure}' pela dimensão '{dimension}'.")
+                     return
+
+                agg_df = valid_data_df.groupby(group_by_cols)[measure].agg(agg_function).reset_index()
+
+                agg_col = f"{agg_name_map.get(agg, 'Valor de')} {measure}"
+                agg_df.rename(columns={measure: agg_col}, inplace=True)
+            else:
+                 # Verifica se o warning já foi mostrado para evitar repetição
+                 if not st.session_state.get(f'_measure_{measure}_warned', False):
+                      st.error(f"Coluna de medida '{measure}' não encontrada ou inválida após o cálculo.")
+                      st.session_state[f'_measure_{measure}_warned'] = True
+                 return # Aborta se a medida não for válida
             
+            # Limpa warning se a medida voltou a ser válida
+            if f'_measure_{measure}_warned' in st.session_state and agg_col is not None:
+                 del st.session_state[f'_measure_{measure}_warned']
+
+            # Define o título do eixo Y ANTES de qualquer conversão
+            y_axis_title_text = agg_col
+
+            # Se for Tempo em Status, o título deve indicar dias por padrão
+            if is_time_in_status_measure:
+                 y_axis_title_text = f"{agg_col} (dias)"
+
+            # Lógica de Ordenação e Top N (sem alterações)
             sort_by = chart_config.get('sort_by')
-            if sort_by:
+            if sort_by and agg_col in agg_df.columns: # Garante que agg_col existe
                 if "Dimensão" in sort_by:
                     ascending = "A-Z" in sort_by
                     agg_df = agg_df.sort_values(by=dimension, ascending=ascending)
                 elif "Medida" in sort_by:
                     ascending = "Crescente" in sort_by
                     agg_df = agg_df.sort_values(by=agg_col, ascending=ascending)
-            
+
             top_n = chart_config.get('top_n')
-            if top_n and isinstance(top_n, int) and top_n > 0: 
+            if top_n and isinstance(top_n, int) and top_n > 0:
                 agg_df = agg_df.head(top_n)
-            
-            if chart_config.get('show_as_percentage'):
+
+            # Lógica de Percentual (sem alterações)
+            if chart_config.get('show_as_percentage') and agg_col in agg_df.columns: # Garante que agg_col existe
                 total = agg_df[agg_col].sum()
-                if total > 0: agg_df[agg_col] = (agg_df[agg_col] / total) * 100
-            
+                # Evita divisão por zero e NaNs
+                if total != 0 and pd.notna(total):
+                     agg_df[agg_col] = (agg_df[agg_col] / total) * 100
+                else:
+                     agg_df[agg_col] = 0 # Define como 0 se o total for 0 ou NaN
+
             fig = None
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
             if not isinstance(theme_colors, dict):
                 theme_colors = COLOR_THEMES[default_theme]
 
-            if chart_type == 'barra': fig = px.bar(agg_df, x=dimension, y=agg_col, color=secondary_dimension)
-            elif chart_type == 'barra_horizontal': fig = px.bar(agg_df, y=dimension, x=agg_col, orientation='h', color=secondary_dimension)
-            elif chart_type == 'linha_agregada': fig = px.line(agg_df, x=dimension, y=agg_col, markers=True, color=secondary_dimension)
-            elif chart_type == 'pizza': fig = px.pie(agg_df, names=dimension, values=agg_col)
+            # Criação da Figura (passando agg_col via 'text=')
+            if chart_type == 'barra':
+                fig = px.bar(agg_df, x=dimension, y=agg_col, color=secondary_dimension,
+                             text=agg_col if chart_config.get('show_data_labels') else None)
+            elif chart_type == 'barra_horizontal':
+                fig = px.bar(agg_df, y=dimension, x=agg_col, orientation='h', color=secondary_dimension,
+                             text=agg_col if chart_config.get('show_data_labels') else None)
+            elif chart_type == 'linha_agregada':
+                fig = px.line(agg_df, x=dimension, y=agg_col, markers=True, color=secondary_dimension,
+                             text=agg_col if chart_config.get('show_data_labels') else None)
+            elif chart_type == 'pizza':
+                fig = px.pie(agg_df, names=dimension, values=agg_col)
             elif chart_type == 'treemap':
                 path = [dimension]
                 if secondary_dimension: path.append(secondary_dimension)
                 fig = px.treemap(agg_df, path=path, values=agg_col)
-            elif chart_type == 'funil': fig = px.funnel(agg_df, x=agg_col, y=dimension)
+            elif chart_type == 'funil':
+                fig = px.funnel(agg_df, x=agg_col, y=dimension,
+                                text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'tabela':
-                header_color = theme_colors.get('primary_color', '#1f77b4')
-                fig = go.Figure(data=[go.Table(
-                    header=dict(values=list(agg_df.columns), fill_color=header_color, align='left', font=dict(color='white')), 
+                 header_color = theme_colors.get('primary_color', '#1f77b4')
+                 fig = go.Figure(data=[go.Table(
+                    header=dict(values=list(agg_df.columns), fill_color=header_color, align='left', font=dict(color='white')),
                     cells=dict(values=[agg_df[col] for col in agg_df.columns], fill_color='#f0f2f6', align='left')
-                )])
-            
+                 )])
+
             if fig:
                 fig = apply_chart_theme(fig, color_theme)
-                fig.update_layout(title_text=None)
-                if chart_config.get('y_axis_format') == 'hours':
-                    fig.update_layout(yaxis_title=y_axis_title_text) if chart_type != 'barra_horizontal' else fig.update_layout(xaxis_title=y_axis_title_text)
-                
-                if chart_config.get('show_data_labels') and chart_type not in ['tabela', 'pizza', 'treemap']:
-                    text_template = '%{value:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{value:.2s}'
-                    
+                fig.update_layout(title_text=None) 
+
+                # Obtém os títulos personalizados (se existirem)
+                custom_dim_title = chart_config.get('dimension_axis_title')
+                custom_measure_title = chart_config.get('measure_axis_title')
+
+                # Define os títulos finais: usa o personalizado ou o automático (dimension/y_axis_title_text)
+                final_dim_axis_title = custom_dim_title if custom_dim_title else dimension
+                final_measure_axis_title = custom_measure_title if custom_measure_title else y_axis_title_text
+
+                # Aplica aos eixos corretos dependendo da orientação
+                if chart_type != 'barra_horizontal':
+                     fig.update_layout(xaxis_title=final_dim_axis_title, yaxis_title=final_measure_axis_title)
+                else: # Barra Horizontal inverte os eixos
+                     fig.update_layout(xaxis_title=final_measure_axis_title, yaxis_title=final_dim_axis_title)
+
+                # --- Lógica Corrigida de Rótulos ---
+                if chart_config.get('show_data_labels') and chart_type not in ['tabela', 'pizza']:
+
+                    # Define o template base
+                    if is_time_in_status_measure:
+                        # Para Tempo Status, mostra dias com 1 casa decimal e sufixo 'd'
+                        text_template = '%{text:.1f}d'
+                    else:
+                        # Para outras medidas numéricas, usa formato resumido
+                        text_template = '%{text:.2s}'
+
+                    # Se for percentual, sobrescreve o template
+                    if chart_config.get('show_as_percentage'):
+                         text_template = '%{text:.1f}%'
+
+                    # Aplica o template
                     if chart_type in ['barra', 'barra_horizontal']:
                         fig.update_traces(texttemplate=text_template, textposition='auto')
                     elif chart_type == 'linha_agregada':
@@ -389,9 +594,39 @@ def render_chart(chart_config, df, chart_key):
                     elif chart_type == 'funil':
                         fig.update_traces(texttemplate=text_template, textposition='auto')
 
+                    elif chart_type == 'treemap':
+                        if chart_config.get('show_as_percentage'):
+                             fig.update_traces(texttemplate='%{label}<br>%{percentRoot:.1%}', textinfo='text')
+                        elif is_time_in_status_measure:
+                             # Treemap Tempo Status: usa valor em dias
+                             fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text')
+                        else:
+                             fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text')
+
+                elif chart_config.get('show_data_labels') and chart_type == 'pizza':
+                     if chart_config.get('show_as_percentage'):
+                         fig.update_traces(textinfo='percent+label')
+                     elif is_time_in_status_measure:
+                         # Pizza Tempo Status: mostra valor em dias
+                          fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text+percent')
+                     else:
+                          fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text+percent')
+
+                # --- Fim Lógica Corrigida de Rótulos ---
+
+                # Lógica sufixo percentual
                 if chart_config.get('show_as_percentage'):
-                    if chart_type == 'pizza': fig.update_traces(texttemplate='%{value:.1f}%')
-                    else: fig.update_layout(yaxis_ticksuffix="%")
+                     if chart_type == 'pizza':
+                        pass
+                     elif chart_type == 'treemap':
+                        pass
+                     else:
+                        # Garante que o eixo existe antes de adicionar o sufixo
+                        if chart_type != 'barra_horizontal' and fig.layout.yaxis:
+                             fig.layout.yaxis.ticksuffix = "%"
+                        elif chart_type == 'barra_horizontal' and fig.layout.xaxis:
+                             fig.layout.xaxis.ticksuffix = "%"
+
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_agg")
 
         elif chart_type in ['linha', 'dispersão']:

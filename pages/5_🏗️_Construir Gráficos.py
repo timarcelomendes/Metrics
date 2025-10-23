@@ -1,4 +1,4 @@
-# pages/5_🏗️_Construir Gráficos.py (VERSÃO CORRIGIDA E FINAL)
+# pages/5_🏗️_Construir Gráficos.py (VERSÃO CORRIGIDA COM "TEMPO EM STATUS" EM TODOS OS GRÁFICOS)
 
 import streamlit as st
 import pandas as pd
@@ -29,6 +29,30 @@ def on_chart_type_change():
         'title': current_config.get('title', ''),
         'id': current_config.get('id')
     }
+
+# --- Callback para atualizar títulos dos eixos ---
+def update_axis_titles():
+    config = st.session_state.new_chart_config
+    
+    # Atualiza a seleção do Eixo X no config PRIMEIRO
+    current_x_selection = st.session_state.get('x_axis_selector') 
+    previous_x_selection = config.get('x') # Pega o valor ANTES da mudança
+    config['x'] = current_x_selection # Guarda a nova seleção
+    
+    # Atualiza o título do Eixo X SE ele estiver vazio ou igual à seleção anterior
+    current_x_title = config.get('x_axis_title', '')
+    if not current_x_title or current_x_title == previous_x_selection:
+        config['x_axis_title'] = current_x_selection # Atualiza título para nova seleção
+
+    # Atualiza a seleção do Eixo Y no config PRIMEIRO
+    current_y_selection = st.session_state.get('y_axis_selector')
+    previous_y_selection = config.get('y')
+    config['y'] = current_y_selection
+    
+    # Atualiza o título do Eixo Y SE ele estiver vazio ou igual à seleção anterior
+    current_y_title = config.get('y_axis_title', '')
+    if not current_y_title or current_y_title == previous_y_selection:
+        config['y_axis_title'] = current_y_selection
 
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
@@ -135,11 +159,26 @@ for col in ['Lead Time (dias)', 'Cycle Time (dias)']:
     if col in df.columns and col not in numeric_cols:
         numeric_cols.append(col)
 
+# --- CORREÇÃO: Atualiza a lógica de criação da lista de Medidas ---
 status_time_cols = sorted([col for col in df.columns if col.startswith('Tempo em: ')])
-measure_options = ["Contagem de Issues"] + numeric_cols + categorical_cols
+
+# 1. Filtra as colunas numéricas para REMOVER as colunas individuais de "Tempo em: "
+numeric_cols_for_dropdown = [col for col in numeric_cols if not col.startswith('Tempo em: ')]
+
+# 2. Cria a lista de medidas (para Gráfico Agregado)
+measure_options = ["Contagem de Issues"] + numeric_cols_for_dropdown + categorical_cols
+
+# 3. Cria a lista de medidas (para KPI, Tendência)
+measure_options_numeric_only = ["Contagem de Issues"] + numeric_cols_for_dropdown
+
+# 4. Adiciona a UMA opção "Tempo em Status" se a funcionalidade estiver ativa
 if project_config.get('calculate_time_in_status', False) and status_time_cols:
     measure_options.append("Tempo em Status")
+    measure_options_numeric_only.append("Tempo em Status")
+    
 all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols + status_time_cols)))
+# --- FIM DA CORREÇÃO ---
+
 
 # --- BLOCO 4: INTERFACE DE FILTROS ---
 st.subheader("Filtros da Pré-visualização")
@@ -216,12 +255,65 @@ def add_new_filter():
 st.button("➕ Adicionar Filtro", on_click=add_new_filter, width='stretch')
 st.divider()
 
-# --- BLOCO 5: INTERFACE DE CRIAÇÃO DE GRÁFICOS E PRÉ-VISUALIZAÇÃO (COMPLETO E CORRIGIDO) ---
+# --- BLOCO 4.5: FUNÇÃO REUTILIZÁVEL DE UI (Tempo em Status) ---
+def render_time_in_status_ui(config, df_for_preview, config_key_prefix, help_text):
+    """
+    Renderiza a UI multiselect para "Tempo em Status" e atualiza o config/dataframe.
+    Retorna o nome da nova coluna de medida e o dataframe modificado.
+    """
+    status_cols_in_df = [col.replace('Tempo em: ', '') for col in df_for_preview.columns if col.startswith('Tempo em: ')]
+    
+    if not status_cols_in_df:
+        st.warning("Não foram encontradas colunas de 'Tempo em Status' nos dados.")
+        return None, df_for_preview, "Soma"
+
+    # Gera chaves únicas para os widgets
+    multiselect_key = f"status_selector_{config_key_prefix}"
+    radio_key = f"time_calc_method_{config_key_prefix}"
+
+    # Gera chaves únicas para guardar no 'config' (dicionário new_chart_config)
+    config_key_selected = f'{config_key_prefix}_selected_statuses'
+    config_key_calc = f'{config_key_prefix}_calc_method'
+
+    config[config_key_selected] = st.multiselect(
+        "Selecione os Status para o cálculo", 
+        options=sorted(status_cols_in_df), 
+        default=config.get(config_key_selected, []), 
+        key=multiselect_key,
+        help=help_text
+    )
+    
+    calc_method = st.radio(
+        "Calcular a", 
+        ["Soma", "Média"], 
+        horizontal=True, 
+        key=radio_key,
+        index=["Soma", "Média"].index(config.get(config_key_calc, "Soma"))
+    )
+    config[config_key_calc] = calc_method
+    
+    if config.get(config_key_selected):
+        cols_to_process = [f'Tempo em: {s}' for s in config[config_key_selected]]
+        new_measure_col_name = f"{calc_method} de tempo em: {', '.join(config[config_key_selected])}"
+        
+        # Modifica o dataframe (cópia)
+        if calc_method == "Soma":
+            df_for_preview[new_measure_col_name] = df_for_preview[cols_to_process].sum(axis=1)
+        else:
+            df_for_preview[new_measure_col_name] = df_for_preview[cols_to_process].mean(axis=1)
+        
+        return new_measure_col_name, df_for_preview, calc_method
+    else:
+        return None, df_for_preview, calc_method
+
+
+# --- BLOCO 5: INTERFACE DE CRIAÇÃO DE GRÁFICOS E PRÉ-VISUALIZAÇÃO ---
 st.subheader("Configuração da Visualização")
 creation_mode = st.radio("Como deseja criar a sua visualização?", ["Construtor Visual", "Gerar com IA ✨"], horizontal=True, key="creation_mode_selector")
 chart_config = {}
 df_for_preview = df.copy()
 new_measure_col = None
+time_calc_method = "Soma" # Define um padrão global
 
 if creation_mode == "Construtor Visual":
     config = st.session_state.new_chart_config
@@ -243,8 +335,20 @@ if creation_mode == "Construtor Visual":
             y_idx = y_options.index(config.get('y')) if config.get('y') in y_options else 0
             type_idx = type_options.index(config.get('type', 'dispersão').capitalize()) if config.get('type','').capitalize() in type_options else 0
 
-            config['x'] = c1.selectbox("Eixo X", x_options, index=x_idx)
-            config['y'] = c2.selectbox("Eixo Y", y_options, index=y_idx)
+            c1.selectbox(
+                "Eixo X", x_options, index=x_idx, 
+                key='x_axis_selector', 
+                on_change=update_axis_titles 
+            ) 
+            c2.selectbox(
+                "Eixo Y", y_options, index=y_idx, 
+                key='y_axis_selector',
+                on_change=update_axis_titles
+            )
+
+            config['x'] = st.session_state.new_chart_config.get('x')
+            config['y'] = st.session_state.new_chart_config.get('y')
+            
             config['type'] = c3.radio("Formato", type_options, index=type_idx, horizontal=True).lower()
             
             if config['x'] in date_cols:
@@ -285,9 +389,38 @@ if creation_mode == "Construtor Visual":
             
             st.markdown("###### **Títulos e Rótulos**")
             title_c1, title_c2, title_c3 = st.columns(3)
-            config['title'] = title_c1.text_input("Título do Gráfico:", value=config.get('title', f"{config.get('y')} vs {config.get('x')}"), key="chart_title_input_xy")
-            config['x_axis_title'] = title_c2.text_input("Título do Eixo X:", value=config.get('x_axis_title', config.get('x')))
-            config['y_axis_title'] = title_c3.text_input("Título do Eixo Y:", value=config.get('y_axis_title', config.get('y')))
+
+            config['title'] = title_c1.text_input(
+                "Título do Gráfico:",
+                value=config.get('title', f"{config.get('y', 'Y')} vs {config.get('x', 'X')}"),
+                key="chart_title_input_xy" # Mantém a key para o título principal
+            )
+
+            custom_x_title = config.get('x_axis_title')
+            current_x_selection = config.get('x', '')
+            if custom_x_title and custom_x_title != current_x_selection:
+                x_value = custom_x_title # Usa o título personalizado se for diferente da seleção do eixo
+            else:
+                x_value = current_x_selection # Caso contrário, usa a seleção atual do eixo (atualização automática)
+                
+            config['x_axis_title'] = title_c2.text_input(
+                "Título do Eixo X:",
+                value=x_value # Usa o valor calculado acima
+            )
+
+            # Define o valor do text_input para Eixo Y (mesma lógica)
+            custom_y_title = config.get('y_axis_title')
+            current_y_selection = config.get('y', '')
+            if custom_y_title and custom_y_title != current_y_selection:
+                y_value = custom_y_title
+            else:
+                y_value = current_y_selection
+
+            config['y_axis_title'] = title_c3.text_input(
+                "Título do Eixo Y:",
+                value=y_value
+            )
+            # --- FIM DA CORREÇÃO ---
             
             label_c1, label_c2 = st.columns(2)
             config['show_data_labels'] = label_c1.toggle("Exibir Rótulos de Dados", key="xy_labels", value=config.get('show_data_labels', False))
@@ -303,7 +436,6 @@ if creation_mode == "Construtor Visual":
             st.markdown("###### **Configuração do Gráfico Agregado**")
             config = st.session_state.new_chart_config
             c1, c2 = st.columns(2)
-            time_calc_method = "Soma"
             
             with c1:
                 COMBINED_DIMENSION_OPTION = "— Criar Dimensão Combinada —"
@@ -316,6 +448,7 @@ if creation_mode == "Construtor Visual":
                 else:
                     config['dimension'] = dim_selection
             with c2:
+                # Usa a lista de medidas corrigida
                 measure_idx = measure_options.index(config.get('measure_selection')) if config.get('measure_selection') in measure_options else 0
                 config['measure_selection'] = st.selectbox("Medida (Calcular)", options=measure_options, key="measure_selector", index=measure_idx)
 
@@ -324,24 +457,18 @@ if creation_mode == "Construtor Visual":
             config['secondary_dimension'] = st.selectbox("Dimensão Secundária (Drill-down)", options=sec_dim_options, index=sec_dim_idx)
             if config.get('secondary_dimension') == "Nenhuma": config['secondary_dimension'] = None
             
+            # --- CORREÇÃO: Chama a função reutilizável ---
             if config.get('measure_selection') == "Tempo em Status":
-                status_cols_in_df = [col.replace('Tempo em: ', '') for col in df.columns if col.startswith('Tempo em: ')]
-                if not status_cols_in_df:
-                    st.warning("Não foram encontradas colunas de 'Tempo em Status' nos dados.")
-                    config['measure'] = None
-                else:
-                    config['selected_statuses'] = st.multiselect("Selecione os Status para o cálculo", options=sorted(status_cols_in_df), default=config.get('selected_statuses', []), key="status_selector_multiselect")
-                    if config.get('selected_statuses'):
-                        time_calc_method = st.radio("Calcular a", ["Soma", "Média"], horizontal=True, key="time_calc_method")
-                        cols_to_process = [f'Tempo em: {s}' for s in config.get('selected_statuses')]
-                        new_measure_col_name = f"{time_calc_method} de tempo em: {', '.join(config.get('selected_statuses'))}"
-                        if time_calc_method == "Soma": df_for_preview[new_measure_col_name] = df_for_preview[cols_to_process].sum(axis=1)
-                        else: df_for_preview[new_measure_col_name] = df_for_preview[cols_to_process].mean(axis=1)
-                        config['measure'] = new_measure_col_name
-                    else:
-                        config['measure'] = None
+                new_measure_col, df_for_preview, time_calc_method = render_time_in_status_ui(
+                    config, 
+                    df_for_preview, 
+                    config_key_prefix="agg", 
+                    help_text="Selecione os status para somar/calcular a média. O resultado será usado como a Medida deste gráfico."
+                )
+                config['measure'] = new_measure_col
             else:
                 config['measure'] = config.get('measure_selection')
+            # --- FIM DA CORREÇÃO ---
 
             if config.get('dimension') and config.get('measure'):
                 st.divider()
@@ -381,8 +508,32 @@ if creation_mode == "Construtor Visual":
                 default_theme_name = config.get('color_theme', theme_options[0])
                 config['color_theme'] = st.selectbox("Esquema de Cores", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="agg_color_theme")
                 
-                auto_title = f"{config.get('agg')} de '{config.get('measure')}' por '{config.get('dimension')}'" if config.get('type') != 'tabela' else f"Tabela de Dados por {config.get('dimension')}"
-                config['title'] = st.text_input("Título do Gráfico:", value=config.get('title', auto_title))
+                # Calcula o título automático com base nas seleções atuais
+                dimension = config.get('dimension', 'Dimensão')
+                measure = config.get('measure', 'Medida')
+                agg = config.get('agg', 'Agregação')
+                chart_type = config.get('type')
+                
+                if chart_type == 'tabela':
+                    auto_title = f"Tabela de Dados por {dimension}"
+                else:
+                    auto_title = f"{agg} de '{measure}' por '{dimension}'"
+
+                # 1. Obtém o título guardado (pode ser personalizado)
+                current_title = config.get('title')
+                
+                # 2. Define o valor a exibir:
+                if current_title and current_title != auto_title:
+                     title_value = current_title
+                else:
+                     title_value = auto_title
+                     
+                # 3. Atualiza o config com o valor do text_input (que pode ser auto ou editado)
+                config['title'] = st.text_input(
+                    "Título do Gráfico:",
+                    value=title_value
+                )
+                
                 config['show_data_labels'] = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=config.get('show_data_labels', False))
 
                 measure_field_details = next((item for item in master_field_list if item['name'] == config.get('measure_selection')), None)
@@ -470,12 +621,28 @@ if creation_mode == "Construtor Visual":
                 num_op_idx = op_options.index(config.get('num_op', 'Contagem')) if config.get('num_op') in op_options else 0
                 config['num_op'] = col1.selectbox("Operação do Numerador", op_options, index=num_op_idx, key="kpi_num_op")
                 
+                # --- CORREÇÃO: Usar measure_options_numeric_only ---
                 if config.get('num_op') == "Contagem":
                     col2.selectbox("Campo do Numerador", ["Contagem de Issues"], disabled=True, key="kpi_num_field_count")
                     config['num_field'] = "Contagem de Issues"
                 else:
-                    num_field_idx = numeric_cols.index(config.get('num_field')) if config.get('num_field') in numeric_cols else 0
-                    config['num_field'] = col2.selectbox("Campo do Numerador", numeric_cols, index=num_field_idx, key="kpi_num_field_numeric")
+                    num_field_idx = measure_options_numeric_only.index(config.get('num_field')) if config.get('num_field') in measure_options_numeric_only else 0
+                    config['num_field'] = col2.selectbox("Campo do Numerador", measure_options_numeric_only, index=num_field_idx, key="kpi_num_field_numeric")
+
+                # --- CORREÇÃO: Adicionar UI condicional ---
+                if config.get('num_field') == "Tempo em Status":
+                    with st.container(border=True):
+                        st.markdown("###### Configuração (Numerador): Tempo em Status")
+                        new_measure_col, df_for_preview, _ = render_time_in_status_ui(
+                            config, 
+                            df_for_preview, 
+                            config_key_prefix="kpi_num",
+                            help_text="O valor (Soma/Média) destes status será usado como o Numerador."
+                        )
+                        config['num_field'] = new_measure_col # Sobrescreve o config['num_field'] com o nome da coluna calculada
+                        config['num_op'] = "Soma" # A agregação (Soma/Média) já foi feita, aqui só somamos a coluna
+                        if new_measure_col: st.caption(f"Medida do Numerador: {new_measure_col}")
+                # --- FIM DA CORREÇÃO ---
 
                 config['use_den'] = st.toggle("Usar Denominador (para calcular proporção)", value=config.get('use_den', False), key="kpi_use_den")
                 
@@ -486,12 +653,28 @@ if creation_mode == "Construtor Visual":
                     den_op_idx = op_options.index(config.get('den_op', 'Contagem')) if config.get('den_op') in op_options else 0
                     config['den_op'] = col3.selectbox("Operação do Denominador", op_options, index=den_op_idx, key="kpi_den_op")
                     
+                    # --- CORREÇÃO: Usar measure_options_numeric_only ---
                     if config.get('den_op') == "Contagem":
                         col4.selectbox("Campo do Denominador", ["Contagem de Issues"], disabled=True, key="kpi_den_field_count")
                         config['den_field'] = "Contagem de Issues"
                     else:
-                        den_field_idx = numeric_cols.index(config.get('den_field')) if config.get('den_field') in numeric_cols else 0
-                        config['den_field'] = col4.selectbox("Campo do Denominador", numeric_cols, index=den_field_idx, key="kpi_den_field_numeric")
+                        den_field_idx = measure_options_numeric_only.index(config.get('den_field')) if config.get('den_field') in measure_options_numeric_only else 0
+                        config['den_field'] = col4.selectbox("Campo do Denominador", measure_options_numeric_only, index=den_field_idx, key="kpi_den_field_numeric")
+
+                    # --- CORREÇÃO: Adicionar UI condicional ---
+                    if config.get('den_field') == "Tempo em Status":
+                        with st.container(border=True):
+                            st.markdown("###### Configuração (Denominador): Tempo em Status")
+                            new_measure_col, df_for_preview, _ = render_time_in_status_ui(
+                                config, 
+                                df_for_preview, 
+                                config_key_prefix="kpi_den",
+                                help_text="O valor (Soma/Média) destes status será usado como o Denominador."
+                            )
+                            config['den_field'] = new_measure_col 
+                            config['den_op'] = "Soma"
+                            if new_measure_col: st.caption(f"Medida do Denominador: {new_measure_col}")
+                    # --- FIM DA CORREÇÃO ---
 
                 st.divider()
                 config['use_baseline'] = st.toggle("Exibir Variação (Delta)", value=config.get('use_baseline', False), key="kpi_use_baseline")
@@ -503,15 +686,32 @@ if creation_mode == "Construtor Visual":
                     base_op_idx = op_options.index(config.get('base_op', 'Contagem')) if config.get('base_op') in op_options else 0
                     config['base_op'] = col5.selectbox("Operação da Linha de Base", op_options, index=base_op_idx, key="kpi_base_op")
 
+                    # --- CORREÇÃO: Usar measure_options_numeric_only ---
                     if config.get('base_op') == "Contagem":
                         col6.selectbox("Campo da Linha de Base", ["Contagem de Issues"], disabled=True, key="kpi_base_field_count")
                         config['base_field'] = "Contagem de Issues"
                     else:
-                        base_field_idx = numeric_cols.index(config.get('base_field')) if config.get('base_field') in numeric_cols else 0
-                        config['base_field'] = col6.selectbox("Campo da Linha de Base", numeric_cols, index=base_field_idx, key="kpi_base_field_numeric")
+                        base_field_idx = measure_options_numeric_only.index(config.get('base_field')) if config.get('base_field') in measure_options_numeric_only else 0
+                        config['base_field'] = col6.selectbox("Campo da Linha de Base", measure_options_numeric_only, index=base_field_idx, key="kpi_base_field_numeric")
+
+                    # --- CORREÇÃO: Adicionar UI condicional ---
+                    if config.get('base_field') == "Tempo em Status":
+                        with st.container(border=True):
+                            st.markdown("###### Configuração (Linha de Base): Tempo em Status")
+                            new_measure_col, df_for_preview, _ = render_time_in_status_ui(
+                                config, 
+                                df_for_preview, 
+                                config_key_prefix="kpi_base",
+                                help_text="O valor (Soma/Média) destes status será usado como a Linha de Base."
+                            )
+                            config['base_field'] = new_measure_col
+                            config['base_op'] = "Soma"
+                            if new_measure_col: st.caption(f"Medida da Linha de Base: {new_measure_col}")
+                    # --- FIM DA CORREÇÃO ---
 
             # Lógica de validação e atribuição final
             is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
+            # Validação: num_field não pode ser None (o que acontece se o multiselect estiver vazio)
             is_visual_valid = config.get('source_type') == 'visual' and config.get('num_op') and config.get('num_field')
 
             if is_jql_valid or is_visual_valid:
@@ -520,6 +720,9 @@ if creation_mode == "Construtor Visual":
                 chart_config = {}
                 if config.get('source_type') == 'jql':
                     st.warning("Por favor, preencha a 'Consulta JQL 1 (Valor A)' para gerar a pré-visualização.")
+                elif config.get('num_field') is None:
+                     st.warning("Por favor, selecione pelo menos um Status para o cálculo do Numerador.")
+
 
         elif chart_creator_type == "Tabela Dinâmica":
             config = st.session_state.new_chart_config
@@ -537,7 +740,9 @@ if creation_mode == "Construtor Visual":
             rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=config.get('rows', []))
             columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=config.get('columns', []))
             
-            all_numeric_measures = sorted(list(set(numeric_cols + status_time_cols)))
+            # --- CORREÇÃO: Usar measure_options_numeric_only (sem a opção "Tempo em Status" por enquanto) ---
+            # Nota: Tabela dinâmica não suporta a lógica de UI do "Tempo em Status" ainda.
+            all_numeric_measures = sorted(list(set(numeric_cols_for_dropdown + status_time_cols)))
             values_options = [""] + all_numeric_measures
             
             default_values_idx = values_options.index(config.get('values')) if config.get('values') in values_options else 0
@@ -588,9 +793,24 @@ if creation_mode == "Construtor Visual":
             dimension_idx = dimension_options.index(config.get('mc_dimension')) if config.get('mc_dimension') in dimension_options else 0
             config['mc_dimension'] = mc_cols2.selectbox("Dimensão (Eixo X do gráfico)", options=dimension_options, index=dimension_idx, help="O campo que define a sequência de dados, como uma data ou categoria.")
             
-            measure_options_mc = ["Contagem de Issues"] + numeric_cols
-            measure_idx = measure_options_mc.index(config.get('mc_measure')) if config.get('mc_measure') in measure_options_mc else 0
-            config['mc_measure'] = mc_cols3.selectbox("Medida (Eixo Y do gráfico)", options=measure_options_mc, index=measure_idx, help="O valor numérico ou a contagem de issues a ser plotada no gráfico.")
+            # --- CORREÇÃO: Usar measure_options_numeric_only ---
+            measure_idx = measure_options_numeric_only.index(config.get('mc_measure')) if config.get('mc_measure') in measure_options_numeric_only else 0
+            config['mc_measure'] = mc_cols3.selectbox("Medida (Eixo Y do gráfico)", options=measure_options_numeric_only, index=measure_idx, help="O valor numérico ou a contagem de issues a ser plotada no gráfico.")
+
+            # --- CORREÇÃO: Adicionar UI condicional ---
+            if config.get('mc_measure') == "Tempo em Status":
+                with st.container(border=True):
+                    st.markdown("###### Configuração (Medida): Tempo em Status")
+                    new_measure_col, df_for_preview, _ = render_time_in_status_ui(
+                        config, 
+                        df_for_preview, 
+                        config_key_prefix="mc_measure",
+                        help_text="O valor (Soma/Média) destes status será usado como a Medida (Eixo Y) do gráfico de tendência."
+                    )
+                    # Sobrescreve 'mc_measure' com o nome da coluna calculada
+                    config['mc_measure'] = new_measure_col 
+                    if new_measure_col: st.caption(f"Medida do Eixo Y: {new_measure_col}")
+            # --- FIM DA CORREÇÃO ---
 
             st.markdown("##### **Configuração dos Valores Principais da Métrica**")
             mv_cols1, mv_cols2 = st.columns(2)
@@ -645,7 +865,16 @@ st.divider()
 # --- BLOCO 6: AÇÕES FINAIS (SALVAR/CANCELAR) ---
 def cleanup_editor_state_and_switch_page():
     """Limpa o estado do editor e volta para o dashboard."""
-    keys_to_clear = ['chart_to_edit', 'creator_filters', 'chart_config_ia', 'new_chart_config']
+    # Adiciona as chaves de config do "Tempo em Status" para limpeza
+    keys_to_clear = [
+        'chart_to_edit', 'creator_filters', 'chart_config_ia', 'new_chart_config',
+        'agg_selected_statuses', 'agg_calc_method',
+        'kpi_num_selected_statuses', 'kpi_num_calc_method',
+        'kpi_den_selected_statuses', 'kpi_den_calc_method',
+        'kpi_base_selected_statuses', 'kpi_base_calc_method',
+        'mc_measure_selected_statuses', 'mc_measure_calc_method',
+        'updated_tabs_layout' # Limpa o estado de edição do dashboard também
+    ]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
@@ -660,7 +889,9 @@ if editing_mode:
             original_chart_id = final_config.get('id')
 
             if final_config and final_config.get('title') and original_chart_id:
-                if new_measure_col: final_config['measure'] = new_measure_col # Atualiza a medida se necessário
+                # Se uma nova coluna foi gerada (ex: Tempo em Status), 'measure' já foi atualizado
+                # Mas precisamos garantir que 'new_measure_col' (que não é mais usado) não sobrescreva
+                
                 final_config['filters'] = convert_dates_in_filters(st.session_state.get('creator_filters', []))
                 
                 user_data = find_user(st.session_state['email'])
@@ -698,7 +929,9 @@ if editing_mode:
 else: # Lógica para adicionar novo gráfico (sem alterações)
     if st.button("Adicionar ao Dashboard Ativo", type="primary", width='stretch', icon="➕"):
         if chart_config and chart_config.get('title'):
-            if new_measure_col: chart_config['measure'] = new_measure_col
+            # A lógica de 'new_measure_col' já não é necessária,
+            # pois 'chart_config' é atualizado diretamente pela UI
+            
             chart_config['filters'] = convert_dates_in_filters(st.session_state.get('creator_filters', []))
             chart_config['id'] = str(uuid.uuid4())
             user_data = find_user(st.session_state['email'])
