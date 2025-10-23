@@ -4,12 +4,11 @@ import streamlit as st
 import toml
 from pathlib import Path
 import plotly.express as px
-# REMOVA A LINHA ABAIXO: from security import get_global_configs, get_project_config
 
 # --- CONFIGURAÇÃO DA BASE DE DADOS E MASTER USER ---
-DB_NAME = "dashboard_metrics" # Certifique-se que este é o nome correto
-MONGO_URI = st.secrets.get("connections", {}).get("mongodb_uri", "mongodb://localhost:27017/") # Fallback seguro
-MASTER_USERS = st.secrets.get("app_settings", {}).get("MASTER_USERS", []) # Fallback seguro
+DB_NAME = "dashboard_metrics"
+MONGO_URI = st.secrets.get("connections", {}).get("mongodb_uri", "mongodb://localhost:27017/")
+MASTER_USERS = st.secrets.get("app_settings", {}).get("MASTER_USERS", [])
 
 # --- Configurações da Aplicação ---
 APP_VERSION = "1.5.0"
