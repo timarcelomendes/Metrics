@@ -5,10 +5,16 @@ import toml
 from pathlib import Path
 import plotly.express as px
 
-# --- CONFIGURAÇÃO DA BASE DE DADOS E MASTER USER ---
-DB_NAME = "dashboard_metrics"
-MONGO_URI = st.secrets.get("connections", {}).get("mongodb_uri", "mongodb://localhost:27017/")
+# --- CONFIGURAÇÃO DA BASE DE DADOS E MASTER USER (lido a partir de secrets.toml) ---
+MONGO_URI = st.secrets.get("connections", {}).get("mongodb_uri")
+DB_NAME = "gauge_metrics"
 MASTER_USERS = st.secrets.get("app_settings", {}).get("MASTER_USERS", [])
+
+if not MONGO_URI:
+    st.error("MONGO_URI não encontrado em secrets.toml [connections].")
+if not MASTER_USERS:
+    st.warning("MASTER_USERS não encontrado ou vazio em secrets.toml [app_settings].")
+
 
 # --- Configurações da Aplicação ---
 APP_VERSION = "1.5.0"

@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 from pymongo import MongoClient
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from passlib.context import CryptContext
 from bson.objectid import ObjectId
 from config import *
@@ -25,6 +25,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import MASTER_USERS
 GLOBAL_CONFIG_PATH = Path("global_app_configs.json")
+import traceback
 
 # --- CONSTANTES PADRÃO ---
 AVAILABLE_STANDARD_FIELDS = {
@@ -70,7 +71,80 @@ def save_config(data, file_path):
         json.dump(data, f, indent=4)
 
 # --- Configuração de Hashing e Criptografia ---
-cipher_suite = Fernet(st.secrets["app_settings"]["SECRET_KEY"].encode())
+print("-" * 20)
+print("INICIANDO LEITURA DE SEGREDOS em security.py")
+secret_key_value = None
+cipher_suite = None
+
+try:
+    # Tenta ler a chave diretamente
+    secret_key_value = st.secrets.get("app_settings", {}).get("SECRET_KEY")
+    print(f"SECRET_KEY lida diretamente: {'SIM' if secret_key_value else 'NÃO'}")
+
+    # Tenta inicializar o Fernet
+    if secret_key_value:
+        try:
+            cipher_suite = Fernet(secret_key_value.encode())
+            print("Cipher suite inicializado COM SUCESSO.")
+        except Exception as e:
+            st.error(f"Erro ao inicializar o cifrador com SECRET_KEY: {e}")
+            print(f"ERRO ao criar Fernet: {traceback.format_exc()}") # Imprime traceback completo
+            cipher_suite = None # Garante que está None em caso de falha
+    else:
+        # Mensagem se a chave não foi encontrada diretamente
+        st.error("Chave de criptografia (SECRET_KEY) não encontrada diretamente em st.secrets.")
+        print("ERRO: SECRET_KEY não encontrada diretamente.")
+
+except KeyError:
+    # Captura o erro específico se a chave não existir no nível raiz
+    st.error("Falha ao ler SECRET_KEY: Chave não encontrada no nível raiz de secrets.toml.")
+    print("ERRO: KeyError ao aceder st.secrets['SECRET_KEY']. Verifique secrets.toml.")
+    cipher_suite = None # Garante que está None
+except Exception as e:
+    # Captura outros erros durante a leitura dos segredos
+    st.error(f"Erro inesperado ao ler SECRET_KEY: {e}")
+    print(f"ERRO inesperado ao ler st.secrets['SECRET_KEY']: {traceback.format_exc()}")
+    cipher_suite = None # Garante que está None
+
+print(f"Status final do cipher_suite: {'Inicializado' if cipher_suite else 'NÃO Inicializado'}")
+print("-" * 20)
+
+
+# As funções encrypt_token e decrypt_token DEVEM incluir a verificação 'if not cipher_suite:'
+def encrypt_token(token):
+    if not cipher_suite:
+        # A mensagem de erro já deve ter sido mostrada na inicialização
+        print("Erro: Tentativa de encriptar sem cipher_suite inicializado.")
+        return None
+    if not token:
+        return None
+    try:
+        return cipher_suite.encrypt(token.encode()).decode()
+    except Exception as e:
+        st.error(f"Erro ao encriptar token: {e}")
+        return None
+
+def decrypt_token(encrypted_token):
+    """Desencripta um token/senha de API."""
+    if not cipher_suite:
+        # A mensagem de erro na interface virá da inicialização falhada
+        print("Erro: Tentativa de decriptar sem cipher_suite inicializado.")
+        st.error("Criptografia não inicializada. Verifique a configuração da SECRET_KEY.") # Mensagem mais direta
+        return None
+    if not encrypted_token:
+        return None
+    try:
+        encrypted_bytes = encrypted_token.encode() if isinstance(encrypted_token, str) else encrypted_token
+        decrypted_bytes = cipher_suite.decrypt(encrypted_bytes)
+        return decrypted_bytes.decode()
+    except InvalidToken:
+        st.warning("Token inválido ou chave de criptografia incorreta ao tentar decriptar.")
+        print("AVISO: InvalidToken durante a decriptografia.")
+        return None
+    except Exception as e:
+        st.error(f"Erro inesperado ao decriptar token: {e}")
+        print(f"ERRO: Falha inesperada ao decriptar: {e}")
+        return None
 
 def verify_password(plain_password, hashed_password):
     """Verifica uma senha usando bcrypt."""
@@ -86,42 +160,6 @@ def get_password_hash(password):
     salt = bcrypt.gensalt()
     hashed_bytes = bcrypt.hashpw(truncated_bytes, salt)
     return hashed_bytes.decode('utf-8')
-
-secret_key_value = st.secrets.get("SECRET_KEY")
-
-cipher_suite = None 
-if secret_key_value:
-    try:
-        cipher_suite = Fernet(secret_key_value.encode())
-    except Exception as e:
-        st.error(f"Erro ao inicializar o cifrador com a chave fornecida (SECRET_KEY): {e}")
-else:
-    st.error("Chave de criptografia (SECRET_KEY) não encontrada. Verifique secrets.toml.")
-
-def encrypt_token(token):
-    if not cipher_suite:
-        st.error("Criptografia não inicializada. Não é possível encriptar o token.")
-        return None 
-    try:
-        return cipher_suite.encrypt(token.encode()).decode()
-    except Exception as e:
-        st.error(f"Erro ao encriptar token: {e}")
-        return None
-
-def decrypt_token(encrypted_token):
-    if not cipher_suite:
-        st.error("Criptografia não inicializada. Não é possível decriptar o token.")
-        return None 
-    if not encrypted_token:
-        return None
-    try:
-        return cipher_suite.decrypt(encrypted_token.encode()).decode()
-    except InvalidToken:
-        st.warning("Token inválido ou chave de criptografia incorreta ao tentar decriptar.")
-        return None
-    except Exception as e:
-        st.error(f"Erro inesperado ao decriptar token: {e}")
-        return None
 
 # --- Funções de Conexão e Acesso às Coleções do MongoDB ---
 @st.cache_resource(show_spinner='Carregando os dados')
