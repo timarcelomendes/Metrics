@@ -171,7 +171,7 @@ in_progress_statuses = status_mapping.get('in_progress', [])
 if not done_statuses:
     st.warning("Nenhum 'status final' está configurado para este projeto.", icon="⚠️")
 
-completed_issues_in_period = [i for i in filtered_issues if (cd := find_completion_date(i, project_config)) and start_date <= cd <= end_date]
+completed_issues_in_period = [i for i in filtered_issues if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime <= end_date]
 times_data = []
 for issue in completed_issues_in_period:
     completion_date_dt = find_completion_date(issue, project_config)
@@ -193,6 +193,13 @@ aging_df = get_aging_wip(filtered_issues)
 sla_metrics = {}
 if global_configs.get('sla_policies'):
     sla_metrics = calculate_sla_metrics_for_issues(filtered_issues, global_configs)
+
+completed_issue_keys = [issue.key for issue in completed_issues_in_period]
+
+if 'ID' in filtered_df.columns:
+    df_done = filtered_df[filtered_df['ID'].isin(completed_issue_keys)].copy()
+else:
+    df_done = pd.DataFrame()
 
 tab_comum, tab_kanban, tab_scrum, tab_performance = st.tabs(["Métricas de Fluxo Comuns", "Análise Kanban", "Análise Scrum", "Análise de Performance"])
 
@@ -308,46 +315,106 @@ with tab_performance:
         st.warning("Nenhum campo de estimativa configurado. As métricas de acurácia não podem ser calculadas.", icon="⚠️")
         st.page_link("pages/7_⚙️_Configurações.py", label="Configurar Campo de Estimativa", icon="⚙️")
     else:
-        st.markdown("**Acurácia da Estimativa (Estimado vs. Realizado)**")
-        st.caption("Compara o esforço estimado com o tempo real gasto nas tarefas concluídas no período.")
-        
-        accuracy_metrics = calculate_estimation_accuracy(completed_issues_in_period, estimation_config)
-        
-        kpi1, kpi2, kpi3 = st.columns(3)
-        unit = "hs" if estimation_config.get('source') == 'standard_time' else "pts"
-        
-        kpi1.metric(f"Total Estimado (Concluídos)", f"{accuracy_metrics['total_estimated']:.1f} {unit}")
-        kpi2.metric(f"Total Realizado (Concluídos)", f"{accuracy_metrics['total_actual']:.1f} hs")
-        kpi3.metric("Acurácia (Realizado / Estimado)", f"{accuracy_metrics['accuracy_ratio']:.1f}%", 
-                    delta=f"{accuracy_metrics['accuracy_ratio'] - 100:.1f}% vs. 100%", 
-                    delta_color="inverse",
-                    help="Valores acima de 100% indicam que o esforço real foi maior que o estimado.")
+        with st.container(border=True):
+            st.subheader("Acurácia da Estimativa (Estimado vs. Realizado)")
+            st.caption("Compara o esforço estimado com o tempo real gasto nas tarefas concluídas no período.")
 
-        st.divider()
-        st.markdown("**Comparativo Visual: Estimado vs. Realizado**")
+            # 1. Obter os IDs dos campos das configurações do projeto
+            estimation_config = project_config.get('estimation_field', {})
+            timespent_config = project_config.get('timespent_field', {})
 
-        chart_data = {
-            'Métrica': ['Estimado', 'Realizado'],
-            'Valor': [accuracy_metrics['total_estimated'], accuracy_metrics['total_actual']]
-        }
-        df_chart = pd.DataFrame(chart_data)
+            estimation_field_id = estimation_config.get('id') if estimation_config else None
+            timespent_field_id = timespent_config.get('id') if timespent_config else None
 
-        if not df_chart.empty and df_chart['Valor'].sum() > 0:
-            fig = px.bar(
-                df_chart,
-                x='Métrica',
-                y='Valor',
-                color='Métrica',
-                text='Valor',
-                color_discrete_map={'Estimado': '#1f77b4', 'Realizado': '#ff7f0e'},
-                labels={'Valor': f'Valor ({unit} / hs)', 'Métrica': ''}
-            )
-            fig.update_traces(texttemplate='%{text:.1f}', textposition='outside')
-            fig.update_layout(
-                title_text=f"Comparativo Estimado vs. Realizado (em {unit})",
-                template="plotly_white",
-                showlegend=False
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Não há dados de estimativa e tempo gasto para exibir o gráfico.")
+            total_estimado = 0.0
+            total_realizado_segundos = 0.0
+            total_realizado_horas = 0.0
+            
+            # 2. Verificar se os campos foram configurados
+            if not estimation_field_id or not timespent_field_id:
+                st.warning("⚠️ Os campos de 'Estimativa' (Previsto) e 'Tempo Gasto' (Realizado) não foram configurados.")
+                st.info("Por favor, vá até a página '7_⚙️_Configurações' -> 'Estimativa' e mapeie os dois campos.")
+            
+            # 3. Verificar se temos issues concluídas para calcular
+            elif 'df_done' not in locals() or df_done.empty:
+                st.info("Nenhuma issue foi concluída no período selecionado para calcular a acurácia.")
+                
+            else:
+                # 4. Verificar se as colunas existem no DataFrame
+                if estimation_field_id not in df_done.columns:
+                    st.error(f"O campo de estimativa '{estimation_field_id}' não foi encontrado nos dados carregados.")
+                if timespent_field_id not in df_done.columns:
+                    st.error(f"O campo de tempo gasto '{timespent_field_id}' não foi encontrado nos dados carregados.")
+                
+                else:
+                    # 5. Calcular os totais (convertendo para numérico e tratando nulos)
+                    total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
+                    total_realizado_segundos = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
+                    
+                    # 6. *** A CONVERSÃO CHAVE: Segundos para Horas ***
+                    total_realizado_horas = total_realizado_segundos / 3600.0
+
+            # 7. Exibir as Métricas
+            col1, col2, col3 = st.columns(3)
+            
+            # Cartão de Total Estimado
+            unit_estimado = "pts" # Você pode querer tornar isso dinâmico se souber a unidade
+            col1.metric("Total Estimado (Concluídos)", f"{total_estimado:,.1f} {unit_estimado}")
+            
+            # Cartão de Total Realizado
+            col2.metric("Total Realizado (Concluídos)", f"{total_realizado_horas:,.1f} hs")
+            
+            # Cartão de Acurácia (Opcional, pois comparar horas e pontos pode ser enganoso)
+            if total_estimado > 0:
+                # Esta é uma métrica de "horas por ponto"
+                ratio_hs_por_ponto = total_realizado_horas / total_estimado
+                col3.metric("Média (Horas / Ponto)", f"{ratio_hs_por_ponto:,.2f} hs/pt")
+            else:
+                col3.metric("Média (Horas / Ponto)", "N/A")
+
+            # 8. Exibir o Gráfico Comparativo
+            if total_estimado > 0 or total_realizado_horas > 0:
+                
+                # Cria um DataFrame simples para o gráfico
+                chart_data = pd.DataFrame({
+                    'Tipo': ['Estimado', 'Realizado'],
+                    'Valor': [total_estimado, total_realizado_horas],
+                    'Unidade': [unit_estimado, 'hs']
+                })
+                
+                # Nota: Este gráfico compara grandezas diferentes (pontos vs horas)
+                # Pode ser mais útil um gráfico de 'issues' x 'estimado' vs 'realizado'
+                # Mas para um total, um gráfico de barras simples pode funcionar
+                
+                try:
+                    # Usando Altair para um gráfico de barras simples
+                    import altair as alt
+                    
+                    base = alt.Chart(chart_data).encode(
+                        x=alt.X('Tipo', title=None),
+                        tooltip=['Tipo', 'Valor', 'Unidade']
+                    )
+                    
+                    bars = base.mark_bar().encode(
+                        y=alt.Y('Valor', title='Total'),
+                        color=alt.Color('Tipo', legend=alt.Legend(title="Tipo"))
+                    )
+                    
+                    text = base.mark_text(
+                        align='center',
+                        baseline='bottom',
+                        dy=-5  # Desloca o texto um pouco para cima da barra
+                    ).encode(
+                        text=alt.Text('Valor', format=',.1f')
+                    )
+                    
+                    st.altair_chart(bars + text, use_container_width=True)
+                    st.caption(f"Comparativo visual (Nota: 'Estimado' está em '{unit_estimado}' e 'Realizado' está em 'hs')")
+
+                except ImportError:
+                    st.error("Biblioteca 'altair' não encontrada para gerar o gráfico.")
+                except Exception as e:
+                    st.error(f"Erro ao gerar gráfico: {e}")
+                    
+            else:
+                st.markdown("<p style='text-align: center; padding: 10px;'>Não há dados de estimativa e tempo gasto para exibir o gráfico.</p>", unsafe_allow_html=True)

@@ -12,26 +12,59 @@ from datetime import datetime, timedelta, date
 # --- Funções Auxiliares de Data ---
 def find_completion_date(issue, project_config):
     """
-    Encontra a data de conclusão real de uma issue analisando seu histórico (changelog).
-    Retorna a data da última transição para um status da categoria 'Done'.
+    Encontra a data da ÚLTIMA transição para um status de 'done',
+    baseado nos IDs dos status configurados. (VERSÃO FINAL)
     """
-    if not issue or not hasattr(issue, 'changelog') or not issue.changelog:
+    
+    status_mapping = project_config.get('status_mapping', {})
+    done_config_list = status_mapping.get('done', [])
+    
+    if not done_config_list:
+        return None 
+
+    done_status_ids = set()
+    try:
+        if isinstance(done_config_list[0], dict):
+            done_status_ids = {d['id'] for d in done_config_list if d.get('id')}
+        else:
+            return None
+    except IndexError:
+        return None 
+            
+    if not done_status_ids: 
+        return None 
+
+    current_status_id = getattr(getattr(issue.fields, 'status', None), 'id', None)
+    resolution_date_str = getattr(issue.fields, 'resolutiondate', None)
+    
+    if resolution_date_str:
+        if current_status_id in done_status_ids:
+            resolution_date = pd.to_datetime(resolution_date_str).tz_localize(None).normalize()
+            return resolution_date
+
+    completion_date = None
+    try:
+        if not hasattr(issue, 'changelog') or not issue.changelog:
+            return None 
+
+        for history in issue.changelog.histories:
+            history_date = pd.to_datetime(history.created).tz_localize(None).normalize()
+            
+            for item in history.items:
+                # Compara o ID do Status (`item.to`)
+                if item.field.lower() == 'status' and item.to in done_status_ids:
+                    completion_date = history_date
+                
+                # Se saiu de um status 'done' (foi reaberto)
+                elif item.field.lower() == 'status' and item.frm in done_status_ids:
+                    if item.to not in done_status_ids:
+                         completion_date = None 
+
+    except Exception as e:
         return None
 
-    # Usa a chave 'done' (minúscula) para consistência
-    done_statuses = [s.lower() for s in project_config.get('status_mapping', {}).get('done', [])]
-
-    if not done_statuses:
-        resolution_date = getattr(issue.fields, 'resolutiondate', None)
-        return pd.to_datetime(resolution_date).date() if resolution_date else None
-
-    completion_dates = []
-    for history in issue.changelog.histories:
-        for item in history.items:
-            if item.field == 'status' and item.toString.lower() in done_statuses:
-                completion_dates.append(pd.to_datetime(history.created).date())
-
-    return max(completion_dates) if completion_dates else None
+    # Retorna a data (do resolutiondate ou do changelog)
+    return completion_date
 
 def find_start_date(issue):
     """Encontra a data de início do ciclo de trabalho."""
@@ -351,47 +384,81 @@ def prepare_cfd_data(issues, start_date, end_date):
 
     return cfd_cumulative, wip_df
 
-def prepare_project_burnup_data(issues, unit, estimation_config, project_config):
-    """Prepara o burnup, com o tipo de data."""
-    valid_issues = get_filtered_issues(issues)
-
-    if unit == 'points' and (not estimation_config or not estimation_config.get('id')):
-        st.warning("Para análise por pontos/horas, configure um 'Campo de Estimativa' para este projeto.")
+def prepare_project_burnup_data(issues: list, unit_param: str, estimation_config: dict, project_config: dict):
+    """
+    Prepara os dados para o gráfico de burnup (VERSÃO FINAL).
+    """
+    if not issues:
         return pd.DataFrame()
 
-    is_time_based = estimation_config.get('source') == 'standard_time'
+    estimation_field_id = estimation_config.get('id') if estimation_config else None
+    
+    # Validação inicial (sem st.error para não poluir)
+    if unit_param == 'points' and not estimation_field_id:
+        print(f"AVISO no Burnup: Unidade é 'points' mas ID do campo não encontrado.")
+        return pd.DataFrame()
 
-    data = []
-    for issue in valid_issues:
-        created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
-        completion_date = find_completion_date(issue, project_config)
+    scope_data = []
+    done_data = []
+
+    for issue in issues:
+        created_date_raw = getattr(issue.fields, 'created', None)
+        if not created_date_raw: continue 
+        created_date = pd.to_datetime(created_date_raw).tz_localize(None).normalize()
         
-        value = 0
-        if unit == 'count':
-            value = 1
-        elif unit == 'points':
-            raw_value = get_issue_estimation(issue, estimation_config) or 0
-            value = (raw_value / 3600) if is_time_based else raw_value
-        
-        data.append({'created': created_date, 'resolved': completion_date, 'value': value})
+        # 1. Chama a função find_completion_date (que já retorna datetime ou None)
+        completion_date_dt = find_completion_date(issue, project_config) 
 
-    df = pd.DataFrame(data)
-    if df.empty or df['created'].dropna().empty: return pd.DataFrame()
+        value = 1.0 
+        if unit_param == 'points':
+            if estimation_field_id:
+                raw_value = getattr(issue.fields, estimation_field_id, 0)
+                value = pd.to_numeric(raw_value, errors='coerce') or 0.0
+            else:
+                value = 0.0 
 
-    df['resolved'] = pd.to_datetime(df['resolved'])
+        if pd.notna(created_date):
+            scope_data.append({'Data': created_date, 'Valor': value})
+            
+        # 2. Verifica diretamente se a data retornada pela função é válida
+        if completion_date_dt and pd.notna(completion_date_dt): 
+            # Usa a data diretamente, sem re-converter
+            done_data.append({'Data': completion_date_dt, 'Valor': value})
 
-    start_date = df['created'].min()
-    end_date = pd.Timestamp.now(tz=None).normalize()
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    if not scope_data:
+        return pd.DataFrame() 
 
-    scope_over_time = [df[df['created'] <= day]['value'].sum() for day in date_range]
-    completed_over_time = [df[(df['resolved'].notna()) & (df['resolved'] <= day)]['value'].sum() for day in date_range]
+    df_scope = pd.DataFrame(scope_data).groupby('Data')['Valor'].sum().reset_index()
+    df_scope = df_scope.set_index('Data').resample('D').sum().cumsum().ffill()
+    df_scope.rename(columns={'Valor': 'Escopo Total'}, inplace=True)
 
-    return pd.DataFrame({
-        'Data': date_range, 
-        'Escopo Total': scope_over_time, 
-        'Trabalho Concluído': completed_over_time
-    }).set_index('Data')
+    if done_data:
+        df_done = pd.DataFrame(done_data).groupby('Data')['Valor'].sum().reset_index()
+        df_done = df_done.set_index('Data').resample('D').sum().cumsum().ffill()
+        df_done.rename(columns={'Valor': 'Trabalho Concluído'}, inplace=True)
+    else:
+        df_done = pd.DataFrame(index=df_scope.index, columns=['Trabalho Concluído']).fillna(0)
+        # Removido o st.error de debug
+
+    burnup_df = df_scope.join(df_done, how='outer').ffill().fillna(0)
+    
+    min_date = burnup_df.index.min()
+    max_date = datetime.now().date() 
+    
+    if pd.isna(min_date):
+         return pd.DataFrame() 
+         
+    date_range = pd.date_range(start=min_date, end=max_date, freq='D')
+    
+    burnup_df = burnup_df.reindex(date_range, method='ffill').fillna(0).infer_objects(copy=False) 
+    burnup_df.index.name = 'Data'
+    
+    burnup_df['Trabalho Concluído'] = burnup_df.apply(
+        lambda row: min(row['Trabalho Concluído'], row['Escopo Total']), 
+        axis=1
+    )
+
+    return burnup_df
 
 def calculate_trend_and_forecast(burnup_df, trend_weeks):
     """

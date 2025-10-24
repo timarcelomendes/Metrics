@@ -103,14 +103,27 @@ def get_issues_by_date_range(jira_client, project_key, start_date=None, end_date
         print(f"Erro ao buscar issues por data para o projeto {project_key}: {e}")
         return []
 
-def get_all_project_issues(jira_client, project_key):
-    """Busca TODAS as issues de um projeto, sem filtros de data."""
-    try:
-        jql_query = f'project = "{project_key}" ORDER BY created DESC'
-        return jira_client.search_issues(jql_query, expand='changelog', maxResults=False)
-    except Exception as e:
-        print(f"Erro ao buscar todas as issues do projeto {project_key}: {e}")
-        return []
+@st.cache_data(ttl=300)
+def get_all_project_issues(_jira_client: JIRA, project_key: str, extra_fields: list = None):
+    jql = f"project = '{project_key}'"
+    
+    fields = [
+        'summary', 'status', 'issuetype', 'created', 
+        'resolutiondate', 'assignee', 'reporter', 'priority', 
+        'components', 'labels', 'project'
+    ]
+    
+    if extra_fields:
+        for field in extra_fields:
+            if field not in fields:
+                fields.append(field)
+                
+    return _jira_client.search_issues(
+        jql, 
+        fields=fields, 
+        maxResults=False, 
+        expand="changelog"
+    )
     
 @lru_cache(maxsize=32)
 def get_fix_versions(jira_client, project_key):
@@ -121,14 +134,26 @@ def get_fix_versions(jira_client, project_key):
         print(f"Erro ao buscar versões para o projeto {project_key}: {e}")
         return []
 
-def get_issues_by_fix_version(jira_client, project_key, version_id):
-    """Busca todas as issues associadas a uma 'Fix Version' específica."""
-    try:
-        jql_query = f'project = "{project_key}" AND fixVersion = {version_id}'
-        return jira_client.search_issues(jql_query, expand='changelog', maxResults=False)
-    except Exception as e:
-        print(f"Erro ao buscar issues para a versão {version_id}: {e}")
-        return []
+def get_issues_by_fix_version(jira_client: JIRA, project_key: str, version_id: str, extra_fields: list = None):
+    jql = f"project = '{project_key}' AND fixVersion = {version_id}"
+    
+    fields = [
+        'summary', 'status', 'issuetype', 'created', 
+        'resolutiondate', 'assignee', 'reporter', 'priority', 
+        'components', 'labels', 'project'
+    ]
+    
+    if extra_fields:
+        for field in extra_fields:
+            if field not in fields:
+                fields.append(field)
+                
+    return jira_client.search_issues(
+        jql, 
+        fields=fields, 
+        maxResults=False, 
+        expand="changelog" 
+    )
 
 @st.cache_data(ttl=3600)
 def get_sprints_in_range(_client, project_key, start_date, end_date):
@@ -237,33 +262,26 @@ def get_project_issues(_client, project_key, jql_filter="", user_custom_fields=N
         st.error(f"Erro ao buscar issues do Jira para o projeto '{project_key}': {e}")
         return []
 
-def get_issues_by_board(jira_client, board_id):
-    """Busca todas as issues de um quadro específico fazendo uma chamada GET direta à API."""
-    all_issues = []
-    start_at = 0
-    max_results_per_page = 50
-    server_url = jira_client._options['server']
-    auth = HTTPBasicAuth(jira_client._session.auth[0], jira_client._session.auth[1])
-    headers = { "Accept": "application/json" }
-    url = f"{server_url}/rest/agile/1.0/board/{board_id}/issue"
-
-    while True:
-        try:
-            params = {'startAt': start_at, 'maxResults': max_results_per_page, 'expand': 'changelog'}
-            response = requests.request("GET", url, headers=headers, params=params, auth=auth)
-            response.raise_for_status()
-            data = response.json()
-            issues_data = data.get('issues', [])
-            chunk = [Issue(options={'server': server_url}, session=jira_client._session, raw=raw_issue_data) for raw_issue_data in issues_data]
-            all_issues.extend(chunk)
-            if data.get('isLast', True) or not issues_data:
-                break
-            start_at += len(chunk)
-        except Exception as e:
-            print(f"ERRO CRÍTICO na chamada direta à API para o quadro {board_id}: {e}")
-            st.error("Não foi possível buscar as issues para este quadro.")
-            return []
-    return all_issues
+def get_issues_by_board(jira_client: JIRA, board_id: str, extra_fields: list = None):
+    jql = f"board = {board_id}" # (Ou a JQL que você usa para boards)
+    
+    fields = [
+        'summary', 'status', 'issuetype', 'created', 
+        'resolutiondate', 'assignee', 'reporter', 'priority', 
+        'components', 'labels', 'project'
+    ]
+    
+    if extra_fields:
+        for field in extra_fields:
+            if field not in fields:
+                fields.append(field)
+                
+    return jira_client.search_issues(
+        jql, 
+        fields=fields, 
+        maxResults=False, 
+        expand="changelog" 
+    )
 
 @st.cache_data(ttl=3600)
 def get_project_issue_types(_jira_client, project_key):
@@ -276,19 +294,22 @@ def get_project_issue_types(_jira_client, project_key):
         st.error(f"Erro ao buscar tipos de issue para o projeto {project_key}: {e}")
         return []
     
-@st.cache_data(ttl=3600, show_spinner="A obter os status do Jira...")
-def get_jira_statuses(_jira_client, project_key):
+@st.cache_data(ttl=600)
+def get_jira_statuses(_jira_client: JIRA, project_key: str):
     """
-    Retorna uma lista de todos os objetos de status disponíveis na instância Jira.
-    Nota: A API padrão não filtra status por projeto de forma simples, então esta função
-    retorna todos os status da instância, que é o comportamento mais comum e esperado.
+    Busca TODOS os status disponíveis na instância Jira
+    que o cliente (API token) pode ver.
     """
     try:
-        # A chamada jira.statuses() retorna todos os status da instância.
-        # O argumento project_key é mantido para consistência da interface, mas não é usado na chamada.
-        return _jira_client.statuses()
+        # Esta é a chamada de API padrão e mais robusta.
+        # Ela busca todos os status, incluindo os globais e os específicos
+        # de projetos (como "Done" / "Concluído" do MOJI).
+        all_statuses = _jira_client.statuses()
+        
+        return all_statuses
+        
     except Exception as e:
-        st.error(f"Erro ao buscar os status do Jira: {e}")
+        st.error(f"Erro fatal ao buscar a lista de status do Jira: {e}")
         return []
     
 def get_issue(jira_client, issue_key):

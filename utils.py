@@ -37,20 +37,24 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 import unicodedata
 from stqdm import stqdm
-from jira_connector import get_project_issues, get_jira_fields
 from security import find_user, get_project_config, get_global_configs
-from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str):
+    from jira_connector import get_project_issues, get_jira_fields
+    from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
+
     """
     Carrega, processa e enriquece os dados de um projeto Jira, incluindo os campos
     padrão e personalizados ativados pelo utilizador, E GARANTINDO o campo estratégico.
     """
-    # --- REMOVER AS IMPORTAÇÕES DE DENTRO DA FUNÇÃO ---
-    # from jira_connector import get_project_issues, get_jira_fields # <-- REMOVER DAQUI
-    # from metrics_calculator import find_completion_date, filter_ignored_issues, calculate_cycle_time # <-- REMOVER DAQUI
-    # from security import find_user, get_project_config, get_global_configs # <-- REMOVER DAQUI
+
+    project_config = get_project_config(project_key) or {}
+    estimation_config = project_config.get('estimation_field', {})
+    timespent_config = project_config.get('timespent_field', {})
+
+    estimation_field_id = estimation_config.get('id') if estimation_config else None
+    timespent_field_id = timespent_config.get('id') if timespent_config else None
     
     user_data = find_user(st.session_state['email'])
     project_config = get_project_config(project_key) or {}
@@ -153,6 +157,16 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
             for status_name, time_days in time_in_status_data.items():
                 issue_data[f'Tempo em: {status_name}'] = time_days
 
+        # 1. Processa o Campo de Estimativa (Previsto)
+        if estimation_field_id and estimation_field_id not in issue_data:
+            estimativa_valor = getattr(fields, estimation_field_id, None)
+            issue_data[estimation_field_id] = extract_value(estimativa_valor)
+
+        # 2. Processa o Campo de Tempo Gasto (Realizado)
+        if timespent_field_id and timespent_field_id not in issue_data:
+            timespent_valor = getattr(fields, timespent_field_id, 0)
+            issue_data[timespent_field_id] = timespent_valor if timespent_valor is not None else 0
+        
         processed_issues_data.append(issue_data)
 
     df = pd.DataFrame(processed_issues_data)

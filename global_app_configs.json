@@ -29,6 +29,14 @@
         {
             "id": "customfield_10684",
             "name": "Cliente"
+        },
+        {
+            "id": "customfield_10042",
+            "name": "Story Points"
+        },
+        {
+            "id": "customfield_10117",
+            "name": "Estimate"
         }
     ],
     "strategic_grouping_field": "Cliente"

@@ -1,4 +1,4 @@
-# pages/4_📈_Forecast_de_Projetos.py
+# pages/4_📈_Forecast_de_Projetos.py (VERSÃO CORRIGIDA)
 
 import streamlit as st
 import pandas as pd
@@ -29,7 +29,10 @@ if check_session_timeout():
     st.stop()
 
 if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
+    # (A verificação original estava buscando 'get_users_collection' sem o e-mail, corrigido para 'find_user')
+    user_data = find_user(st.session_state['email'])
+    user_connections = user_data.get('jira_connections', []) # Busca as conexões do objeto 'user'
+    
     if not user_connections:
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
         st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
@@ -60,12 +63,12 @@ def on_project_change():
     for key in keys_to_clear:
         if key in st.session_state: st.session_state.pop(key, None)
 
-# --- BARRA LATERAL (PADRÃO RESTAURADO) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
     try:
-        st.logo(logo_path, size="large")
+        st.logo(str(logo_path), size="large")
     except (FileNotFoundError, AttributeError):
         st.write("Gauge Metrics") 
 
@@ -102,22 +105,50 @@ with st.sidebar:
             project_config = get_project_config(st.session_state.project_key) or {}
             estimation_config = project_config.get('estimation_field', {})
             estimation_field_name = estimation_config.get('name')
-            unit_options = [estimation_field_name, "Contagem de Issues"] if estimation_field_name else ["Contagem de Issues"]
-            unit = st.radio("4. Unidade de Análise", options=unit_options, horizontal=True)
+            estimation_field_id = estimation_config.get('id') if estimation_config else None
+            
+            # (Garante que 'Contagem de Issues' é a opção padrão se a estimativa não estiver configurada)
+            unit_options_display = []
+            if estimation_field_name and estimation_field_id:
+                unit_options_display.append("Story Points")
+            unit_options_display.append("Contagem de Issues")
+            
+            default_unit_index = 0 if estimation_field_name and estimation_field_id else 0 
+
+            # 4. Cria o radio button com as opções de exibição
+            unit_selected_label = st.radio(
+                "4. Unidade de Análise", 
+                options=unit_options_display,
+                horizontal=True, 
+                index=default_unit_index
+            )
+            
+            if unit_selected_label == "Story Points":
+                unit = estimation_field_name
+            else:
+                unit = unit_selected_label 
+            
             trend_weeks = st.slider("5. Semanas para Tendência", 2, 12, 4)
 
             if st.button("Analisar Escopo", use_container_width=True, type="primary"):
                 with st.spinner("A buscar issues do escopo selecionado..."):
                     scope_obj = scope_options[selected_scope_name]
-                    
+
+                    # 1. Cria a lista de campos extras para pedir
+                    extra_fields_to_fetch = []
+                    if estimation_field_id:
+                        extra_fields_to_fetch.append(estimation_field_id)
+                        
+                    # 2. Passa a lista de campos extras para as funções de busca              
                     if scope_type == "Versão (Fix Version)":
-                        issues = get_issues_by_fix_version(st.session_state.jira_client, st.session_state.project_key, scope_obj.id)
+                        issues = get_issues_by_fix_version(st.session_state.jira_client, st.session_state.project_key, scope_obj.id, extra_fields=extra_fields_to_fetch)
                     elif scope_type == "Quadro (Board)":
-                        issues = get_issues_by_board(st.session_state.jira_client, scope_obj.id)
+                        issues = get_issues_by_board(st.session_state.jira_client, scope_obj.id, extra_fields=extra_fields_to_fetch)
                     else: # Projeto Inteiro
-                        issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key)
+                        issues = get_all_project_issues(st.session_state.jira_client, st.session_state.project_key, extra_fields=extra_fields_to_fetch)
                     
                     st.session_state.scope_issues = issues
+                    # (Modificado para usar o 'estimation_field_name' dinâmico)
                     st.session_state.unit_param = 'count' if unit == 'Contagem de Issues' else 'points'
                     st.session_state.trend_weeks = trend_weeks
                     st.session_state.scope_name_for_title = f"{selected_project_name} ({selected_scope_name})"
@@ -144,7 +175,7 @@ if burnup_df is None or burnup_df.empty:
     st.error(f"Não foi possível gerar a análise. Foram encontradas {len(issues)} issues, mas pode não haver dados suficientes (ex: issues concluídas) no escopo selecionado."); st.stop()
 
 burnup_figure, forecast_date, trend_velocity, avg_velocity = calculate_trend_and_forecast(burnup_df, trend_weeks)
-unit_display = "itens" if unit_param == 'count' else ('hs' if estimation_config.get('source') == 'standard_time' else 'pts')
+unit_display = "itens" if unit_param == 'count' else "pts"
 total_scope = burnup_df['Escopo Total'].iloc[-1]; total_completed = burnup_df['Trabalho Concluído'].iloc[-1]
 
 tab1, tab2 = st.tabs(["**Burnup & Previsão de Data**", "**Planeamento de Vazão**"])
@@ -201,7 +232,6 @@ with tab2:
         submitted = st.form_submit_button("Simular Cenário", use_container_width=True, type="primary")
 
     if submitted:
-        # Validação para garantir que os campos foram preenchidos
         if not target_date or not team_size:
             st.warning("Por favor, preencha a 'Data de Entrega Desejada' e o 'Tamanho da Equipe Atual' para simular.")
         else:

@@ -62,7 +62,7 @@ st.header(f"⚙️ Configurações do Projeto: **{st.session_state.project_name}
 
 # Carrega ambas as configurações: a específica do projeto e as globais
 project_config = get_project_config(project_key) or {}
-configs = get_global_configs() # <-- ADICIONADO PARA O CAMPO ESTRATÉGICO
+configs = get_global_configs()
 
 tab_mapping, tab_estimation, tab_time_in_status, tab_colors = st.tabs([
     "Status (Workflow)", "Estimativa", "Tempo no Status", "Cores"
@@ -73,90 +73,206 @@ with tab_mapping:
     st.info("Para calcular métricas como Lead Time e Cycle Time, precisamos que nos ajude a entender o seu fluxo de trabalho.")
     
     try:
+        # 1. Busca os objetos de status (que contêm .name e .id)
         statuses = get_jira_statuses(st.session_state.jira_client, project_key)
-        status_names = sorted(list(set([status.name for status in statuses])))
-        status_mapping = project_config.get('status_mapping', {})
+        
+        if not statuses:
+            st.warning("Não foi possível carregar os status do Jira para este projeto.")
+            statuses = []
+            
+        # 2. Cria mapas de ID <-> Nome (para a migração e UI)
+        status_id_map = {s.id: s.name for s in statuses}
+        status_name_map = {s.name: s.id for s in statuses}
+        status_names_sorted = sorted(list(status_name_map.keys()))
 
+        # 3. Carrega a config salva
+        project_config = get_project_config(project_key) or {}
+        status_mapping = project_config.get('status_mapping', {})
+        
+        # --- INÍCIO DA MIGRAÇÃO AUTOMÁTICA ---
+        migration_needed = False
+        
+        # Checa 'initial'
+        initial_config = status_mapping.get('initial', [])
+        if initial_config and isinstance(initial_config[0], str): # Se for formato antigo (string/nome)
+            migration_needed = True
+            # Converte Nomes para Dicionários (ID + Nome)
+            initial_states_data = [{'id': status_name_map[name], 'name': name} for name in initial_config if name in status_name_map]
+            project_config['status_mapping']['initial'] = initial_states_data
+
+        # Checa 'done'
+        done_config = status_mapping.get('done', [])
+        if done_config and isinstance(done_config[0], str): # Se for formato antigo (string/nome)
+            migration_needed = True
+            # Converte Nomes para Dicionários (ID + Nome)
+            done_states_data = [{'id': status_name_map[name], 'name': name} for name in done_config if name in status_name_map]
+            project_config['status_mapping']['done'] = done_states_data
+
+        if migration_needed:
+            save_project_config(project_key, project_config)
+            get_project_config.clear() # Limpa o cache
+            st.success("Configuração de status antiga detectada e migrada automaticamente para o novo formato de IDs!")
+            # Recarrega a config migrada
+            project_config = get_project_config(project_key) or {}
+            status_mapping = project_config.get('status_mapping', {})
+        # --- FIM DA MIGRAÇÃO AUTOMÁTICA ---
+
+        # --- Lógica de Leitura (agora só precisa ler o formato novo) ---
+        initial_config = status_mapping.get('initial', [])
+        default_initial_names = [d['name'] for d in initial_config if isinstance(d, dict) and d.get('name') in status_name_map]
+
+        done_config = status_mapping.get('done', [])
+        default_done_names = [d['name'] for d in done_config if isinstance(d, dict) and d.get('name') in status_name_map]
+        
+        # (O resto do código da 'tab_mapping' continua o mesmo)
         st.markdown("##### 🛫 Status Iniciais")
-        st.caption("Selecione os status que representam o início do trabalho (quando o 'relógio' do Cycle Time começa a contar).")
-        initial_states = st.multiselect("Status Iniciais", options=status_names, default=status_mapping.get('initial', []), label_visibility="collapsed")
+        st.caption("Selecione os status que representam o início do trabalho.")
+        selected_initial_names = st.multiselect("Status Iniciais", options=status_names_sorted, default=default_initial_names, label_visibility="collapsed")
 
         st.markdown("##### ✅ Status Finais")
-        st.caption("Selecione os status que representam a conclusão do trabalho (quando o 'relógio' do Lead Time e Cycle Time para).")
-        done_states = st.multiselect("Status Finais", options=status_names, default=status_mapping.get('done', []), label_visibility="collapsed")
+        st.caption("Selecione os status que representam a conclusão do trabalho.")
+        selected_done_names = st.multiselect("Status Finais", options=status_names_sorted, default=default_done_names, label_visibility="collapsed")
 
         st.markdown("##### ❌ Status a Ignorar")
-        st.caption("Selecione quaisquer status que devam ser completamente ignorados nos cálculos (ex: Cancelado, Duplicado).")
-        ignored_states = st.multiselect("Status a Ignorar", options=status_names, default=project_config.get('ignored_statuses', []), label_visibility="collapsed")
+        st.caption("Selecione quaisquer status que devam ser completamente ignorados.")
+        ignored_states = st.multiselect("Status a Ignorar", options=status_names_sorted, default=project_config.get('ignored_statuses', []), label_visibility="collapsed")
 
         if st.button("Salvar Mapeamento de Status", type="primary", width='stretch'):
-            project_config['status_mapping'] = {'initial': initial_states, 'done': done_states}
+            # 7. CONVERTE os nomes selecionados de volta para objetos (com ID e Nome)
+            initial_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_initial_names]
+            done_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_done_names]
+
+            # 8. SALVA a nova estrutura (IDs e Nomes)
+            project_config['status_mapping'] = {'initial': initial_states_data, 'done': done_states_data}
             project_config['ignored_statuses'] = ignored_states
             save_project_config(project_key, project_config)
             st.success("Mapeamento de status salvo com sucesso!")
+            get_project_config.clear() # Limpa o cache
 
     except Exception as e:
-        st.error(f"Não foi possível buscar os status do projeto no Jira. Verifique a conexão e as permissões.")
+        st.error(f"Não foi possível buscar os status do projeto no Jira: {e}")
         st.expander("Detalhes do Erro").error(e)
 
 with tab_estimation:
-    st.subheader("Configuração de Estimativa")
-    st.info("Selecione o campo que a sua equipa utiliza para estimar o tamanho ou esforço das tarefas (issues).")
+    st.subheader("Configuração de Estimativa e Tempo Gasto")
+    st.info("Selecione os campos que a sua equipa utiliza para estimar o esforço (Previsto) e para registrar o tempo de trabalho (Realizado).")
     
-    try:
+    try:        
+        # 1. Carrega TODOS os campos do Jira (para encontrar os campos Padrão)
         all_fields = get_jira_fields(st.session_state.jira_client)
-        custom_fields = [{'name': f['name'], 'id': f['id']} for f in all_fields if f.get('custom', False)]
         
-        field_options = {"Nenhum": None}
+        # 2. Carrega as configs globais (que contêm a lista de campos aprovados)
+        # (Esta linha já deve existir no topo da sua página)
+        # configs = get_global_configs() 
+        
+        # 3. Obtém a lista de campos personalizados APROVADOS na Adm
+        approved_custom_fields = configs.get('custom_fields', [])
+        approved_field_ids = {f['id'] for f in approved_custom_fields}
+        
+        # --- CAMPO DE ESTIMATIVA (PREVISTO) ---
+        st.markdown("##### 🎯 Campo de Estimativa (Previsto)")
+        
+        # 1. Começa o dicionário de opções
+        estimation_options = {"Nenhum": None}
+
+        # 2. Adiciona o campo Padrão de Story Points (se existir)
         sp_field = next((f for f in all_fields if f['id'] == 'customfield_10020'), None) # Assumindo ID de Story Points
         if sp_field:
-            field_options[f"Padrão: {sp_field['name']} ({sp_field['id']})"] = {'name': sp_field['name'], 'id': sp_field['id'], 'source': 'standard_numeric'}
-        
-        for field in custom_fields:
-             field_options[f"Personalizado: {field['name']} ({field['id']})"] = {'name': field['name'], 'id': field['id'], 'source': 'custom'}
+            estimation_options[f"Padrão: {sp_field['name']} ({sp_field['id']})"] = {'name': sp_field['name'], 'id': sp_field['id'], 'source': 'standard_numeric'}
 
+        # 3. Adiciona APENAS os campos personalizados APROVADOS
+        for field in approved_custom_fields:
+            field_name = field['name']
+            field_id = field['id']
+            # Garante que não estamos a adicionar duplicatas
+            option_label = f"Personalizado: {field_name} ({field_id})"
+            if option_label not in estimation_options:
+                estimation_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'custom'}
+        
+        # 4. Lógica do Selectbox (como antes)
         current_selection_name = project_config.get('estimation_field', {}).get('name')
-        selection_key = next((k for k, v in field_options.items() if v and v['name'] == current_selection_name), "Nenhum")
+        selection_key = next((k for k, v in estimation_options.items() if v and v['name'] == current_selection_name), "Nenhum")
 
         selected_field_key = st.selectbox(
             "Selecione o Campo de Estimativa",
-            options=list(field_options.keys()),
-            index=list(field_options.keys()).index(selection_key)
+            options=list(estimation_options.keys()),
+            index=list(estimation_options.keys()).index(selection_key),
+            key="estimation_selector"
         )
 
         if st.button("Salvar Campo de Estimativa", type="primary", width='stretch'):
-            project_config['estimation_field'] = field_options[selected_field_key]
+            project_config['estimation_field'] = estimation_options[selected_field_key]
             save_project_config(project_key, project_config)
             st.success("Campo de estimativa salvo com sucesso!")
 
         st.divider()
+
+        # --- CAMPO DE TEMPO GASTO (REALIZADO) ---
+        st.markdown("##### ⏱️ Campo de Tempo Gasto (Realizado)")
+        st.caption("Selecione o campo que a sua equipa utiliza para registrar o tempo gasto (worklogs).")
+
+        # 1. Começa o dicionário de opções
+        time_field_options = {"Nenhum": None}
         
+        # 2. Adiciona campos Padrão de tempo (buscando em 'all_fields')
+        for field in all_fields:
+            field_id = field['id']
+            field_name = field['name']
+            if field_id in ['timespent', 'timeoriginalestimate', 'aggregatetimespent']:
+                option_label = f"Padrão: {field_name} ({field_id})"
+                time_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'standard_time'}
+        
+        # 3. Adiciona APENAS os campos personalizados APROVADOS
+        for field in approved_custom_fields:
+            field_name = field['name']
+            field_id = field['id']
+            option_label = f"Personalizado: {field_name} ({field_id})"
+            if option_label not in time_field_options:
+                time_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'custom'}
+
+        # 4. Lógica do Selectbox (como antes)
+        current_time_selection_name = project_config.get('timespent_field', {}).get('name')
+        time_selection_key = next(
+            (k for k, v in time_field_options.items() if v and v['name'] == current_time_selection_name), 
+            "Nenhum"
+        )
+        
+        selected_time_field_key = st.selectbox(
+            "Selecione o Campo de Tempo Gasto",
+            options=list(time_field_options.keys()),
+            index=list(time_field_options.keys()).index(time_selection_key),
+            key="time_spent_selector"
+        )
+        
+        if st.button("Salvar Campo de Tempo Gasto", type="primary", width='stretch', key="save_time_spent"):
+            project_config['timespent_field'] = time_field_options[selected_time_field_key]
+            save_project_config(project_key, project_config)
+            st.success("Campo de tempo gasto salvo com sucesso!")
+        
+        st.divider()
+        
+        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO (JÁ ESTAVA CORRETO) ---
         st.markdown("###### 🎯 Campo de Agrupamento Estratégico")
         st.info("Selecione o campo que será usado para agrupar dados em visões executivas (Ex: Cliente, Produto, Squad).")
         st.caption("Nota: Este é um campo global. Os campos disponíveis aqui são ativados na página de 'Administração'.")
 
         # Pega a lista de campos personalizados que já foram salvos (da config global)
+        # Esta lógica já estava correta e não foi alterada
         saved_custom_fields = configs.get('custom_fields', [])
         if not isinstance(saved_custom_fields, list): saved_custom_fields = []
         
-        # --- LÓGICA PARA GARANTIR NOMES ÚNICOS ---
         unique_field_options = []
         field_format_map = {}
-        seen_names = set() # Conjunto para rastrear nomes já adicionados
+        seen_names = set() 
 
         for field in saved_custom_fields:
             if isinstance(field, dict) and 'name' in field and 'id' in field:
                 field_name = field['name']
                 field_id = field['id']
-                # Se o nome ainda não foi visto, adiciona à lista de opções e ao mapa
                 if field_name not in seen_names:
                     unique_field_options.append(field_name)
                     field_format_map[field_name] = f"{field_name} ({field_id})"
                     seen_names.add(field_name)
-                # Se o nome já foi visto, apenas atualiza/adiciona ao mapa para exibição (opcional, pode manter o primeiro ID)
-                # Se quiser mostrar MÚLTIPLOS IDs para o mesmo nome (não recomendado para selectbox), a lógica seria mais complexa.
-                # Para manter simples, vamos mostrar o primeiro ID encontrado para cada nome único.
-        # --- FIM DA LÓGICA PARA NOMES ÚNICOS ---
 
         if not unique_field_options:
             st.warning("Nenhum campo personalizado foi ativado na 'Administração' global. Ative-os lá para poder selecionar um campo de agrupamento.")
@@ -164,26 +280,24 @@ with tab_estimation:
             current_strategic_field = configs.get('strategic_grouping_field')
             
             try:
-                # Usa a lista de opções únicas para encontrar o índice
                 default_index = unique_field_options.index(current_strategic_field) if current_strategic_field in unique_field_options else 0
             except ValueError:
                 default_index = 0
 
             selected_field = st.selectbox(
                 "Selecione o campo para agrupamento estratégico:",
-                options=unique_field_options, # Usa a lista de nomes únicos
+                options=unique_field_options, 
                 index=default_index,
-                format_func=lambda name: field_format_map.get(name, name) # Usa o mapa para exibir o ID
+                format_func=lambda name: field_format_map.get(name, name) 
             )
 
             if st.button("Salvar Campo Estratégico", key="save_strategic_field", width='stretch'):
                 configs_to_save = get_global_configs()
                 configs_to_save['strategic_grouping_field'] = selected_field
                 save_global_configs(configs_to_save)
-                get_global_configs.clear() # Limpa a cache da função
+                get_global_configs.clear() 
                 st.success(f"O campo '{selected_field}' foi definido como o campo de agrupamento estratégico!")
-                # Força o recarregamento das configs na session_state se necessário, ou apenas rerun
-                st.session_state['global_configs'] = configs_to_save # Atualiza a sessão imediatamente
+                st.session_state['global_configs'] = configs_to_save 
                 st.rerun()
 
     except Exception as e:
