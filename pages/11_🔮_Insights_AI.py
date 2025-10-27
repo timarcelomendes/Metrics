@@ -220,7 +220,7 @@ if 'strategic_diagnosis' in st.session_state:
                     st.markdown(message["content"])
 
             # Input para a nova pergunta do utilizador
-            if prompt := st.chat("Faça uma pergunta sobre o diagnóstico..."):
+            if prompt := st.chat_input("Faça uma pergunta sobre o diagnóstico..."):
                 # Adiciona e exibe a pergunta do utilizador
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
                 with st.chat_message("Você", avatar="👤"):

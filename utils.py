@@ -133,7 +133,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str):
             'Categoria de Status': getattr(getattr(fields.status, 'statusCategory', None), 'name', None),
             'Data de Criação': pd.to_datetime(fields.created).tz_localize(None).normalize(),
         }
-        completion_date_raw = find_completion_date(issue, project_config) # Usa a função importada
+        completion_date_raw = find_completion_date(issue, project_config)
         completion_date_dt = pd.to_datetime(completion_date_raw, errors='coerce')
         issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize() if pd.notna(completion_date_dt) else pd.NaT
         issue_data['Lead Time (dias)'] = (issue_data['Data de Conclusão'] - issue_data['Data de Criação']).days if pd.notna(issue_data['Data de Conclusão']) else None
@@ -671,13 +671,17 @@ def render_chart(chart_config, df, chart_key):
 
                     if freq:
                         y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
-                        agg_map = {'soma': 'sum', 'média': 'mean'}
+                        agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count', 'contagem distinta': 'nunique'}
                         
                         grouping_cols = [pd.Grouper(key=x, freq=freq)]
                         if color_by and color_by != "Nenhum": grouping_cols.append(color_by)
 
-                        agg_dict = {y: agg_map.get(y_agg_func, 'mean')}
-                        if size_by and size_by != "Nenhum": agg_dict[size_by] = 'mean'
+                        agg_function_name = agg_map.get(y_agg_func, 'count') 
+
+                        agg_dict = {y: agg_function_name}
+
+                        if size_by and size_by != "Nenhum": 
+                            agg_dict[size_by] = 'mean' # 'size' é sempre numérico, 'mean' está correto aqui
 
                         plot_df = plot_df.groupby(grouping_cols, as_index=False).agg(agg_dict)
                         plot_df = plot_df.sort_values(by=x)

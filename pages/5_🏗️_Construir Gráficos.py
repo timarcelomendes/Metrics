@@ -138,7 +138,7 @@ for col in ['Lead Time (dias)', 'Cycle Time (dias)']:
     if col in df.columns and col not in numeric_cols:
         numeric_cols.append(col)
 
-# --- CORREÇÃO: Atualiza a lógica de criação da lista de Medidas ---
+# --- Atualiza a lógica de criação da lista de Medidas ---
 status_time_cols = sorted([col for col in df.columns if col.startswith('Tempo em: ')])
 
 # 1. Filtra as colunas numéricas para REMOVER as colunas individuais de "Tempo em: "
@@ -156,8 +156,6 @@ if project_config.get('calculate_time_in_status', False) and status_time_cols:
     measure_options_numeric_only.append("Tempo em Status")
     
 all_cols_for_table = sorted(list(set(date_cols + categorical_cols + numeric_cols + status_time_cols)))
-# --- FIM DA CORREÇÃO ---
-
 
 # --- BLOCO 4: INTERFACE DE FILTROS ---
 st.subheader("Filtros da Pré-visualização")
@@ -332,7 +330,15 @@ if creation_mode == "Construtor Visual":
                 config['date_aggregation'] = agg_c1.selectbox("Agrupar data do Eixo X por:", agg_options, index=default_agg_index)
 
                 if config['date_aggregation'] != 'Nenhum':
-                    y_agg_options = ['Média', 'Soma']
+                    selected_y_field = config.get('y')
+                    
+                    # Verifica se o Eixo Y é numérico
+                    if selected_y_field in numeric_cols:
+                        y_agg_options = ['Média', 'Soma']
+                    else:
+                        # Se for categórico, oferece contagem
+                        y_agg_options = ['Contagem', 'Contagem Distinta'] 
+                    
                     default_y_agg_index = y_agg_options.index(config.get('y_axis_aggregation')) if config.get('y_axis_aggregation') in y_agg_options else 0
                     config['y_axis_aggregation'] = agg_c2.selectbox("Calcular Eixo Y por:", y_agg_options, index=default_y_agg_index)
                 else:
@@ -707,10 +713,19 @@ if creation_mode == "Construtor Visual":
             color_theme = st.selectbox("Esquema de Cores do Cabeçalho", options=theme_options, index=theme_options.index(default_theme_name) if default_theme_name in theme_options else 0, key="pivot_color_theme")
             
             all_row_col_options = [str(col) for col in (categorical_cols + date_cols)]
-            rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=config.get('rows', []))
-            columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=config.get('columns', []))
+            all_options_set = set(all_row_col_options) # Mais rápido para verificação
+
+            saved_rows = config.get('rows', [])
+            # Filtra a lista 'default' para incluir apenas opções que ainda existem
+            valid_default_rows = [row for row in saved_rows if row in all_options_set]
+            rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=valid_default_rows)
+
+            saved_columns = config.get('columns', [])
+            # Filtra a lista 'default' para incluir apenas opções que ainda existem
+            valid_default_columns = [col for col in saved_columns if col in all_options_set]
+            columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=valid_default_columns)
             
-            # --- CORREÇÃO: Usar measure_options_numeric_only (sem a opção "Tempo em Status" por enquanto) ---
+            # --- Usar measure_options_numeric_only (sem a opção "Tempo em Status" por enquanto) ---
             # Nota: Tabela dinâmica não suporta a lógica de UI do "Tempo em Status" ainda.
             all_numeric_measures = sorted(list(set(numeric_cols_for_dropdown + status_time_cols)))
             values_options = [""] + all_numeric_measures

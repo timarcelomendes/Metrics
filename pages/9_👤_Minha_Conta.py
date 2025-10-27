@@ -80,28 +80,68 @@ with tab_campos:
     toggles_std, toggles_custom = {}, {}
     tab_std, tab_custom = st.tabs(["🗂️ Campos Padrão", "✨ Campos Personalizados"])
     
+    # --- Carregamento de dados movido para cima ---
+    # Isto é necessário para que a 'id_to_name_map' esteja disponível na aba custom
+    available_custom_fields = global_configs.get('custom_fields', [])
+    id_to_name_map = {
+        field['id']: field['name'] 
+        for field in available_custom_fields 
+        if 'id' in field and 'name' in field
+    }
+    # --- Fim do carregamento de dados ---
 
     with tab_std:
         available_standard_fields_config = global_configs.get('available_standard_fields', {})
-        available_standard_fields_names = list(available_standard_fields_config.keys())
+    
+        STANDARD_FIELDS_MAP = st.session_state.get('standard_fields_map', {})
+            
+        # Filtra apenas os campos que o Admin ativou
+        available_standard_fields_ids = list(available_standard_fields_config.keys())
         user_selected_standard = user_data.get('standard_fields', [])
         
-        if not available_standard_fields_names:
+        if not available_standard_fields_ids:
             st.info("Nenhum campo padrão foi configurado pelo administrador.")
         else:
             st.markdown("**Ative os campos padrão que deseja usar:**")
-            for name in sorted(available_standard_fields_names):
-                toggles_std[name] = st.toggle(name, value=(name in user_selected_standard), key=f"toggle_std_{name}")
+            
+            # Ordena por nome amigável, não por ID
+            sorted_fields_to_show = sorted(
+                available_standard_fields_ids, 
+                key=lambda field_id: STANDARD_FIELDS_MAP.get(field_id, field_id)
+            )
+
+            for field_id in sorted_fields_to_show:
+                # Busca o nome amigável (ex: "Categoria de Status") do JSON
+                display_name = STANDARD_FIELDS_MAP.get(field_id, field_id)
+                # O valor salvo no utilizador (user_selected_standard) é o ID (ex: "StatusCategory")
+                toggles_std[field_id] = st.toggle(
+                    display_name, 
+                    value=(field_id in user_selected_standard), 
+                    key=f"toggle_std_{field_id}"
+                )
+
+        # --- BOTÃO 1: SALVAR CAMPOS PADRÃO ---
+        st.divider()
+        if st.button("Salvar Campos Padrão", key="save_std_fields", use_container_width=True, type="primary"):
+            # A lógica de salvar agora usa os IDs (keys)
+            new_selection_std = [field_id for field_id, is_on in toggles_std.items() if is_on]
+            
+            updates_to_save = {'standard_fields': new_selection_std}
+            update_user_configs(email, updates_to_save) 
+
+            st.success("Suas preferências de campos padrão foram guardadas!")
+            st.rerun()
+        # --- FIM DO BOTÃO 1 ---
+
 
     with tab_custom:
-        available_custom_fields = global_configs.get('custom_fields', [])
+        # available_custom_fields e id_to_name_map já foram definidos
         user_enabled_custom_aliases = user_data.get('enabled_custom_fields', []) 
         
         if not available_custom_fields:
             st.info("Nenhum campo personalizado foi configurado pelo administrador.")
         else:
             st.markdown("**Ative os campos personalizados que deseja usar:**")
-            id_to_name_map = {field['id']: field['name'] for field in available_custom_fields if 'id' in field and 'name' in field}
             
             for field in sorted(available_custom_fields, key=lambda x: x.get('name', '')):
                 field_id = field.get('id')
@@ -112,6 +152,7 @@ with tab_campos:
                     
                 display_label = f"{field_name} ({field_id})"
                 
+                # A configuração atual do utilizador salva o NOME (alias)
                 is_currently_enabled = field_name in user_enabled_custom_aliases
                 
                 toggles_custom[field_id] = st.toggle(
@@ -120,10 +161,11 @@ with tab_campos:
                     key=f"toggle_custom_{field_id}"
                 )
         
+        # --- BOTÃO 2: SALVAR CAMPOS PERSONALIZADOS ---
         st.divider()
-        if st.button("Salvar Preferências de Campos", use_container_width=True, type="primary"):
-            new_selection_std = [name for name, is_on in toggles_std.items() if is_on]
+        if st.button("Salvar Campos Personalizados", key="save_custom_fields", use_container_width=True, type="primary"):
             
+            # A lógica de salvar continua a mesma (salvando os NOMES/aliases)
             new_selection_custom_names = [
                 id_to_name_map[fid] 
                 for fid, is_on in toggles_custom.items() 
@@ -131,14 +173,11 @@ with tab_campos:
             ]
             new_selection_custom_names = sorted(list(set(new_selection_custom_names)))
             
-            updates_to_save = {
-                'standard_fields': new_selection_std,
-                'enabled_custom_fields': new_selection_custom_names
-            }
+            updates_to_save = {'enabled_custom_fields': new_selection_custom_names}
             
             update_user_configs(email, updates_to_save) 
 
-            st.success("Suas preferências de campos foram guardadas!")
+            st.success("Suas preferências de campos personalizados foram guardadas!")
             st.rerun()
 
 with tab_ai:

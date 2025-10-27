@@ -97,8 +97,10 @@ project_config = get_project_config(project_key) or {}
 global_configs = get_global_configs()
 
 status_mapping = project_config.get('status_mapping', {})
-done_statuses_lower = {s.lower() for s in status_mapping.get('done', [])}
-ignored_statuses_lower = {s.lower() for s in status_mapping.get('ignored', [])}
+done_status_objects = status_mapping.get('done', [])
+done_statuses_lower = {d['name'].lower() for d in done_status_objects if isinstance(d, dict) and 'name' in d}
+ignored_status_objects = project_config.get('ignored_statuses', [])
+ignored_statuses_lower = {d['name'].lower() for d in ignored_status_objects if isinstance(d, dict) and 'name' in d}
 overlap = done_statuses_lower.intersection(ignored_statuses_lower)
 
 if overlap:
@@ -171,7 +173,7 @@ in_progress_statuses = status_mapping.get('in_progress', [])
 if not done_statuses:
     st.warning("Nenhum 'status final' está configurado para este projeto.", icon="⚠️")
 
-completed_issues_in_period = [i for i in filtered_issues if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime <= end_date]
+completed_issues_in_period = [i for i in filtered_issues if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime.date() <= end_date]
 times_data = []
 for issue in completed_issues_in_period:
     completion_date_dt = find_completion_date(issue, project_config)
@@ -216,7 +218,7 @@ with tab_comum:
     st.caption("Mostra a evolução dos itens em cada etapa ao longo do tempo.")
     cfd_df, _ = prepare_cfd_data(all_raw_issues, start_date, end_date)
     if not cfd_df.empty:
-        done_statuses_cfd = [s.lower() for s in done_statuses]
+        done_statuses_cfd = [s['name'].lower() for s in done_statuses if isinstance(s, dict) and 'name' in s]
         status_order = ['Created'] + [s for s in cfd_df.columns if s != 'Created' and s.lower() not in done_statuses_cfd] + [s for s in cfd_df.columns if s.lower() in done_statuses_cfd]
         cfd_df_ordered = cfd_df[[s for s in status_order if s in cfd_df.columns]]
         st.area_chart(cfd_df_ordered)
@@ -308,108 +310,141 @@ with tab_scrum:
 
 with tab_performance:
     st.subheader("Análise de Acurácia e Performance da Equipe")
+    st.caption("Compara o esforço estimado com o tempo real gasto nas tarefas concluídas no período.")
 
     project_config = get_project_config(st.session_state.project_key) or {}
+    
+    # 1. Obter as configurações completas
     estimation_config = project_config.get('estimation_field', {})
-    if not estimation_config.get('id'):
-        st.warning("Nenhum campo de estimativa configurado. As métricas de acurácia não podem ser calculadas.", icon="⚠️")
-        st.page_link("pages/7_⚙️_Configurações.py", label="Configurar Campo de Estimativa", icon="⚙️")
+    timespent_config = project_config.get('timespent_field', {})
+
+    estimation_field_id = estimation_config.get('id')
+    timespent_field_id = timespent_config.get('id')
+    
+    # 2. Verificar se os campos foram configurados
+    if not estimation_field_id or not timespent_field_id:
+        st.warning("⚠️ Os campos de 'Estimativa' (Previsto) e 'Tempo Gasto' (Realizado) não foram configurados.")
+        st.info("Por favor, vá até a página '7_⚙️_Configurações' -> 'Estimativa' e mapeie os dois campos.")
+    
+    # 3. (Assume que 'df_done' foi definido anteriormente no script)
+    elif 'df_done' not in locals() or df_done.empty:
+        st.info("Nenhuma issue foi concluída no período selecionado para calcular a acurácia.")
+        
+    # 4. (Verifica se colunas existem)
+    elif estimation_field_id not in df_done.columns or timespent_field_id not in df_done.columns:
+        missing_fields = []
+        if estimation_field_id not in df_done.columns:
+            missing_fields.append(f"'{estimation_config.get('name', estimation_field_id)}' (Previsto)")
+        if timespent_field_id not in df_done.columns:
+            missing_fields.append(f"'{timespent_config.get('name', timespent_field_id)}' (Realizado)")
+        st.error(f"Os seguintes campos configurados não foram encontrados nos dados carregados: {', '.join(missing_fields)}. Por favor, verifique a sua 'Configuração de Conta' para garantir que estes campos estão a ser importados.")
+
     else:
-        with st.container(border=True):
-            st.subheader("Acurácia da Estimativa (Estimado vs. Realizado)")
-            st.caption("Compara o esforço estimado com o tempo real gasto nas tarefas concluídas no período.")
+        # --- PONTO DE ALTERAÇÃO 1: Lógica de verificação de unidade mais robusta ---
+        estim_source = estimation_config.get('source')
+        spent_source = timespent_config.get('source')
 
-            # 1. Obter os IDs dos campos das configurações do projeto
-            estimation_config = project_config.get('estimation_field', {})
-            timespent_config = project_config.get('timespent_field', {})
+        # 'timespent' e 'timeoriginalestimate' são sempre 'standard_time'
+        time_field_ids_padrao = {'timespent', 'timeoriginalestimate'}
 
-            estimation_field_id = estimation_config.get('id') if estimation_config else None
-            timespent_field_id = timespent_config.get('id') if timespent_config else None
+        # A unidade é "tempo" se a fonte for 'standard_time' OU se o ID for um campo de tempo padrão
+        estim_is_time = (estim_source == 'standard_time') or (estimation_field_id in time_field_ids_padrao)
+        spent_is_time = (spent_source == 'standard_time') or (timespent_field_id in time_field_ids_padrao)
+        # --- FIM DA ALTERAÇÃO 1 ---
 
-            total_estimado = 0.0
-            total_realizado_segundos = 0.0
-            total_realizado_horas = 0.0
+        # VERIFICAÇÃO PRINCIPAL: As unidades são diferentes?
+        if estim_is_time != spent_is_time:
+            # SIM, são diferentes (ex: pts vs hs)
+            estim_unit_display = "hs" if estim_is_time else "pts"
+            spent_unit_display = "hs" if spent_is_time else "pts"
             
-            # 2. Verificar se os campos foram configurados
-            if not estimation_field_id or not timespent_field_id:
-                st.warning("⚠️ Os campos de 'Estimativa' (Previsto) e 'Tempo Gasto' (Realizado) não foram configurados.")
-                st.info("Por favor, vá até a página '7_⚙️_Configurações' -> 'Estimativa' e mapeie os dois campos.")
+            st.warning(
+                f"📈 Análise Incompatível: O seu campo 'Previsto' está em **{estim_unit_display}** e o seu 'Realizado' está em **{spent_unit_display}**.",
+                icon="⚠️"
+            )
+            st.info(
+                f"Para corrigir, vá à página '⚙️ Configurações' e defina **ambos** os campos para usarem a mesma unidade (ex: ambos em Pontos ou ambos em Horas)."
+            )
             
-            # 3. Verificar se temos issues concluídas para calcular
-            elif 'df_done' not in locals() or df_done.empty:
-                st.info("Nenhuma issue foi concluída no período selecionado para calcular a acurácia.")
-                
+            # Cálculo dos KPIs para exibição (mesmo incompatíveis)
+            total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
+            total_realizado_segundos_ou_pontos = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
+
+            # Converte para horas apenas se for um campo de tempo
+            if estim_is_time:
+                total_estimado = total_estimado / 3600.0
+            if spent_is_time:
+                total_realizado = total_realizado_segundos_ou_pontos / 3600.0
             else:
-                # 4. Verificar se as colunas existem no DataFrame
-                if estimation_field_id not in df_done.columns:
-                    st.error(f"O campo de estimativa '{estimation_field_id}' não foi encontrado nos dados carregados.")
-                if timespent_field_id not in df_done.columns:
-                    st.error(f"O campo de tempo gasto '{timespent_field_id}' não foi encontrado nos dados carregados.")
-                
-                else:
-                    # 5. Calcular os totais (convertendo para numérico e tratando nulos)
-                    total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
-                    total_realizado_segundos = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
-                    
-                    # 6. *** A CONVERSÃO CHAVE: Segundos para Horas ***
-                    total_realizado_horas = total_realizado_segundos / 3600.0
+                total_realizado = total_realizado_segundos_ou_pontos
 
-            # 7. Exibir as Métricas
             col1, col2, col3 = st.columns(3)
+            col1.metric("Total Estimado (Concluídos)", f"{total_estimado:,.1f} {estim_unit_display}")
+            col2.metric("Total Realizado (Concluídos)", f"{total_realizado:,.1f} {spent_unit_display}")
+            col3.metric("Média (Incompatível)", "N/A")
             
-            # Cartão de Total Estimado
-            unit_estimado = "pts" # Você pode querer tornar isso dinâmico se souber a unidade
-            col1.metric("Total Estimado (Concluídos)", f"{total_estimado:,.1f} {unit_estimado}")
-            
-            # Cartão de Total Realizado
-            col2.metric("Total Realizado (Concluídos)", f"{total_realizado_horas:,.1f} hs")
-            
-            # Cartão de Acurácia (Opcional, pois comparar horas e pontos pode ser enganoso)
-            if total_estimado > 0:
-                # Esta é uma métrica de "horas por ponto"
-                ratio_hs_por_ponto = total_realizado_horas / total_estimado
-                col3.metric("Média (Horas / Ponto)", f"{ratio_hs_por_ponto:,.2f} hs/pt")
-            else:
-                col3.metric("Média (Horas / Ponto)", "N/A")
+            st.caption("Gráfico comparativo oculto pois as unidades são incompatíveis.")
 
-            # 8. Exibir o Gráfico Comparativo
-            if total_estimado > 0 or total_realizado_horas > 0:
+        else:
+            # NÃO, as unidades são IGUAIS (ex: pts vs pts ou hs vs hs)
+            
+            # 5. Calcular os totais
+            total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
+            total_realizado = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
+            
+            unit_display = "pts" # Padrão
+            
+            # 6. CONVERSÃO-CHAVE (Se ambos forem campos de tempo em segundos)
+            if estim_is_time: # (sabemos que spent_is_time também é True)
+                total_estimado = total_estimado / 3600.0
+                total_realizado = total_realizado / 3600.0
+                unit_display = "hs"
+
+            # 7. Exibir as Métricas (Agora compatíveis)
+            col1, col2, col3 = st.columns(3)
+            col1.metric(f"Total Estimado (Concluídos)", f"{total_estimado:,.1f} {unit_display}")
+            col2.metric(f"Total Realizado (Concluídos)", f"{total_realizado:,.1f} {unit_display}")
+            
+            if total_estimado > 0:
+                ratio = total_realizado / total_estimado
+                col3.metric("Rácio (Realizado / Previsto)", f"{ratio:,.2f}")
+            else:
+                col3.metric("Rácio (Realizado / Previsto)", "N/A")
+
+            # 8. Exibir o Gráfico Comparativo (Agora compatível)
+            if total_estimado > 0 or total_realizado > 0:
                 
-                # Cria um DataFrame simples para o gráfico
+                # --- PONTO DE ALTERAÇÃO 2: Correção do Gráfico Altair ---
+                # Esta estrutura é baseada no seu código original (que funciona)
                 chart_data = pd.DataFrame({
                     'Tipo': ['Estimado', 'Realizado'],
-                    'Valor': [total_estimado, total_realizado_horas],
-                    'Unidade': [unit_estimado, 'hs']
+                    'Valor': [total_estimado, total_realizado],
+                    'Unidade': [unit_display, unit_display]
                 })
                 
-                # Nota: Este gráfico compara grandezas diferentes (pontos vs horas)
-                # Pode ser mais útil um gráfico de 'issues' x 'estimado' vs 'realizado'
-                # Mas para um total, um gráfico de barras simples pode funcionar
-                
                 try:
-                    # Usando Altair para um gráfico de barras simples
                     import altair as alt
                     
                     base = alt.Chart(chart_data).encode(
-                        x=alt.X('Tipo', title=None),
+                        x=alt.X('Tipo', title=None), # Agrupa por 'Tipo' (Estimado, Realizado)
                         tooltip=['Tipo', 'Valor', 'Unidade']
                     )
                     
                     bars = base.mark_bar().encode(
-                        y=alt.Y('Valor', title='Total'),
-                        color=alt.Color('Tipo', legend=alt.Legend(title="Tipo"))
+                        y=alt.Y('Valor', title=f'Total (em {unit_display})'),
+                        color=alt.Color('Tipo', legend=alt.Legend(title="Métrica"))
                     )
                     
                     text = base.mark_text(
                         align='center',
                         baseline='bottom',
-                        dy=-5  # Desloca o texto um pouco para cima da barra
+                        dy=-5 
                     ).encode(
                         text=alt.Text('Valor', format=',.1f')
                     )
                     
-                    st.altair_chart(bars + text, use_container_width=True)
-                    st.caption(f"Comparativo visual (Nota: 'Estimado' está em '{unit_estimado}' e 'Realizado' está em 'hs')")
+                    st.altair_chart(bars + text, use_container_width=True) # Camada simples (bars + text)
+                    st.caption(f"Comparativo visual (Ambos em '{unit_display}')")
 
                 except ImportError:
                     st.error("Biblioteca 'altair' não encontrada para gerar o gráfico.")

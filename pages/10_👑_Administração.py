@@ -7,6 +7,9 @@ import pandas as pd
 from config import SESSION_TIMEOUT_MINUTES
 from streamlit_quill import st_quill
 import uuid
+from jira_connector import get_jira_fields
+from security import load_standard_fields_map
+
 
 st.set_page_config(page_title="Administração", page_icon="👑", layout="wide")
 st.header("👑 Painel de Administração", divider='rainbow')
@@ -147,7 +150,6 @@ with main_tab_content:
             st.rerun()
 
     with content_tab_roles:
-        # ... (código existente) ...
         st.markdown("##### Papéis do Product Hub")
         st.caption("Adicione ou remova os papéis (funções) que podem ser atribuídos às equipas.")
         
@@ -242,25 +244,30 @@ with main_tab_system:
         # --- CAMPOS PADRÃO ---
         st.markdown("###### 🗂️ Campos Padrão (Standard Fields)")
         st.info("Estes são campos nativos do Jira. Ative aqueles que são relevantes para as suas análises.")
-        
-        STANDARD_FIELDS_MAP = {
-            "Resolution": "Resolução", "Components": "Componentes", "Environment": "Ambiente",
-            "Priority": "Prioridade", "Status": "Status", "Assignee": "Responsável",
-            "DueDate": "Data de Vencimento", "Parent": "Pai", "StatusCategory": "Categoria de Status",
-            "Labels": "Labels", "Project": "Projeto", "Reporter": "Relator", "Creator": "Criador",
-            "Created": "Criado em", "Updated": "Atualizado em", "TimeTracking": "Controle de tempo"
-        }
+
+        # --- CAMPOS PADRÃO ---
+        STANDARD_FIELDS_MAP = st.session_state.get('standard_fields_map', {})
+        available_options = list(STANDARD_FIELDS_MAP.keys())
         
         standard_fields_config = current_configs_for_display.get('available_standard_fields', {})
         if not isinstance(standard_fields_config, dict): standard_fields_config = {}
         
-        selected_standard_fields = st.multiselect(
-            "Selecione os campos padrão a disponibilizar:",
-            options=list(STANDARD_FIELDS_MAP.keys()),
-            format_func=lambda key: STANDARD_FIELDS_MAP[key],
-            default=list(standard_fields_config.keys()),
-            key="multiselect_standard_fields"
-        )
+        # Filtra os defaults: só inclui o que está salvo E o que está disponível no JSON
+        saved_defaults = list(standard_fields_config.keys())
+        
+        # Esta linha garante que 'default' só contém itens que existem em 'options'
+        safe_defaults = [item for item in saved_defaults if item in available_options]
+
+        if not available_options:
+             st.warning("O mapa de campos padrão (jira_standard_fields.json) não foi carregado. Por favor, faça logout e login.")
+        else:
+            selected_standard_fields = st.multiselect(
+                "Selecione os campos padrão a disponibilizar:",
+                options=available_options, # <-- Usa a lista de opções
+                format_func=lambda key: STANDARD_FIELDS_MAP.get(key, key),
+                default=safe_defaults,     # <-- Usa a lista de defaults filtrada
+                key="multiselect_standard_fields"
+            )
         
         if st.button("Salvar Campos Padrão", key="save_standard_fields", width='stretch'):
             configs_to_save = get_global_configs()
@@ -276,17 +283,19 @@ with main_tab_system:
         st.markdown("###### ✨ Campos Personalizados (Custom Fields)")
         st.info("Selecione os campos personalizados do seu Jira que devem estar disponíveis para análise na aplicação.")
 
-        @st.cache_data(ttl=3600)
-        def get_all_custom_fields_from_jira(_jira_client):
-            try:
-                all_fields = _jira_client.fields()
-                custom_fields = [{'id': field['id'], 'name': field['name']} for field in all_fields if field['id'].startswith('customfield_')]
-                return sorted(custom_fields, key=lambda x: x['name'])
-            except Exception as e:
-                st.error(f"Erro ao buscar campos personalizados do Jira."); print(e); return None
-
         try:
-            all_jira_custom_fields = get_all_custom_fields_from_jira(st.session_state['jira_client'])
+            # 1. Usar a função existente do jira_connector para buscar TUDO
+            all_fields_raw = get_jira_fields(st.session_state['jira_client'])
+            all_jira_custom_fields = None
+
+            if all_fields_raw:
+                # 2. Filtrar e formatar a lista APENAS para campos personalizados
+                all_jira_custom_fields = [
+                    {'id': field['id'], 'name': field['name']} 
+                    for field in all_fields_raw 
+                    if field['id'].startswith('customfield_')
+                ]
+                all_jira_custom_fields = sorted(all_jira_custom_fields, key=lambda x: x['name'])
 
             if all_jira_custom_fields is not None:
                 saved_custom_fields = current_configs_for_display.get('custom_fields', [])
@@ -316,10 +325,7 @@ with main_tab_system:
         except Exception as e:
             st.error(f"Ocorreu um erro inesperado na seção de campos personalizados."); st.caption(f"Detalhes: {e}");
 
-        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO FOI REMOVIDO DAQUI ---
-
     with system_tab_domains:
-        # ... (código existente) ...
         st.markdown("##### Domínios com Permissão de Registro")
         with st.container(border=True):
             allowed_domains = configs.get('allowed_domains', [])
@@ -344,17 +350,51 @@ with main_tab_system:
                         st.rerun()
 
     with system_tab_users:
-        # ... (código existente com o novo design de cartões) ...
         st.markdown("##### 👥 Utilizadores Registados no Sistema")
         st.caption("Gira as permissões e contas dos utilizadores da plataforma.")
+
+        def handle_password_reset(user_account):
+            """Gera, atualiza o DB e armazena a senha para exibição."""
+            try:
+                # 1. Gerar a senha UMA VEZ
+                temp_pass = generate_temporary_password()
+                
+                # 2. Atualizar o banco de dados com o hash
+                hashed_pass = get_password_hash(temp_pass)
+                update_user_password(user_account['email'], hashed_pass)
+                
+                # 3. Salvar na session_state APENAS para exibição no próximo rerun
+                st.session_state['temp_password_info'] = {
+                    'email': user_account['email'], 
+                    'password': temp_pass
+                }
+            except Exception as e:
+                st.error(f"Erro ao redefinir a senha: {e}")
+
+        def clear_temp_password():
+            """Limpa a senha temporária da session_state."""
+            if 'temp_password_info' in st.session_state:
+                del st.session_state.temp_password_info
         
         if 'temp_password_info' in st.session_state:
             user_email = st.session_state.temp_password_info['email']
             temp_pass = st.session_state.temp_password_info['password']
-            st.success(f"Senha para **{user_email}** redefinida com sucesso!", icon="🔑")
-            st.code(temp_pass, language=None)
-            st.warning("Por favor, copie esta senha e envie-a ao utilizador por um canal seguro. Ela só será exibida uma vez.")
-            del st.session_state.temp_password_info
+            
+            # Usar um container para destacar a mensagem
+            with st.container(border=True):
+                st.success(f"Senha para **{user_email}** redefinida com sucesso!", icon="🔑")
+                st.code(temp_pass, language=None)
+                st.warning("Por favor, copie esta senha e envie-a ao utilizador por um canal seguro.")
+                
+                # Botão para dispensar a mensagem
+                st.button(
+                    "Entendido, dispensar mensagem", 
+                    key="dismiss_temp_pass", 
+                    on_click=clear_temp_password,  # <-- CHAMA A NOVA FUNÇÃO
+                    type="primary",
+                    use_container_width=True
+                )
+            
             st.divider()
 
         all_users = list(get_users_collection().find({}))
@@ -405,7 +445,7 @@ with main_tab_system:
                         else:
                             st.button("Promover", disabled=True, use_container_width=True) 
 
-                    with action_cols[1]: # Resetar Senha
+                    with action_cols[1]:
                         st.button(
                             "Resetar Senha", 
                             key=f"reset_pass_sys_{user['_id']}", 
@@ -419,7 +459,7 @@ with main_tab_system:
                             use_container_width=True
                         )
 
-                    with action_cols[2]: # Remover Utilizador
+                    with action_cols[2]:
                         st.button(
                             "Remover Utilizador", 
                             key=f"del_user_sys_{user['_id']}", 
@@ -433,7 +473,6 @@ with main_tab_system:
                  st.rerun()
 
     with system_tab_kpis:
-        # ... (código existente) ...
         st.markdown("##### Metas de KPIs Globais")
         with st.form("kpi_targets_form"):
             target_margin = st.number_input("Meta da Margem de Contribuição (%)", value=configs.get('target_contribution_margin', 25.0))
@@ -490,7 +529,6 @@ with main_tab_system:
 
 
     with tab_link:
-        # ... (código existente) ...
         st.subheader("Configurações Gerais da Aplicação")
         with st.form("general_configs_form"):
             st.markdown("#### URL Base da Aplicação")

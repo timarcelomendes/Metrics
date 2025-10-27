@@ -109,7 +109,6 @@ except Exception as e:
 print(f"Status final do cipher_suite: {'Inicializado' if cipher_suite else 'NÃO Inicializado'}")
 print("-" * 20)
 
-
 # As funções encrypt_token e decrypt_token DEVEM incluir a verificação 'if not cipher_suite:'
 def encrypt_token(token):
     if not cipher_suite:
@@ -267,21 +266,26 @@ def save_last_project(email, project_key):
     )
 
 GLOBAL_CONFIG_PATH = Path("global_app_configs.json")
+
 @st.cache_data
 def get_global_configs():
     """
-    Lê o ficheiro de configuração global do disco e armazena-o no session_state.
-    Isto garante que as configurações estão sempre atualizadas em todas as páginas.
+    Lê o ficheiro de configuração global...
     """
+    print(f"--- DEBUG: Tentando ler o ficheiro em: {GLOBAL_CONFIG_PATH.resolve()} ---") # ADICIONE ESTE PRINT
+
     configs = {}
     if GLOBAL_CONFIG_PATH.is_file():
         try:
             with open(GLOBAL_CONFIG_PATH, 'r', encoding='utf-8') as f:
                 configs = json.load(f)
+                print(f"--- DEBUG: Ficheiro lido com sucesso. Conteúdo parcial: {str(configs)[:200]} ...") # ADICIONE ESTE PRINT
         except (json.JSONDecodeError, IOError) as e:
             print(f"Erro ao ler o ficheiro de configuração global: {e}")
-            configs = {}
-    
+            configs = {} # Mantém o fallback
+    else:
+        print(f"--- DEBUG: Ficheiro NÃO encontrado em {GLOBAL_CONFIG_PATH.resolve()} ---") # ADICIONE ESTE PRINT
+
     st.session_state['global_configs'] = configs
     return configs
 
@@ -693,3 +697,23 @@ def set_admin_status(email, is_admin_bool):
         st.warning("Não é possível alterar as permissões de um utilizador master.")
         return
     update_user_configs(email, {'is_admin': is_admin_bool})
+
+@st.cache_data(show_spinner=False)
+def load_standard_fields_map():
+    """
+    Carrega o mapa de campos padrão do JSON.
+    Usa cache para evitar leituras repetidas do disco.
+    """
+    try:
+        # __file__ aqui aponta para Metrics/security.py
+        # O JSON está no mesmo diretório (Metrics/)
+        fields_path = Path(__file__).parent / "jira_standard_fields.json"
+        with open(fields_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Este erro só deve acontecer uma vez se o ficheiro for movido
+        st.error("Ficheiro crítico 'jira_standard_fields.json' não encontrado no diretório Metrics/.")
+        return {}
+    except Exception as e:
+        st.error(f"Erro ao carregar 'jira_standard_fields.json': {e}")
+        return {}

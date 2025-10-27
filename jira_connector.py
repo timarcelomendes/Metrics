@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from collections import defaultdict
 from security import get_project_config
 from metrics_calculator import find_completion_date, calculate_lead_time, calculate_cycle_time
+from pathlib import Path
 
 @lru_cache(maxsize=32)
 def connect_to_jira(server, user_email, api_token):

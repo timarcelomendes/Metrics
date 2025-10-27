@@ -3,7 +3,9 @@
         "Status": {},
         "Parent": {},
         "StatusCategory": {},
-        "Updated": {}
+        "Updated": {},
+        "Assignee": {},
+        "Created": {}
     },
     "custom_fields": [
         {

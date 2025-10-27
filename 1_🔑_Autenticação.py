@@ -109,24 +109,24 @@ else:
                         user = find_user(email)
 
                         if user and verify_password(password, user['hashed_password']):
-                            # ... (lógica de 'remember_me' e de definir a sessão básica)
                             st.session_state['email'] = user['email']
                             st.session_state['user_data'] = user
                             st.session_state['last_activity_time'] = datetime.now()
-                            # ...
+                            try:
+                                st.session_state['standard_fields_map'] = load_standard_fields_map()
+                                if not st.session_state['standard_fields_map']:
+                                    st.error("Falha ao carregar configuração de campos padrão.")
+                            except Exception as e:
+                                st.error(f"Erro ao iniciar sessão (carregamento de configs): {e}")
 
                             last_conn_id = user.get('last_active_connection_id')
                             if last_conn_id:
                                 with st.spinner("A validar as permissões da sua conexão Jira..."):
                                     
-                                    # --- CORREÇÃO PRINCIPAL APLICADA AQUI ---
-                                    # Procura os detalhes da conexão diretamente no objeto 'user' que já foi carregado,
-                                    # em vez de chamar uma função que procura no local errado.
                                     conn_details = next(
                                         (conn for conn in user.get('jira_connections', []) if conn.get('id') == last_conn_id), 
                                         None
                                     )
-                                    # --- FIM DA CORREÇÃO ---
 
                                     if conn_details:
                                         token = decrypt_token(conn_details['encrypted_token'])

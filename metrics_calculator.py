@@ -1,5 +1,6 @@
 # metrics_calculator.py (VERSÃO CORRIGIDA E SEM DUPLICADOS)
 import streamlit as st
+import dateutil.parser
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -7,78 +8,197 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from security import *
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
+from typing import Optional, List, Dict, Any
+
+st.cache_data.clear()
 
 # --- Funções Auxiliares de Data ---
-def find_completion_date(issue, project_config):
+def find_completion_date(issue: Any, project_config: Dict[str, Any]) -> Optional[datetime]:
     """
-    Encontra a data da ÚLTIMA transição para um status de 'done',
-    baseado nos IDs dos status configurados. (VERSÃO FINAL)
+    Encontra a data de conclusão, baseando-se PRIMEIRO no status atual da issue.
+    
+    Lógica:
+    1. Verifica se o STATUS ATUAL da issue é um status final.
+    2. Se NÃO for, a issue não está concluída (ex: foi reaberta). Retorna None.
+    3. Se FOR, a issue está concluída. Procura a data:
+       a. Tenta usar 'resolutiondate' (a fonte mais fiável).
+       b. Se não existir, procura no histórico (reverso) a data da
+          última transição PARA um status final.
+       c. Se não encontrar, usa 'updated' (última atualização) como fallback.
+       
+    Todas as datas são padronizadas para UTC-naive.
+
+    Args:
+        issue: O objeto 'issue' COMPLETO da biblioteca jira-python.
+        project_config: O dicionário de configuração do projeto.
+
+    Returns:
+        Um objeto `datetime` UTC-naive da data de conclusão, ou `None`.
     """
     
-    status_mapping = project_config.get('status_mapping', {})
-    done_config_list = status_mapping.get('done', [])
-    
-    if not done_config_list:
-        return None 
-
-    done_status_ids = set()
+    # 1. Carrega os IDs dos status finais da configuração do projeto
     try:
-        if isinstance(done_config_list[0], dict):
-            done_status_ids = {d['id'] for d in done_config_list if d.get('id')}
-        else:
-            return None
-    except IndexError:
-        return None 
-            
-    if not done_status_ids: 
-        return None 
+        status_mapping = project_config.get('status_mapping', {})
+        done_status_objects = status_mapping.get('done', [])
+        
+        if not done_status_objects:
+            return None # Nenhum status final configurado
 
-    current_status_id = getattr(getattr(issue.fields, 'status', None), 'id', None)
-    resolution_date_str = getattr(issue.fields, 'resolutiondate', None)
-    
-    if resolution_date_str:
-        if current_status_id in done_status_ids:
-            resolution_date = pd.to_datetime(resolution_date_str).tz_localize(None).normalize()
-            return resolution_date
-
-    completion_date = None
-    try:
-        if not hasattr(issue, 'changelog') or not issue.changelog:
-            return None 
-
-        for history in issue.changelog.histories:
-            history_date = pd.to_datetime(history.created).tz_localize(None).normalize()
-            
-            for item in history.items:
-                # Compara o ID do Status (`item.to`)
-                if item.field.lower() == 'status' and item.to in done_status_ids:
-                    completion_date = history_date
-                
-                # Se saiu de um status 'done' (foi reaberto)
-                elif item.field.lower() == 'status' and item.frm in done_status_ids:
-                    if item.to not in done_status_ids:
-                         completion_date = None 
+        done_ids = {d['id'] for d in done_status_objects if isinstance(d, dict) and 'id' in d}
+        
+        if not done_ids:
+            return None # Configuração vazia
 
     except Exception as e:
+        # (Opcional) Adicione um log de erro se a config falhar
+        # print(f"ERRO: Não foi possível ler 'status_mapping.done'. {e}")
         return None
 
-    # Retorna a data (do resolutiondate ou do changelog)
-    return completion_date
-
-def find_start_date(issue):
-    """Encontra a data de início do ciclo de trabalho."""
-    status_mapping = st.session_state.get('global_configs', {}).get('status_mapping', {})
-    initial_states = status_mapping.get('initial', DEFAULT_INITIAL_STATES)
+    # 2. VERIFICAÇÃO PRINCIPAL: O status ATUAL é um status final?
     try:
+        current_status_id = issue.fields.status.id
+    except Exception:
+        return None # Issue mal formada
+
+    if current_status_id not in done_ids:
+        # A issue NÃO está num status final (ex: foi reaberta).
+        # Portanto, não tem data de conclusão.
+        return None
+
+    # 3. A ISSUE ESTÁ CONCLUÍDA. Agora, encontra a data.
+    
+    # Método A: Usar 'resolutiondate' (O mais fiável)
+    try:
+        resolution_timestamp_str = issue.fields.resolutiondate
+        if resolution_timestamp_str:
+            parsed_date = dateutil.parser.parse(resolution_timestamp_str)
+            utc_naive_date = parsed_date.astimezone(timezone.utc).replace(tzinfo=None)
+            return utc_naive_date
+    except Exception:
+        pass # resolutiondate falhou ou é None, tenta o Método B
+
+    # Método B: Procurar no Histórico (Fallback)
+    if hasattr(issue, 'changelog') and hasattr(issue.changelog, 'histories'):
+        for history in reversed(issue.changelog.histories):
+            if not hasattr(history, 'items'): continue
+            for item in history.items:
+                try:
+                    if item.field == 'status' and item.to in done_ids:
+                        # Encontrou a última transição PARA 'done'
+                        completion_timestamp_str = history.created
+                        parsed_date = dateutil.parser.parse(completion_timestamp_str)
+                        utc_naive_date = parsed_date.astimezone(timezone.utc).replace(tzinfo=None)
+                        return utc_naive_date
+                except AttributeError:
+                    continue 
+
+    # Método C: Usar 'updated' (Último recurso)
+    try:
+        updated_timestamp_str = issue.fields.updated
+        if updated_timestamp_str:
+            parsed_date = dateutil.parser.parse(updated_timestamp_str)
+            utc_naive_date = parsed_date.astimezone(timezone.utc).replace(tzinfo=None)
+            return utc_naive_date
+    except Exception:
+        pass # Falhou tudo
+
+    return None # Não conseguiu encontrar uma data
+
+def find_start_date(issue: Any, project_config: Dict[str, Any]) -> Optional[datetime]:
+    """
+    Encontra a data de início do ciclo de trabalho.
+
+    Esta função lê a configuração do projeto para identificar quais são os
+    status iniciais (com base em seus IDs). Em seguida, ela varre o histórico
+    da issue (changelog) em ordem CRONOLÓGICA (do mais antigo para o mais novo)
+    para encontrar a *primeira* transição que *saiu* de um status inicial
+    para um status não-inicial.
+
+    Se a issue foi criada diretamente em um status não-inicial, a data
+    de criação é usada como a data de início.
+
+    Todas as datas são padronizadas para UTC-naive para permitir
+    cálculos consistentes.
+
+    Args:
+        issue: O objeto 'issue' da biblioteca jira-python.
+        project_config: O dicionário de configuração do projeto.
+
+    Returns:
+        Um objeto `datetime` UTC-naive da data de início, ou `None` se a
+        issue ainda estiver em um status inicial.
+    """
+    
+    # 1. Carrega os IDs dos status iniciais a partir da config do projeto
+    try:
+        status_mapping = project_config.get('status_mapping', {})
+        initial_status_objects = status_mapping.get('initial', [])
+        
+        if not initial_status_objects:
+            initial_ids = set() # Nenhum status inicial configurado
+        else:
+            # Cria um Set de IDs para verificação rápida e robusta
+            initial_ids = {d['id'] for d in initial_status_objects if isinstance(d, dict) and 'id' in d}
+
+    except Exception as e:
+        print(f"ERRO: Não foi possível ler 'status_mapping.initial'. {e}")
+        initial_ids = set() # Falha segura
+
+    # 2. Iterar pelo histórico em ordem CRONOLÓGICA (do mais antigo para o mais novo)
+    try:
+        # 'sorted' garante que estamos iterando do mais antigo para o mais novo
         for history in sorted(issue.changelog.histories, key=lambda h: h.created):
             for item in history.items:
-                if item.field == 'status' and item.fromString.lower() in initial_states and item.toString.lower() not in initial_states:
-                    return pd.to_datetime(history.created).tz_localize(None).normalize()
-    except Exception: pass
-    created_date = pd.to_datetime(issue.fields.created).tz_localize(None).normalize()
-    if issue.fields.status.name.lower() not in initial_states:
-        return created_date
+                if item.field == 'status':
+                    # IDs do status anterior (from_) e do novo status (to)
+                    from_id = getattr(item, 'from', None) # ID antigo
+                    to_id = getattr(item, 'to', None)     # ID novo
+
+                    # 3. Verifica se a transição foi de INICIAL para NÃO-INICIAL
+                    if from_id in initial_ids and to_id not in initial_ids:
+                        
+                        # ENCONTRADO! Esta é a data de início do ciclo.
+                        start_timestamp_str = history.created
+                        
+                        # 4. Padroniza a data para UTC-naive (igual à find_completion_date)
+                        parsed_date = dateutil.parser.parse(start_timestamp_str)
+                        utc_naive_date = parsed_date.astimezone(timezone.utc).replace(tzinfo=None)
+                        return utc_naive_date
+                        
+    except AttributeError:
+        # Ignora itens de histórico mal formados
+        pass
+    except Exception as e:
+        print(f"ERRO ao processar histórico de 'find_start_date': {e}")
+        pass
+
+    # 5. Lógica de Fallback: A issue nunca saiu de um status inicial
+    #    Verifica o status ATUAL.
+    try:
+        # Padroniza a data de criação (caso ela seja usada)
+        created_timestamp_str = issue.fields.created
+        parsed_created_date = dateutil.parser.parse(created_timestamp_str)
+        created_date_utc_naive = parsed_created_date.astimezone(timezone.utc).replace(tzinfo=None)
+
+        current_status_id = issue.fields.status.id
+
+        # Se o status ATUAL *não* é inicial, significa que a issue
+        # foi criada diretamente em "Em Andamento".
+        # Portanto, a data de início é a data de criação.
+        if current_status_id not in initial_ids:
+            return created_date_utc_naive
+
+    except Exception as e:
+        print(f"ERRO no fallback de 'find_start_date': {e}")
+        # Se houver erro, é mais seguro retornar a data de criação padronizada
+        try:
+            return created_date_utc_naive
+        except NameError: # Se falhou antes mesmo de 'created_date_utc_naive' ser definida
+             return None 
+
+    # 6. Se chegamos aqui, a issue ainda está em um status inicial (ex: "Backlog")
+    #    Portanto, seu ciclo de trabalho ainda não começou.
     return None
 
 def calculate_lead_time(issue, completion_date):
@@ -90,32 +210,93 @@ def calculate_lead_time(issue, completion_date):
         return (completion_date - creation_date).days
     return None
 
-def calculate_cycle_time(issue, completion_date, project_config):
-    """Calcula o Cycle Time em dias, com conversão de data robusta."""
+def calculate_cycle_time(issue: Any, completion_date: Optional[datetime], project_config: Dict[str, Any]) -> Optional[float]:
+    """
+    Calcula o Cycle Time em dias, com conversão de data robusta (UTC-naive)
+    e leitura da configuração baseada em ID.
+    """
+    
+    # 1. Validação da data de conclusão
+    # A 'completion_date' que chega aqui JÁ É um objeto datetime UTC-naive
+    # da nossa função find_completion_date (após a correção anterior).
     if not completion_date:
         return None
 
-    # Garante que a data de conclusão seja um objeto datetime para a subtração
-    if isinstance(completion_date, date) and not isinstance(completion_date, datetime):
-        completion_date = pd.to_datetime(completion_date).tz_localize(None)
-    elif isinstance(completion_date, datetime) and completion_date.tzinfo is None:
-        completion_date = completion_date.tz_localize(None)
+    # 2. Carrega a configuração de status (baseada em IDs)
+    try:
+        status_mapping = project_config.get('status_mapping', {})
+        
+        # --- Lógica de Início do Ciclo ---
+        # Idealmente, o usuário deve mapear os status de "Em Progresso"
+        # para o Cycle Time.
+        in_progress_objects = status_mapping.get('in_progress', [])
+        
+        if in_progress_objects:
+            # Lógica 1: Usa os status "in_progress" (baseados em ID)
+            start_ids = {d['id'] for d in in_progress_objects if isinstance(d, dict)}
+            check_logic = "enter_progress" # Flag para lógica de verificação
+        else:
+            # Lógica 2 (Fallback): Se "in_progress" não foi mapeado,
+            # usa os status "initial" para encontrar quando o item *saiu* deles.
+            initial_objects = status_mapping.get('initial', [])
+            start_ids = {d['id'] for d in initial_objects if isinstance(d, dict)}
+            check_logic = "exit_initial" # Flag para lógica de verificação
 
-    status_mapping = project_config.get('status_mapping', {})
-    in_progress_statuses = [s.lower() for s in status_mapping.get('in_progress', [])]
+    except Exception as e:
+        print(f"ERRO: Falha ao ler status_mapping em calculate_cycle_time: {e}")
+        return None
+
+    # 3. Encontra a data de início (first_start_date)
     first_start_date = None
-    if in_progress_statuses and hasattr(issue.changelog, 'histories'):
-        start_dates = []
-        for history in issue.changelog.histories:
+    start_dates = []
+    
+    if hasattr(issue.changelog, 'histories'):
+        # Itera em ordem cronológica (do mais antigo para o mais novo)
+        for history in sorted(issue.changelog.histories, key=lambda h: h.created):
             for item in history.items:
-                if item.field == 'status' and item.toString.lower() in in_progress_statuses:
-                    start_dates.append(pd.to_datetime(history.created).tz_localize(None))
-        if start_dates:
-            first_start_date = min(start_dates)
-            
-    if first_start_date is None:
-        first_start_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+                if item.field == 'status':
+                    
+                    # PADRONIZA A DATA: Converte para datetime e torna UTC-naive
+                    history_date_str = history.created
+                    parsed_date = dateutil.parser.parse(history_date_str)
+                    current_history_date = parsed_date.astimezone(timezone.utc).replace(tzinfo=None)
 
+                    if check_logic == "enter_progress":
+                        # Lógica 1: Encontra a primeira vez que ENTROU em um status "in_progress"
+                        to_id = getattr(item, 'to', None)
+                        if to_id in start_ids:
+                            start_dates.append(current_history_date)
+                    
+                    elif check_logic == "exit_initial":
+                        # Lógica 2: Encontra a primeira vez que SAIU de um status "initial"
+                        from_id = getattr(item, 'from', None)
+                        to_id = getattr(item, 'to', None)
+                        if from_id in start_ids and to_id not in start_ids:
+                            start_dates.append(current_history_date)
+        
+        if start_dates:
+            first_start_date = min(start_dates) # Pega a data mais antiga
+            
+    # 4. Fallback para data de criação (se nunca houve transição no histórico)
+    if first_start_date is None:
+        # PADRONIZA A DATA: Converte a data de criação para UTC-naive
+        created_str = issue.fields.created
+        parsed_created = dateutil.parser.parse(created_str)
+        created_date_utc_naive = parsed_created.astimezone(timezone.utc).replace(tzinfo=None)
+
+        current_status_id = issue.fields.status.id
+
+        # Verifica se a issue já foi criada "em progresso"
+        if (check_logic == "enter_progress" and current_status_id in start_ids) or \
+           (check_logic == "exit_initial" and current_status_id not in start_ids):
+            first_start_date = created_date_utc_naive
+        else:
+            # A issue ainda está no backlog/to do, ciclo não começou
+            return None 
+
+    # 5. Cálculo Final
+    # Ambas 'completion_date' e 'first_start_date' são agora
+    # objetos datetime UTC-naive, permitindo a subtração.
     time_delta = completion_date - first_start_date
     return max(0, time_delta.total_seconds() / (24 * 3600))
 
@@ -387,13 +568,20 @@ def prepare_cfd_data(issues, start_date, end_date):
 def prepare_project_burnup_data(issues: list, unit_param: str, estimation_config: dict, project_config: dict):
     """
     Prepara os dados para o gráfico de burnup (VERSÃO FINAL).
+    (Inclui de-duplicação de issues e filtro de status ignorados)
     """
+    print("\n--- DEBUG: Iniciando prepare_project_burnup_data ---")
     if not issues:
+        print("DEBUG: Lista de issues vazia. Saindo.")
         return pd.DataFrame()
 
     estimation_field_id = estimation_config.get('id') if estimation_config else None
     
-    # Validação inicial (sem st.error para não poluir)
+    status_mapping = project_config.get('status_mapping', {})
+    ignored_status_objects = project_config.get('ignored_statuses', [])
+    ignored_names = {d['name'] for d in ignored_status_objects if isinstance(d, dict) and 'name' in d}
+    print(f"DEBUG: Status a ignorar: {ignored_names}")
+
     if unit_param == 'points' and not estimation_field_id:
         print(f"AVISO no Burnup: Unidade é 'points' mas ID do campo não encontrado.")
         return pd.DataFrame()
@@ -401,44 +589,77 @@ def prepare_project_burnup_data(issues: list, unit_param: str, estimation_config
     scope_data = []
     done_data = []
 
-    for issue in issues:
-        created_date_raw = getattr(issue.fields, 'created', None)
-        if not created_date_raw: continue 
-        created_date = pd.to_datetime(created_date_raw).tz_localize(None).normalize()
-        
-        # 1. Chama a função find_completion_date (que já retorna datetime ou None)
-        completion_date_dt = find_completion_date(issue, project_config) 
+    processed_issue_keys = set()
+    print(f"DEBUG: Processando {len(issues)} issues recebidas.")
 
-        value = 1.0 
-        if unit_param == 'points':
-            if estimation_field_id:
-                raw_value = getattr(issue.fields, estimation_field_id, 0)
-                value = pd.to_numeric(raw_value, errors='coerce') or 0.0
-            else:
-                value = 0.0 
+    for i, issue in enumerate(issues):
+        try:
+            print(f"\nDEBUG [Issue {i+1}/{len(issues)}]: Verificando {issue.key}")
 
-        if pd.notna(created_date):
-            scope_data.append({'Data': created_date, 'Valor': value})
+            if issue.key in processed_issue_keys:
+                print(f"DEBUG: {issue.key} JÁ PROCESSADO. Pulando.")
+                continue 
+            processed_issue_keys.add(issue.key)
+
+            if issue.fields.status.name in ignored_names:
+                print(f"DEBUG: {issue.key} IGNORADO. Status: {issue.fields.status.name}")
+                continue 
+
+            created_date_raw = getattr(issue.fields, 'created', None)
+            if not created_date_raw: 
+                print(f"DEBUG: {issue.key} sem data de criação. Pulando.")
+                continue 
+            created_date = pd.to_datetime(created_date_raw).tz_localize(None).normalize()
             
-        # 2. Verifica diretamente se a data retornada pela função é válida
-        if completion_date_dt and pd.notna(completion_date_dt): 
-            # Usa a data diretamente, sem re-converter
-            done_data.append({'Data': completion_date_dt, 'Valor': value})
+            completion_date_dt = find_completion_date(issue, project_config) 
+
+            value = 1.0 
+            if unit_param == 'points':
+                if estimation_field_id:
+                    raw_value = getattr(issue.fields, estimation_field_id, 0)
+                    value = pd.to_numeric(raw_value, errors='coerce') or 0.0
+                    print(f"DEBUG: {issue.key} tem valor de {value} pontos.")
+                else:
+                    value = 0.0 
+
+            if pd.notna(created_date):
+                scope_data.append({'Data': created_date, 'Valor': value})
+                print(f"DEBUG: {issue.key} adicionado ao Escopo Total com valor {value}.")
+            
+            if completion_date_dt and pd.notna(completion_date_dt): 
+                done_data.append({'Data': completion_date_dt, 'Valor': value})
+                print(f"DEBUG: !!! ADICIONADO {value} A done_data para {issue.key} !!!")
+            elif completion_date_dt:
+                 print(f"DEBUG: {issue.key} tem data de conclusão, mas é NaT.")
+            else:
+                 print(f"DEBUG: {issue.key} não tem data de conclusão (None).")
+
+        except Exception as e:
+            print(f"ERRO no loop de 'prepare_project_burnup_data' para a issue {i}: {e}")
+            pass # Continua para a próxima issue
 
     if not scope_data:
+        print("DEBUG: 'scope_data' está vazio. Saindo.")
         return pd.DataFrame() 
 
+    # --- Resto da função ---
+    
     df_scope = pd.DataFrame(scope_data).groupby('Data')['Valor'].sum().reset_index()
     df_scope = df_scope.set_index('Data').resample('D').sum().cumsum().ffill()
     df_scope.rename(columns={'Valor': 'Escopo Total'}, inplace=True)
 
     if done_data:
         df_done = pd.DataFrame(done_data).groupby('Data')['Valor'].sum().reset_index()
+        # --- DEBUG: Printar o que está em done_data ANTES do groupby ---
+        print("\n--- DEBUG: Conteúdo de done_data (antes do groupby) ---")
+        print(pd.DataFrame(done_data))
+        print("------------------------------------------------------\n")
+        
         df_done = df_done.set_index('Data').resample('D').sum().cumsum().ffill()
         df_done.rename(columns={'Valor': 'Trabalho Concluído'}, inplace=True)
     else:
+        print("DEBUG: 'done_data' está vazio.")
         df_done = pd.DataFrame(index=df_scope.index, columns=['Trabalho Concluído']).fillna(0)
-        # Removido o st.error de debug
 
     burnup_df = df_scope.join(df_done, how='outer').ffill().fillna(0)
     
@@ -446,6 +667,7 @@ def prepare_project_burnup_data(issues: list, unit_param: str, estimation_config
     max_date = datetime.now().date() 
     
     if pd.isna(min_date):
+         print("DEBUG: min_date é NaT. Saindo.")
          return pd.DataFrame() 
          
     date_range = pd.date_range(start=min_date, end=max_date, freq='D')
@@ -457,6 +679,11 @@ def prepare_project_burnup_data(issues: list, unit_param: str, estimation_config
         lambda row: min(row['Trabalho Concluído'], row['Escopo Total']), 
         axis=1
     )
+    
+    print("\n--- DEBUG: Fim de prepare_project_burnup_data ---")
+    print("Última linha do Burnup DF:")
+    print(burnup_df.iloc[-1:])
+    print("------------------------------------------------\n")
 
     return burnup_df
 

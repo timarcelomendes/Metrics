@@ -123,6 +123,11 @@ with tab_mapping:
 
         done_config = status_mapping.get('done', [])
         default_done_names = [d['name'] for d in done_config if isinstance(d, dict) and d.get('name') in status_name_map]
+
+        # Carrega a config de "ignored" (que agora esperamos ser uma lista de dicts)
+        ignored_config = project_config.get('ignored_statuses', [])
+        # Extrai apenas os nomes para usar como 'default' no multiselect
+        default_ignored_names = [d['name'] for d in ignored_config if isinstance(d, dict) and d.get('name') in status_name_map]
         
         # (O resto do código da 'tab_mapping' continua o mesmo)
         st.markdown("##### 🛫 Status Iniciais")
@@ -135,16 +140,22 @@ with tab_mapping:
 
         st.markdown("##### ❌ Status a Ignorar")
         st.caption("Selecione quaisquer status que devam ser completamente ignorados.")
-        ignored_states = st.multiselect("Status a Ignorar", options=status_names_sorted, default=project_config.get('ignored_statuses', []), label_visibility="collapsed")
+        ignored_states = st.multiselect("Status a Ignorar", options=status_names_sorted, default=default_ignored_names, label_visibility="collapsed")
 
         if st.button("Salvar Mapeamento de Status", type="primary", width='stretch'):
             # 7. CONVERTE os nomes selecionados de volta para objetos (com ID e Nome)
             initial_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_initial_names]
             done_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_done_names]
+            
+            ignored_states_data = [{'id': status_name_map[name], 'name': name} for name in ignored_states]
+            # -----------------
 
             # 8. SALVA a nova estrutura (IDs e Nomes)
             project_config['status_mapping'] = {'initial': initial_states_data, 'done': done_states_data}
-            project_config['ignored_statuses'] = ignored_states
+            
+            project_config['ignored_statuses'] = ignored_states_data # Salva a lista de dicts
+            # -----------------
+            
             save_project_config(project_key, project_config)
             st.success("Mapeamento de status salvo com sucesso!")
             get_project_config.clear() # Limpa o cache
@@ -157,53 +168,69 @@ with tab_estimation:
     st.subheader("Configuração de Estimativa e Tempo Gasto")
     st.info("Selecione os campos que a sua equipa utiliza para estimar o esforço (Previsto) e para registrar o tempo de trabalho (Realizado).")
     
-    try:        
-        # 1. Carrega TODOS os campos do Jira (para encontrar os campos Padrão)
+    try: 
+        # 1. Carrega TODOS os campos do Jira
         all_fields = get_jira_fields(st.session_state.jira_client)
         
-        # 2. Carrega as configs globais (que contêm a lista de campos aprovados)
-        # (Esta linha já deve existir no topo da sua página)
-        # configs = get_global_configs() 
-        
-        # 3. Obtém a lista de campos personalizados APROVADOS na Adm
+        # 2. Carrega as configs globais (lista de campos aprovados)
+        configs = get_global_configs() 
         approved_custom_fields = configs.get('custom_fields', [])
         approved_field_ids = {f['id'] for f in approved_custom_fields}
-        
-        # --- CAMPO DE ESTIMATIVA (PREVISTO) ---
-        st.markdown("##### 🎯 Campo de Estimativa (Previsto)")
-        
-        # 1. Começa o dicionário de opções
-        estimation_options = {"Nenhum": None}
 
-        # 2. Adiciona o campo Padrão de Story Points (se existir)
-        sp_field = next((f for f in all_fields if f['id'] == 'customfield_10020'), None) # Assumindo ID de Story Points
-        if sp_field:
-            estimation_options[f"Padrão: {sp_field['name']} ({sp_field['id']})"] = {'name': sp_field['name'], 'id': sp_field['id'], 'source': 'standard_numeric'}
+        # --- INÍCIO DA MUDANÇA ---
+        
+        # 3. Cria UM dicionário mestre de opções numéricas/tempo
+        master_field_options = {"Nenhum": None}
 
-        # 3. Adiciona APENAS os campos personalizados APROVADOS
+        # 4. Adiciona campos Padrão (standard)
+        # (Idealmente, estes IDs viriam da config global)
+        standard_ids_to_check = {
+            'customfield_10020': 'standard_numeric', # Story Points (Exemplo de ID)
+            'timespent': 'standard_time',           # Tempo gasto
+            'timeoriginalestimate': 'standard_time' # Estimativa Original
+        }
+
+        for field in all_fields:
+            field_id = field['id']
+            field_name = field['name']
+            
+            if field_id in standard_ids_to_check:
+                source_type = standard_ids_to_check[field_id]
+                option_label = f"Padrão: {field_name} ({field_id})"
+                if option_label not in master_field_options:
+                    master_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': source_type}
+
+        # 5. Adiciona APENAS os campos personalizados APROVADOS
         for field in approved_custom_fields:
             field_name = field['name']
             field_id = field['id']
-            # Garante que não estamos a adicionar duplicatas
+            # Garante que não estamos a adicionar duplicatas (caso um campo aprovado seja um padrão)
             option_label = f"Personalizado: {field_name} ({field_id})"
-            if option_label not in estimation_options:
-                estimation_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'custom'}
+            if option_label not in master_field_options:
+                # O 'source' 'custom' indica que é um campo da lista aprovada
+                master_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'custom'} 
         
-        # 4. Lógica do Selectbox (como antes)
-        current_selection_name = project_config.get('estimation_field', {}).get('name')
-        selection_key = next((k for k, v in estimation_options.items() if v and v['name'] == current_selection_name), "Nenhum")
+        # --- FIM DA MUDANÇA ---
 
-        selected_field_key = st.selectbox(
+        # --- CAMPO DE ESTIMATIVA (PREVISTO) ---
+        st.markdown("##### 🎯 Campo de Estimativa (Previsto)")
+        
+        # 6. Lógica do Selectbox (Usa o master_field_options)
+        current_estimation_name = project_config.get('estimation_field', {}).get('name')
+        estimation_selection_key = next((k for k, v in master_field_options.items() if v and v['name'] == current_estimation_name), "Nenhum")
+
+        selected_estimation_key = st.selectbox(
             "Selecione o Campo de Estimativa",
-            options=list(estimation_options.keys()),
-            index=list(estimation_options.keys()).index(selection_key),
+            options=list(master_field_options.keys()),
+            index=list(master_field_options.keys()).index(estimation_selection_key),
             key="estimation_selector"
         )
 
         if st.button("Salvar Campo de Estimativa", type="primary", width='stretch'):
-            project_config['estimation_field'] = estimation_options[selected_field_key]
+            project_config['estimation_field'] = master_field_options[selected_estimation_key]
             save_project_config(project_key, project_config)
             st.success("Campo de estimativa salvo com sucesso!")
+            get_project_config.clear() # Limpa cache para garantir recarregamento
 
         st.divider()
 
@@ -211,53 +238,36 @@ with tab_estimation:
         st.markdown("##### ⏱️ Campo de Tempo Gasto (Realizado)")
         st.caption("Selecione o campo que a sua equipa utiliza para registrar o tempo gasto (worklogs).")
 
-        # 1. Começa o dicionário de opções
-        time_field_options = {"Nenhum": None}
-        
-        # 2. Adiciona campos Padrão de tempo (buscando em 'all_fields')
-        for field in all_fields:
-            field_id = field['id']
-            field_name = field['name']
-            if field_id in ['timespent', 'timeoriginalestimate', 'aggregatetimespent']:
-                option_label = f"Padrão: {field_name} ({field_id})"
-                time_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'standard_time'}
-        
-        # 3. Adiciona APENAS os campos personalizados APROVADOS
-        for field in approved_custom_fields:
-            field_name = field['name']
-            field_id = field['id']
-            option_label = f"Personalizado: {field_name} ({field_id})"
-            if option_label not in time_field_options:
-                time_field_options[option_label] = {'name': field_name, 'id': field_id, 'source': 'custom'}
-
-        # 4. Lógica do Selectbox (como antes)
+        # 7. Lógica do Selectbox (Usa o MESMO master_field_options)
         current_time_selection_name = project_config.get('timespent_field', {}).get('name')
         time_selection_key = next(
-            (k for k, v in time_field_options.items() if v and v['name'] == current_time_selection_name), 
+            (k for k, v in master_field_options.items() if v and v['name'] == current_time_selection_name), 
             "Nenhum"
         )
         
         selected_time_field_key = st.selectbox(
             "Selecione o Campo de Tempo Gasto",
-            options=list(time_field_options.keys()),
-            index=list(time_field_options.keys()).index(time_selection_key),
+            options=list(master_field_options.keys()),
+            index=list(master_field_options.keys()).index(time_selection_key),
             key="time_spent_selector"
         )
         
         if st.button("Salvar Campo de Tempo Gasto", type="primary", width='stretch', key="save_time_spent"):
-            project_config['timespent_field'] = time_field_options[selected_time_field_key]
+            project_config['timespent_field'] = master_field_options[selected_time_field_key]
             save_project_config(project_key, project_config)
             st.success("Campo de tempo gasto salvo com sucesso!")
-        
+            get_project_config.clear() # Limpa cache
+
         st.divider()
         
-        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO (JÁ ESTAVA CORRETO) ---
+        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO ---
+        # (O seu código para 'Campo de Agrupamento Estratégico' continua aqui...)
+        # (Copie e cole o resto da sua lógica original da tab_estimation aqui)
+        
         st.markdown("###### 🎯 Campo de Agrupamento Estratégico")
         st.info("Selecione o campo que será usado para agrupar dados em visões executivas (Ex: Cliente, Produto, Squad).")
         st.caption("Nota: Este é um campo global. Os campos disponíveis aqui são ativados na página de 'Administração'.")
 
-        # Pega a lista de campos personalizados que já foram salvos (da config global)
-        # Esta lógica já estava correta e não foi alterada
         saved_custom_fields = configs.get('custom_fields', [])
         if not isinstance(saved_custom_fields, list): saved_custom_fields = []
         
@@ -301,7 +311,7 @@ with tab_estimation:
                 st.rerun()
 
     except Exception as e:
-        st.error("Não foi possível carregar os campos de estimativa do Jira.")
+        st.error(f"Não foi possível carregar os campos de estimativa do Jira: {e}")
         st.expander("Detalhes do Erro").error(e)
 
 with tab_time_in_status:
