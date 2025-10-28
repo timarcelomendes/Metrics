@@ -8,9 +8,7 @@ from security import (
     decrypt_token, 
     save_last_active_connection,
     delete_jira_connection,
-    deactivate_active_connection,
-    check_session_timeout,
-    SESSION_TIMEOUT_MINUTES
+    deactivate_active_connection
 )
 # --- 1: Importar a função get_projects ---
 from jira_connector import connect_to_jira, validate_jira_connection, get_projects
@@ -36,31 +34,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Bloco de Autenticação e Conexão ---
+# --- Verificações de Segurança ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
-if check_session_timeout():
-    # Usa uma f-string para formatar a mensagem com o valor da variável
-    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
-    st.stop()
-
-if 'jira_client' not in st.session_state:
-    # (A verificação original estava buscando 'get_users_collection' sem o e-mail, corrigido para 'find_user')
-    user_data = find_user(st.session_state['email'])
-    user_connections = user_data.get('jira_connections', []) # Busca as conexões do objeto 'user'
-    
-    if not user_connections:
-        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
-        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
-        st.stop()
-    else:
-        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
-        st.stop()
+    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if 'invalid_connection_id' in st.session_state and st.session_state.invalid_connection_id:
     # Obtém a razão específica do erro da sessão, ou usa uma mensagem padrão
