@@ -28,11 +28,27 @@ st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
-if 'jira_client' not in st.session_state:
-    st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
-    st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
-    st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+if check_session_timeout():
+    # Usa uma f-string para formatar a mensagem com o valor da variável
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
+
+if 'jira_client' not in st.session_state:
+    # (A verificação original estava buscando 'get_users_collection' sem o e-mail, corrigido para 'find_user')
+    user_data = find_user(st.session_state['email'])
+    user_connections = user_data.get('jira_connections', []) # Busca as conexões do objeto 'user'
+    
+    if not user_connections:
+        st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌")
+        st.info("Para começar, você precisa de adicionar as suas credenciais do Jira.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗")
+        st.stop()
+    else:
+        st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
+        st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
+        st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗")
+        st.stop()
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -68,9 +84,15 @@ with st.sidebar:
         if len(date_range) == 2:
             st.session_state.start_date_fluxo, st.session_state.end_date_fluxo = date_range[0], date_range[1]
         
-        if st.button("Analisar / Atualizar Dados", width='stretch', type="primary"):
+    if st.button("Analisar / Atualizar Dados", width='stretch', type="primary"):
             with st.spinner("A carregar e processar dados do Jira..."):
-                df_loaded, raw_issues = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+                # Busca as configs do utilizador ANTES de chamar a função
+                user_data = find_user(st.session_state['email'])
+                df_loaded, raw_issues = load_and_process_project_data(
+                    st.session_state.jira_client,
+                    st.session_state.project_key,
+                    user_data # Passa as configs para invalidar o cache
+                )
                 st.session_state.dynamic_df = df_loaded
                 st.session_state.raw_issues_for_fluxo = raw_issues
             st.rerun()
@@ -161,9 +183,40 @@ if 'ID' not in filtered_df.columns:
 
 filtered_issue_keys = filtered_df['ID'].tolist()
 all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
+# 1. Filtra com base nos filtros de UI (como estava)
 filtered_issues = [issue for issue in all_raw_issues if issue.key in filtered_issue_keys]
 
-st.caption(f"A exibir métricas para {len(filtered_issues)} de {len(all_raw_issues)} issues, com base nos filtros aplicados.")
+# 2. Filtra adicionalmente os status ignorados (Ex: 'Cancelado', 'Duplicado')
+issues_for_flow_calc = [
+    issue for issue in filtered_issues 
+    if (
+        hasattr(issue.fields, 'status') and issue.fields.status and 
+        issue.fields.status.name.lower() not in ignored_statuses_lower
+    )
+]
+
+# 3. Atualiza a legenda para refletir a nova contagem
+st.caption(f"A exibir métricas para {len(issues_for_flow_calc)} de {len(all_raw_issues)} issues (após aplicar filtros e remover {len(filtered_issues) - len(issues_for_flow_calc)} issues ignoradas).")
+
+st.divider()
+
+filtered_issue_keys = filtered_df['ID'].tolist()
+all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
+# 1. Filtra com base nos filtros de UI (como estava)
+filtered_issues = [issue for issue in all_raw_issues if issue.key in filtered_issue_keys]
+
+# 2. Filtra adicionalmente os status ignorados (Ex: 'Cancelado', 'Duplicado')
+issues_for_flow_calc = [
+    issue for issue in filtered_issues 
+    if (
+        hasattr(issue.fields, 'status') and issue.fields.status and 
+        issue.fields.status.name.lower() not in ignored_statuses_lower
+    )
+]
+
+# 3. Atualiza a legenda para refletir a nova contagem
+st.caption(f"A exibir métricas para {len(issues_for_flow_calc)} de {len(all_raw_issues)} issues (após aplicar filtros e remover {len(filtered_issues) - len(issues_for_flow_calc)} issues ignoradas).")
+
 st.divider()
 
 start_date, end_date = st.session_state.start_date_fluxo, st.session_state.end_date_fluxo
@@ -173,7 +226,8 @@ in_progress_statuses = status_mapping.get('in_progress', [])
 if not done_statuses:
     st.warning("Nenhum 'status final' está configurado para este projeto.", icon="⚠️")
 
-completed_issues_in_period = [i for i in filtered_issues if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime.date() <= end_date]
+# 4. Usa 'issues_for_flow_calc' em TODAS as métricas
+completed_issues_in_period = [i for i in issues_for_flow_calc if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime.date() <= end_date]
 times_data = []
 for issue in completed_issues_in_period:
     completion_date_dt = find_completion_date(issue, project_config)
@@ -187,14 +241,15 @@ df_times = pd.DataFrame(times_data)
 if not df_times.empty:
     df_times.dropna(subset=['Cycle Time (dias)'], inplace=True)
 
-wip_issues = [i for i in filtered_issues if hasattr(i.fields, 'status') and i.fields.status and i.fields.status.name.lower() in [s.lower() for s in in_progress_statuses]]
+# 5. Usa 'issues_for_flow_calc'
+wip_issues = [i for i in issues_for_flow_calc if hasattr(i.fields, 'status') and i.fields.status and i.fields.status.name.lower() in [s.lower() for s in in_progress_statuses]]
 throughput = len(completed_issues_in_period)
 lead_time_avg = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0
 cycle_time_avg = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0
-aging_df = get_aging_wip(filtered_issues)
+aging_df = get_aging_wip(issues_for_flow_calc) # 6. Usa 'issues_for_flow_calc'
 sla_metrics = {}
 if global_configs.get('sla_policies'):
-    sla_metrics = calculate_sla_metrics_for_issues(filtered_issues, global_configs)
+    sla_metrics = calculate_sla_metrics_for_issues(issues_for_flow_calc, global_configs) # 7. Usa 'issues_for_flow_calc'
 
 completed_issue_keys = [issue.key for issue in completed_issues_in_period]
 

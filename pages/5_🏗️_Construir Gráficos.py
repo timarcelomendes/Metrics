@@ -1,4 +1,4 @@
-# pages/5_🏗️_Construir Gráficos.py (VERSÃO CORRIGIDA COM "TEMPO EM STATUS" EM TODOS OS GRÁFICOS)
+# pages/5_🏗️_Construir Gráficos.py
 
 import streamlit as st
 import pandas as pd
@@ -82,7 +82,13 @@ with st.sidebar:
     if selected_project_name:
         st.session_state.project_key = projects[selected_project_name]; st.session_state.project_name = selected_project_name
         if st.button("Construir Gráficos", width='stretch', type="primary"):
-            df_loaded, _ = load_and_process_project_data(st.session_state.jira_client, st.session_state.project_key)
+            # Busca as configs do utilizador ANTES de chamar a função
+            user_data = find_user(st.session_state['email'])
+            df_loaded, _ = load_and_process_project_data(
+                st.session_state.jira_client, 
+                st.session_state.project_key,
+                user_data # Passa as configs para invalidar o cache
+            )
             st.session_state.dynamic_df = df_loaded
             st.rerun()
         if st.button("Logout", width='stretch', type='secondary'):
@@ -552,7 +558,6 @@ if creation_mode == "Construtor Visual":
                 key="kpi_format_percentage"
             )
             st.divider()
-            # --- FIM DA NOVA SEÇÃO ---
 
             source_options = ["Dados do Dashboard", "Consulta JQL"]
             source_idx = 1 if config.get('source_type') == 'jql' else 0
@@ -597,7 +602,7 @@ if creation_mode == "Construtor Visual":
                 num_op_idx = op_options.index(config.get('num_op', 'Contagem')) if config.get('num_op') in op_options else 0
                 config['num_op'] = col1.selectbox("Operação do Numerador", op_options, index=num_op_idx, key="kpi_num_op")
                 
-                # --- CORREÇÃO: Usar measure_options_numeric_only ---
+                # --- Usar measure_options_numeric_only ---
                 if config.get('num_op') == "Contagem":
                     col2.selectbox("Campo do Numerador", ["Contagem de Issues"], disabled=True, key="kpi_num_field_count")
                     config['num_field'] = "Contagem de Issues"
@@ -605,7 +610,7 @@ if creation_mode == "Construtor Visual":
                     num_field_idx = measure_options_numeric_only.index(config.get('num_field')) if config.get('num_field') in measure_options_numeric_only else 0
                     config['num_field'] = col2.selectbox("Campo do Numerador", measure_options_numeric_only, index=num_field_idx, key="kpi_num_field_numeric")
 
-                # --- CORREÇÃO: Adicionar UI condicional ---
+                # --- Adicionar UI condicional ---
                 if config.get('num_field') == "Tempo em Status":
                     with st.container(border=True):
                         st.markdown("###### Configuração (Numerador): Tempo em Status")
@@ -618,7 +623,6 @@ if creation_mode == "Construtor Visual":
                         config['num_field'] = new_measure_col # Sobrescreve o config['num_field'] com o nome da coluna calculada
                         config['num_op'] = "Soma" # A agregação (Soma/Média) já foi feita, aqui só somamos a coluna
                         if new_measure_col: st.caption(f"Medida do Numerador: {new_measure_col}")
-                # --- FIM DA CORREÇÃO ---
 
                 config['use_den'] = st.toggle("Usar Denominador (para calcular proporção)", value=config.get('use_den', False), key="kpi_use_den")
                 
@@ -629,7 +633,7 @@ if creation_mode == "Construtor Visual":
                     den_op_idx = op_options.index(config.get('den_op', 'Contagem')) if config.get('den_op') in op_options else 0
                     config['den_op'] = col3.selectbox("Operação do Denominador", op_options, index=den_op_idx, key="kpi_den_op")
                     
-                    # --- CORREÇÃO: Usar measure_options_numeric_only ---
+                    # --- Usar measure_options_numeric_only ---
                     if config.get('den_op') == "Contagem":
                         col4.selectbox("Campo do Denominador", ["Contagem de Issues"], disabled=True, key="kpi_den_field_count")
                         config['den_field'] = "Contagem de Issues"
@@ -650,7 +654,6 @@ if creation_mode == "Construtor Visual":
                             config['den_field'] = new_measure_col 
                             config['den_op'] = "Soma"
                             if new_measure_col: st.caption(f"Medida do Denominador: {new_measure_col}")
-                    # --- FIM DA CORREÇÃO ---
 
                 st.divider()
                 config['use_baseline'] = st.toggle("Exibir Variação (Delta)", value=config.get('use_baseline', False), key="kpi_use_baseline")
@@ -683,7 +686,6 @@ if creation_mode == "Construtor Visual":
                             config['base_field'] = new_measure_col
                             config['base_op'] = "Soma"
                             if new_measure_col: st.caption(f"Medida da Linha de Base: {new_measure_col}")
-                    # --- FIM DA CORREÇÃO ---
 
             # Lógica de validação e atribuição final
             is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
@@ -726,16 +728,45 @@ if creation_mode == "Construtor Visual":
             columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=valid_default_columns)
             
             # --- Usar measure_options_numeric_only (sem a opção "Tempo em Status" por enquanto) ---
-            # Nota: Tabela dinâmica não suporta a lógica de UI do "Tempo em Status" ainda.
-            all_numeric_measures = sorted(list(set(numeric_cols_for_dropdown + status_time_cols)))
-            values_options = [""] + all_numeric_measures
-            
+
+            all_numeric_measures_for_pivot = sorted(list(set(numeric_cols))) # Usa a lista completa
+
+            # Adiciona a opção "Contagem de Issues" explicitamente, pois não está em numeric_cols
+            values_options = ["", "Contagem de Issues"] + all_numeric_measures_for_pivot
+
+            # Lógica para encontrar o índice do valor guardado (se existir)
             default_values_idx = values_options.index(config.get('values')) if config.get('values') in values_options else 0
-            values_selection = st.selectbox("Valores (campo numérico)", options=values_options, index=default_values_idx)
+
+            # Renderiza o selectbox com as opções corrigidas
+            values_selection = st.selectbox(
+                "Valores (campo numérico ou contagem)", # Título ajustado
+                options=values_options,
+                index=default_values_idx,
+                key="pivot_values_selector" # Adiciona uma chave única
+            )
+
+            agg_options = ['Soma', 'Média', 'Contagem']
+            # Se 'Contagem de Issues' for selecionado, força a agregação para 'Contagem'
+            if values_selection == "Contagem de Issues":
+                aggfunc_selection = 'Contagem'
+                st.selectbox(
+                    "Função de Agregação",
+                    options=[aggfunc_selection], # Mostra apenas 'Contagem'
+                    index=0,
+                    disabled=True, # Desabilita a seleção
+                    key="pivot_aggfunc_selector_count" # Chave diferente
+                 )
+            else:
+                 # Comportamento normal para campos numéricos
+                 aggfunc_selection = st.selectbox(
+                    "Função de Agregação",
+                    options=agg_options,
+                    index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0,
+                    key="pivot_aggfunc_selector_numeric" # Chave diferente
+                 )
             
             agg_options = ['Soma', 'Média', 'Contagem']
             aggfunc_selection = st.selectbox("Função de Agregação", options=agg_options, index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0)
-            # --- FIM da lógica de construção da UI ---
 
             # Lógica de validação e criação do chart_config
             if not rows_selection or not values_selection:

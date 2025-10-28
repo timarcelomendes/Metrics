@@ -353,6 +353,9 @@ with main_tab_system:
         st.markdown("##### 👥 Utilizadores Registados no Sistema")
         st.caption("Gira as permissões e contas dos utilizadores da plataforma.")
 
+        if 'confirming_delete_user' not in st.session_state:
+            st.session_state.confirming_delete_user = None
+
         def handle_password_reset(user_account):
             """Gera, atualiza o DB e armazena a senha para exibição."""
             try:
@@ -406,7 +409,7 @@ with main_tab_system:
             for user in users_to_display:
                 is_current_user_admin = user.get('is_admin', False)
                 is_master_user_target = user['email'] in MASTER_USERS
-                
+
                 with st.container(border=True):
                     col1, col2 = st.columns([0.7, 0.3])
                     with col1:
@@ -418,59 +421,67 @@ with main_tab_system:
                             st.success("👑 Administrador", icon="👑")
                         else:
                             st.info("👤 Utilizador Padrão", icon="👤")
-                            
-                    st.divider() 
 
-                    st.markdown("**Ações Disponíveis**")
-                    action_cols = st.columns(3)
-                    
-                    with action_cols[0]: # Promover / Despromover
-                        if not is_master_user_target:
-                            if is_current_user_admin:
-                                st.button(
-                                    "Despromover", 
-                                    key=f"demote_admin_{user['_id']}", 
-                                    type="secondary",
-                                    on_click=lambda u=user['email']: set_admin_status(u, False),
-                                    use_container_width=True
-                                )
+                    st.divider()
+
+                    # --- INÍCIO DA LÓGICA DE CONFIRMAÇÃO ---
+                    if st.session_state.confirming_delete_user == user['email']:
+                        st.warning(f"**Tem a certeza que deseja remover {user['email']}?** Esta ação não pode ser desfeita.")
+                        confirm_cols = st.columns(2)
+                        if confirm_cols[0].button("🗑️ Sim, remover utilizador", key=f"confirm_del_{user['_id']}", use_container_width=True, type="primary"):
+                            delete_user(user['email'])
+                            st.session_state.confirming_delete_user = None # Limpa o estado
+                            st.success(f"Utilizador {user['email']} removido com sucesso.")
+                            st.rerun() # Recarrega para atualizar a lista
+                        if confirm_cols[1].button("❌ Cancelar", key=f"cancel_del_{user['_id']}", use_container_width=True):
+                            st.session_state.confirming_delete_user = None # Limpa o estado
+                            st.rerun() # Recarrega para voltar ao normal
+                    else:
+                        # Mostra as ações normais se não estiver a confirmar a exclusão deste user
+                        st.markdown("**Ações Disponíveis**")
+                        action_cols = st.columns(3)
+
+                        with action_cols[0]: # Promover / Despromover
+                            if not is_master_user_target:
+                                if is_current_user_admin:
+                                    st.button(
+                                        "Despromover",
+                                        key=f"demote_admin_{user['_id']}",
+                                        type="secondary",
+                                        on_click=set_admin_status, # Mudança aqui para passar args
+                                        args=(user['email'], False), # Mudança aqui
+                                        use_container_width=True
+                                    )
+                                else:
+                                    st.button(
+                                        "Promover a Admin",
+                                        key=f"promote_admin_{user['_id']}",
+                                        type="primary",
+                                        on_click=set_admin_status, # Mudança aqui
+                                        args=(user['email'], True),  # Mudança aqui
+                                        use_container_width=True
+                                    )
                             else:
-                                st.button(
-                                    "Promover a Admin", 
-                                    key=f"promote_admin_{user['_id']}", 
-                                    type="primary",
-                                    on_click=lambda u=user['email']: set_admin_status(u, True),
-                                    use_container_width=True
-                                )
-                        else:
-                            st.button("Promover", disabled=True, use_container_width=True) 
+                                st.button("Promover", disabled=True, use_container_width=True)
 
-                    with action_cols[1]:
-                        st.button(
-                            "Resetar Senha", 
-                            key=f"reset_pass_sys_{user['_id']}", 
-                            on_click=lambda u=user: (
-                                setattr(st.session_state, 'temp_password_info', {
-                                    'email': u['email'], 
-                                    'password': generate_temporary_password()
-                                }),
-                                update_user_password(u['email'], get_password_hash(st.session_state.temp_password_info['password']))
-                            ),
-                            use_container_width=True
-                        )
+                        with action_cols[1]: # Resetar Senha
+                             st.button(
+                                 "Resetar Senha",
+                                 key=f"reset_pass_sys_{user['_id']}",
+                                 on_click=handle_password_reset,
+                                 args=(user,),
+                                 use_container_width=True
+                             )
 
-                    with action_cols[2]:
-                        st.button(
-                            "Remover Utilizador", 
-                            key=f"del_user_sys_{user['_id']}", 
-                            type="secondary",
-                            disabled=is_master_user_target, 
-                            on_click=lambda u=user['email']: delete_user(u),
-                            use_container_width=True
-                        )
-
-            if any(key.startswith(('reset_pass', 'del_user', 'demote_admin', 'promote_admin')) and st.session_state[key] for key in st.session_state):
-                 st.rerun()
+                        with action_cols[2]: # Remover Utilizador (Agora define o estado de confirmação)
+                            st.button(
+                                "Remover Utilizador",
+                                key=f"del_user_sys_{user['_id']}",
+                                type="secondary",
+                                disabled=is_master_user_target,
+                                on_click=lambda u_email=user['email']: setattr(st.session_state, 'confirming_delete_user', u_email), # Mudança aqui
+                                use_container_width=True
+                            )
 
     with system_tab_kpis:
         st.markdown("##### Metas de KPIs Globais")

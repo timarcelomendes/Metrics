@@ -5,13 +5,10 @@
         "StatusCategory": {},
         "Updated": {},
         "Assignee": {},
-        "Created": {}
+        "Created": {},
+        "Priority": {}
     },
     "custom_fields": [
-        {
-            "id": "customfield_10064",
-            "name": "Cliente"
-        },
         {
             "id": "customfield_10009",
             "name": "Actual end"
@@ -26,10 +23,6 @@
         },
         {
             "id": "customfield_10246",
-            "name": "Cliente"
-        },
-        {
-            "id": "customfield_10684",
             "name": "Cliente"
         },
         {
