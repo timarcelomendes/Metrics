@@ -1,4 +1,4 @@
-# pages/3_📊_Métricas_de_Fluxo.py (VERSÃO CORRIGIDA)
+# pages/3_📊_Métricas_de_Fluxo.py
 
 import streamlit as st
 import pandas as pd

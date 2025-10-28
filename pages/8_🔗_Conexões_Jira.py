@@ -1,4 +1,4 @@
-# pages/8_🔗_Conexões_Jira.py (VERSÃO CORRIGIDA E FINAL)
+# pages/8_🔗_Conexões_Jira.py
 
 import streamlit as st
 from security import (
@@ -76,6 +76,7 @@ with st.form("new_connection_form", clear_on_submit=True):
     url = st.text_input("URL do Jira*", placeholder="https://sua-empresa.atlassian.net")
     email = st.text_input("E-mail do Jira*", placeholder="seu-email@empresa.com")
     token = st.text_input("Token de API*", type="password", help="O seu token de API, não a sua senha.")
+    st.caption("[Como criar um Token de API no Jira](https://id.atlassian.com/manage-profile/security/api-tokens)")
     
     if st.form_submit_button("Testar e Salvar Conexão", type="primary", use_container_width=True):
         if all([name, url, email, token]):
@@ -168,6 +169,7 @@ else:
                     st.text_input("URL do Jira", value=conn['jira_url'], key=f"url_{conn_id}")
                     st.text_input("E-mail do Jira", value=conn['jira_email'], key=f"email_{conn_id}")
                     st.text_input("Novo Token de API (Opcional)", type="password", help="Preencha apenas se quiser atualizar o token.", key=f"token_{conn_id}")
+                    st.caption("[Como criar um Token de API no Jira](https://id.atlassian.com/manage-profile/security/api-tokens)")
                     if st.form_submit_button("Salvar Alterações", type="primary", use_container_width=True):
                         connections[i]['name'] = st.session_state[f"name_{conn_id}"]
                         connections[i]['jira_url'] = st.session_state[f"url_{conn_id}"]

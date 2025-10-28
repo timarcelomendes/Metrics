@@ -426,7 +426,7 @@ def get_issue_count(jira_client, jql):
     except Exception as e:
         return str(e)
 
-# --- FUNÇÃO PRINCIPAL DE PROCESSAMENTO DE DADOS (REFATORADA) ---
+# --- FUNÇÃO PRINCIPAL DE PROCESSAMENTO DE DADOS ---
 
 def load_and_process_project_data(jira_client, project_key):
     """Carrega e processa os dados de um projeto do Jira, retornando um DataFrame."""

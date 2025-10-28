@@ -1,4 +1,4 @@
-# pages/4_📈_Forecast_de_Projetos.py (VERSÃO CORRIGIDA)
+# pages/4_📈_Forecast_de_Projetos.py
 
 import streamlit as st
 import pandas as pd
@@ -23,13 +23,11 @@ if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
-    # Usa uma f-string para formatar a mensagem com o valor da variável
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
     st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 
 if 'jira_client' not in st.session_state:
-    # (A verificação original estava buscando 'get_users_collection' sem o e-mail, corrigido para 'find_user')
     user_data = find_user(st.session_state['email'])
     user_connections = user_data.get('jira_connections', []) # Busca as conexões do objeto 'user'
     

@@ -51,17 +51,17 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     """
     Carrega, processa e enriquece os dados de um projeto Jira.
     """
-    print("\n--- INICIANDO load_and_process_project_data ---") # DEBUG
+    print("\n--- INICIANDO load_and_process_project_data ---") 
     project_config = get_project_config(project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
     estimation_field_id = estimation_config.get('id') if estimation_config else None
     timespent_field_id = timespent_config.get('id') if timespent_config else None
 
-    user_enabled_standard_fields_ids = user_data.get('standard_fields', []) # Lista de IDs (ex: 'Priority')
-    user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', []) # Lista de Nomes (ex: 'Story Points')
-    print(f"DEBUG: Standard Fields Habilitados (IDs): {user_enabled_standard_fields_ids}") # DEBUG
-    print(f"DEBUG: Custom Fields Habilitados (Nomes): {user_enabled_custom_fields_names}") # DEBUG
+    user_enabled_standard_fields_ids = user_data.get('standard_fields', [])
+    user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', [])
+    print(f"DEBUG: Standard Fields Habilitados (IDs): {user_enabled_standard_fields_ids}") 
+    print(f"DEBUG: Custom Fields Habilitados (Nomes): {user_enabled_custom_fields_names}")
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
@@ -73,7 +73,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
         raw_issues_list = get_project_issues(_jira_client, project_key)
         issues = filter_ignored_issues(raw_issues_list, project_config)
-    print(f"DEBUG: {len(issues)} issues carregadas após filtro inicial.") # DEBUG
+    print(f"DEBUG: {len(issues)} issues carregadas após filtro inicial.") 
 
     if not issues: return pd.DataFrame(), []
 
@@ -81,7 +81,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
     user_custom_field_name_to_id_map = { name: id for id, name in all_custom_field_id_to_name_map.items() if name in user_enabled_custom_fields_names }
     strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
-    print(f"DEBUG: Mapa Nome Custom -> ID (Utilizador): {user_custom_field_name_to_id_map}") # DEBUG
+    print(f"DEBUG: Mapa Nome Custom -> ID (Utilizador): {user_custom_field_name_to_id_map}")
 
     # --- MAPEAMENTO PADRÃO ID -> ATRIBUTO JIRA ---
     standard_field_id_to_attribute_map = {
@@ -96,16 +96,16 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     }
 
     # --- EXTRACT_VALUE ROBUSTO ---
-    def extract_value(raw_value, field_identifier_for_debug=""): # Adicionado debug info
+    def extract_value(raw_value, field_identifier_for_debug=""):
         if raw_value is None: return None
-        try: # Adicionado try-except para capturar erros inesperados na extração
+        try:
             if isinstance(raw_value, (int, float, bool)): return raw_value
             if isinstance(raw_value, str) and raw_value.isdigit():
                 try: return int(raw_value)
                 except ValueError: pass
-            if hasattr(raw_value, 'displayName'): return raw_value.displayName # User
-            if hasattr(raw_value, 'name'): return raw_value.name # Status, Priority, etc.
-            if hasattr(raw_value, 'value'): return raw_value.value # Select List
+            if hasattr(raw_value, 'displayName'): return raw_value.displayName
+            if hasattr(raw_value, 'name'): return raw_value.name 
+            if hasattr(raw_value, 'value'): return raw_value.value 
             if isinstance(raw_value, str):
                 try:
                     dt_obj = pd.to_datetime(raw_value).tz_localize(None).normalize()
@@ -123,8 +123,8 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             return str(raw_value) # Fallback
         except Exception as e:
              print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}', Valor Bruto: '{raw_value}', Erro: {e}")
-             # traceback.print_exc() # Descomente para stacktrace completo
-             return None # Retorna None se a extração falhar
+             
+             return None 
 
     processed_issues_data = []
     try: _ = find_completion_date
@@ -141,10 +141,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     processed_by_default = {'ID', 'Issue', 'Tipo de Issue', 'Status', 'Data de Criação',
                             'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)'}
 
-    print("\n--- INICIANDO PROCESSAMENTO POR ISSUE ---") # DEBUG
+    print("\n--- INICIANDO PROCESSAMENTO POR ISSUE ---") 
     for issue_index, issue in enumerate(stqdm(issues, desc="A processar issues")):
         fields = issue.fields
-        print(f"\nDEBUG: Processando Issue {issue.key} ({issue_index+1}/{len(issues)})") # DEBUG
+        print(f"\nDEBUG: Processando Issue {issue.key} ({issue_index+1}/{len(issues)})")
 
         # Campos Base
         issue_data = {
@@ -176,10 +176,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
              issue_data['Lead Time (dias)'] = None
 
         # --- PROCESSAMENTO CAMPOS PADRÃO ---
-        print(f"DEBUG {issue.key}: Processando Campos Padrão...") # DEBUG
+        print(f"DEBUG {issue.key}: Processando Campos Padrão...")
         for field_id in user_enabled_standard_fields_ids:
             if field_id in processed_by_default or field_id in [estimation_field_id, timespent_field_id]:
-                print(f"DEBUG {issue.key}: Pulando Padrão '{field_id}' (já processado ou especial)") # DEBUG
+                print(f"DEBUG {issue.key}: Pulando Padrão '{field_id}' (já processado ou especial)")
                 continue
 
             attribute_name = standard_field_id_to_attribute_map.get(field_id)
@@ -196,12 +196,11 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                          raw_value = getattr(fields, attribute_name, 'NÃO ENCONTRADO')
                          debug_source = f"via fields.{attribute_name}"
                     extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
-                    issue_data[field_id] = extracted_value # Guarda com o ID por enquanto
+                    issue_data[field_id] = extracted_value 
                 except Exception as e:
                      print(f"DEBUG Padrão Getattr ERROR para ID '{field_id}', Atributo '{attribute_name}', Erro: {e}")
-                     issue_data[field_id] = None # Define como None se getattr falhar
+                     issue_data[field_id] = None
             else:
-                # Fallback: Tenta usar o ID diretamente
                 try:
                      raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
                      debug_source = f"via fields.{field_id} (fallback)"
@@ -211,31 +210,31 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                      print(f"DEBUG Padrão Fallback Getattr ERROR para ID '{field_id}', Erro: {e}")
                      issue_data[field_id] = None
 
-            print(f"DEBUG {issue.key}: Padrão ID='{field_id}', Attr='{attribute_name or field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}', Fonte='{debug_source}'") # DEBUG
+            print(f"DEBUG {issue.key}: Padrão ID='{field_id}', Attr='{attribute_name or field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}', Fonte='{debug_source}'") 
 
         # --- PROCESSAMENTO CAMPOS PERSONALIZADOS ---
-        print(f"DEBUG {issue.key}: Processando Campos Personalizados...") # DEBUG
+        print(f"DEBUG {issue.key}: Processando Campos Personalizados...")
         for field_name, field_id in user_custom_field_name_to_id_map.items():
             raw_value = None
             extracted_value = None
             try:
                  raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
                  extracted_value = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
-                 issue_data[field_name] = extracted_value # Guarda com o NOME como chave
+                 issue_data[field_name] = extracted_value
             except Exception as e:
                  print(f"DEBUG Custom Getattr ERROR para Nome '{field_name}', ID '{field_id}', Erro: {e}")
                  issue_data[field_name] = None
-            print(f"DEBUG {issue.key}: Custom Nome='{field_name}', ID='{field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") # DEBUG
+            print(f"DEBUG {issue.key}: Custom Nome='{field_name}', ID='{field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") 
 
         # Campo Estratégico
         if strategic_field_name and strategic_field_id:
-             if strategic_field_name not in issue_data: # Evita sobrescrever se já foi carregado como custom
+             if strategic_field_name not in issue_data:
                 raw_value = getattr(fields, strategic_field_id, 'NÃO ENCONTRADO')
                 extracted_value = extract_value(raw_value, f"{issue.key}-{strategic_field_name}({strategic_field_id})")
                 issue_data[strategic_field_name] = extracted_value
-                print(f"DEBUG {issue.key}: Estratégico Nome='{strategic_field_name}', ID='{strategic_field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") # DEBUG
+                print(f"DEBUG {issue.key}: Estratégico Nome='{strategic_field_name}', ID='{strategic_field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") 
              else:
-                 print(f"DEBUG {issue.key}: Estratégico '{strategic_field_name}' já estava presente.") # DEBUG
+                 print(f"DEBUG {issue.key}: Estratégico '{strategic_field_name}' já estava presente.")
 
         # Tempo em Status (sem debug extra aqui, já tem try-except interno)
         if should_calc_time_in_status and all_project_statuses:
@@ -247,46 +246,42 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     # 1. Cria o DataFrame PRIMEIRO
     df = pd.DataFrame(processed_issues_data)
-    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---") # DEBUG
-    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}") # DEBUG
+    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---")
+    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}")
 
-    # --- INÍCIO DO BLOCO MOVIDO ---
     # 2. AGORA executa a lógica de rename/verificação de Estimativa/Tempo Gasto
-    # Renomeia colunas de Estimativa/Tempo Gasto para seus nomes amigáveis, SE NECESSÁRIO
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
     rename_map_specific = {}
     ids_to_drop_specific = []
-    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:") # DEBUG
+    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:")
 
     # Estimativa
     # AGORA a verificação 'in df.columns' é segura
     if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
          if estimation_name not in df.columns:
-              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'") # DEBUG
+              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'")
               rename_map_specific[estimation_field_id] = estimation_name
          else:
-              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") # DEBUG
+              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") 
               ids_to_drop_specific.append(estimation_field_id)
 
     # Tempo Gasto
-    # AGORA a verificação 'in df.columns' é segura
     if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
          if timespent_name not in df.columns:
-              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'") # DEBUG
+              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'")
               rename_map_specific[timespent_field_id] = timespent_name
          else:
-              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") # DEBUG
+              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") 
               ids_to_drop_specific.append(timespent_field_id)
 
     if rename_map_specific:
         df.rename(columns=rename_map_specific, inplace=True)
-        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") # DEBUG
+        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") 
 
     if ids_to_drop_specific:
         df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
-        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") # DEBUG
-    # --- FIM DO BLOCO MOVIDO ---
+        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") 
 
     # --- GARANTIR COLUNAS E RENOMEAR ---
     all_expected_standard_ids = user_enabled_standard_fields_ids
@@ -301,65 +296,62 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         if col not in df.columns:
             df[col] = None
             missing_cols_added.append(col)
-    if missing_cols_added: print(f"DEBUG: Colunas adicionadas com None (antes rename): {missing_cols_added}") # DEBUG
+    if missing_cols_added: print(f"DEBUG: Colunas adicionadas com None (antes rename): {missing_cols_added}") 
 
     # Renomeia os IDs padrão para Nomes Amigáveis
     standard_fields_map = st.session_state.get('standard_fields_map', {}) # Carrega o mapa ID -> Nome Amigável
     rename_map_standard = {}
-    print("DEBUG: Iniciando rename de campos Padrão:") # DEBUG
+    print("DEBUG: Iniciando rename de campos Padrão:") 
     for field_id in user_enabled_standard_fields_ids: # Usa a lista de IDs habilitados
          friendly_name = standard_fields_map.get(field_id)
          if friendly_name and field_id in df.columns and friendly_name != field_id:
-              print(f"DEBUG: Renomeando Padrão '{field_id}' para '{friendly_name}'") # DEBUG
+              print(f"DEBUG: Renomeando Padrão '{field_id}' para '{friendly_name}'") 
               rename_map_standard[field_id] = friendly_name
          elif friendly_name and friendly_name != field_id and friendly_name not in df.columns:
-              print(f"DEBUG: Campo Padrão '{field_id}' não carregado, mas Nome Amigável '{friendly_name}' esperado. Adicionando coluna com None.") # DEBUG
-              df[friendly_name] = None # Garante que a coluna com nome amigável existe
+              print(f"DEBUG: Campo Padrão '{field_id}' não carregado, mas Nome Amigável '{friendly_name}' esperado. Adicionando coluna com None.") 
+              df[friendly_name] = None 
          elif field_id not in standard_fields_map:
-              print(f"DEBUG: ID Padrão '{field_id}' não encontrado no standard_fields_map. Será mantido como ID.") # DEBUG
+              print(f"DEBUG: ID Padrão '{field_id}' não encontrado no standard_fields_map. Será mantido como ID.") 
 
     df.rename(columns=rename_map_standard, inplace=True)
-    print(f"DEBUG: Mapa de rename Padrão aplicado: {rename_map_standard}") # DEBUG
+    print(f"DEBUG: Mapa de rename Padrão aplicado: {rename_map_standard}") 
 
     df = pd.DataFrame(processed_issues_data)
-    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---") # DEBUG
-    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}") # DEBUG
+    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---") 
+    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}") 
 
-    # --- INÍCIO DO BLOCO MOVIDO ---
     # Renomeia colunas de Estimativa/Tempo Gasto para seus nomes amigáveis, SE NECESSÁRIO
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
     rename_map_specific = {}
     ids_to_drop_specific = [] # Para remover IDs que não serão renomeados porque o nome já existe
-    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:") # DEBUG
+    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:") 
 
     # Estimativa
-    # AGORA PODE VERIFICAR df.columns com segurança
     if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
          if estimation_name not in df.columns:
-              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'") # DEBUG
+              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'") 
               rename_map_specific[estimation_field_id] = estimation_name
          else:
-              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") # DEBUG
+              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") 
               ids_to_drop_specific.append(estimation_field_id)
 
     # Tempo Gasto
-    # AGORA PODE VERIFICAR df.columns com segurança
     if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
          if timespent_name not in df.columns:
-              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'") # DEBUG
+              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'") 
               rename_map_specific[timespent_field_id] = timespent_name
          else:
-              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") # DEBUG
+              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") 
               ids_to_drop_specific.append(timespent_field_id)
 
     if rename_map_specific:
         df.rename(columns=rename_map_specific, inplace=True)
-        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") # DEBUG
+        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") 
 
     if ids_to_drop_specific:
         df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
-        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") # DEBUG
+        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") 
 
     # Garante que as colunas finais esperadas (com nomes amigáveis) existam
     final_expected_col_names = set(list(processed_by_default) +
@@ -376,15 +368,15 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
          if col_name not in df.columns:
               df[col_name] = None
               missing_cols_final_added.append(col_name)
-    if missing_cols_final_added: print(f"DEBUG: Colunas finais adicionadas com None (pós rename): {missing_cols_final_added}") # DEBUG
+    if missing_cols_final_added: print(f"DEBUG: Colunas finais adicionadas com None (pós rename): {missing_cols_final_added}") 
 
 
     # Seleciona e reordena as colunas finais que REALMENTE existem no DF
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
-    print(f"DEBUG: Colunas FINAIS no DataFrame (após rename e garantia): {df.columns.tolist()}") # DEBUG
-    print(f"DEBUG: Exemplo de 1a linha de dados: {df.iloc[0].to_dict() if not df.empty else 'DataFrame Vazio'}") # DEBUG
-    print("--- FINALIZANDO load_and_process_project_data ---") # DEBUG
+    print(f"DEBUG: Colunas FINAIS no DataFrame (após rename e garantia): {df.columns.tolist()}") 
+    print(f"DEBUG: Exemplo de 1a linha de dados: {df.iloc[0].to_dict() if not df.empty else 'DataFrame Vazio'}") 
+    print("--- FINALIZANDO load_and_process_project_data ---") 
 
     return df, raw_issues_list
 
@@ -420,7 +412,6 @@ def apply_filters(df, filters):
         try:
             if field_type == 'categorical':
                 series = df_filtered[col].astype(str)
-                # Usar operadores em Português
                 if op == 'é igual a':
                     df_filtered = df_filtered[series == str(val)]
                 elif op == 'não é igual a':
@@ -435,7 +426,6 @@ def apply_filters(df, filters):
             # Adicionada lógica para filtros NUMÉRICOS
             elif field_type == 'numeric':
                 series = pd.to_numeric(df_filtered[col], errors='coerce')
-                # Remove NaNs numéricos para evitar erros na comparação
                 df_filtered = df_filtered[pd.notna(series)] 
                 series = series.dropna()
                 
@@ -450,10 +440,8 @@ def apply_filters(df, filters):
                 elif op == 'entre' and isinstance(val, (list, tuple)):
                     df_filtered = df_filtered[series.between(float(val[0]), float(val[1]))]
             
-            # Adicionada lógica para filtros de DATA
             elif field_type == 'date':
                 series = pd.to_datetime(df_filtered[col], errors='coerce').dt.date
-                # Remove NaTs (datas nulas) para evitar erros na comparação
                 df_filtered = df_filtered[pd.notna(series)] 
                 series = series.dropna()
 
@@ -471,7 +459,6 @@ def apply_filters(df, filters):
                     start_date = val[0]
                     end_date = val[1]
                     
-                    # Converte de str se vier de um JSON (embora na UI já deva ser date object)
                     if isinstance(start_date, str):
                         start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
                     if isinstance(end_date, str):
@@ -634,17 +621,16 @@ def render_chart(chart_config, df, chart_key):
                         calc_method = chart_config.get(f'{prefix}_calc_method', 'Soma')
                         break # Encontrou a configuração correta
 
-                if selected_statuses is None: # Se não encontrou config específica, tenta sem prefixo (fallback)
+                if selected_statuses is None: 
                      selected_statuses = chart_config.get('selected_statuses', [])
                      calc_method = chart_config.get('calc_method', 'Soma')
 
                 if selected_statuses:
                     cols_to_process = [f'Tempo em: {s}' for s in selected_statuses if f'Tempo em: {s}' in df_chart_filtered.columns]
                     if cols_to_process:
-                        # O nome da coluna calculada JÁ ESTÁ em 'measure' vindo do config
                         if calc_method == "Soma":
                             df_chart_filtered[measure] = df_chart_filtered[cols_to_process].sum(axis=1)
-                        else: # Média
+                        else:
                             df_chart_filtered[measure] = df_chart_filtered[cols_to_process].mean(axis=1)
                     else:
                         st.warning(f"Nenhuma coluna de status válida encontrada para '{measure}'. O gráfico pode ficar vazio.")
@@ -657,8 +643,8 @@ def render_chart(chart_config, df, chart_key):
             if not dimension or not measure or not agg:
                 if not st.session_state.get('_measure_none_warned', False):
                      st.warning(f"Configuração de gráfico agregado inválida ou medida '{chart_config.get('measure')}' não pôde ser calculada.")
-                     st.session_state._measure_none_warned = True # Evita warnings repetidos
-                if '_measure_none_warned' in st.session_state and measure: # Limpa o warning na próxima execução completa se measure for válido
+                     st.session_state._measure_none_warned = True 
+                if '_measure_none_warned' in st.session_state and measure: 
                     del st.session_state['_measure_none_warned']
                 return
 
@@ -668,7 +654,7 @@ def render_chart(chart_config, df, chart_key):
                 group_by_cols.append(secondary_dimension)
 
             # Lógica de Agregação (agora usa 'measure' que PODE ser a coluna calculada)
-            agg_col = None # Inicializa agg_col
+            agg_col = None 
             if measure == "Contagem de Issues":
                 agg_df = df_chart_filtered.groupby(group_by_cols).size().reset_index(name='Contagem')
                 agg_col = 'Contagem'
@@ -699,7 +685,7 @@ def render_chart(chart_config, df, chart_key):
                  if not st.session_state.get(f'_measure_{measure}_warned', False):
                       st.error(f"Coluna de medida '{measure}' não encontrada ou inválida após o cálculo.")
                       st.session_state[f'_measure_{measure}_warned'] = True
-                 return # Aborta se a medida não for válida
+                 return
             
             # Limpa warning se a medida voltou a ser válida
             if f'_measure_{measure}_warned' in st.session_state and agg_col is not None:
@@ -733,7 +719,7 @@ def render_chart(chart_config, df, chart_key):
                 if total != 0 and pd.notna(total):
                      agg_df[agg_col] = (agg_df[agg_col] / total) * 100
                 else:
-                     agg_df[agg_col] = 0 # Define como 0 se o total for 0 ou NaN
+                     agg_df[agg_col] = 0 
 
             fig = None
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
@@ -781,7 +767,7 @@ def render_chart(chart_config, df, chart_key):
                 # Aplica aos eixos corretos dependendo da orientação
                 if chart_type != 'barra_horizontal':
                      fig.update_layout(xaxis_title=final_dim_axis_title, yaxis_title=final_measure_axis_title)
-                else: # Barra Horizontal inverte os eixos
+                else: 
                      fig.update_layout(xaxis_title=final_measure_axis_title, yaxis_title=final_dim_axis_title)
 
                 # --- Lógica Corrigida de Rótulos ---
@@ -789,10 +775,8 @@ def render_chart(chart_config, df, chart_key):
 
                     # Define o template base
                     if is_time_in_status_measure:
-                        # Para Tempo Status, mostra dias com 1 casa decimal e sufixo 'd'
                         text_template = '%{text:.1f}d'
                     else:
-                        # Para outras medidas numéricas, usa formato resumido
                         text_template = '%{text:.2s}'
 
                     # Se for percentual, sobrescreve o template
@@ -811,7 +795,6 @@ def render_chart(chart_config, df, chart_key):
                         if chart_config.get('show_as_percentage'):
                              fig.update_traces(texttemplate='%{label}<br>%{percentRoot:.1%}', textinfo='text')
                         elif is_time_in_status_measure:
-                             # Treemap Tempo Status: usa valor em dias
                              fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text')
                         else:
                              fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text')
@@ -820,12 +803,9 @@ def render_chart(chart_config, df, chart_key):
                      if chart_config.get('show_as_percentage'):
                          fig.update_traces(textinfo='percent+label')
                      elif is_time_in_status_measure:
-                         # Pizza Tempo Status: mostra valor em dias
                           fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text+percent')
                      else:
                           fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text+percent')
-
-                # --- Fim Lógica Corrigida de Rótulos ---
 
                 # Lógica sufixo percentual
                 if chart_config.get('show_as_percentage'):
@@ -834,7 +814,6 @@ def render_chart(chart_config, df, chart_key):
                      elif chart_type == 'treemap':
                         pass
                      else:
-                        # Garante que o eixo existe antes de adicionar o sufixo
                         if chart_type != 'barra_horizontal' and fig.layout.yaxis:
                              fig.layout.yaxis.ticksuffix = "%"
                         elif chart_type == 'barra_horizontal' and fig.layout.xaxis:
@@ -887,7 +866,7 @@ def render_chart(chart_config, df, chart_key):
                         agg_dict = {y: agg_function_name}
 
                         if size_by and size_by != "Nenhum": 
-                            agg_dict[size_by] = 'mean' # 'size' é sempre numérico, 'mean' está correto aqui
+                            agg_dict[size_by] = 'mean' 
 
                         plot_df = plot_df.groupby(grouping_cols, as_index=False).agg(agg_dict)
                         plot_df = plot_df.sort_values(by=x)
@@ -990,7 +969,7 @@ def render_chart(chart_config, df, chart_key):
                     baseline_raw = get_jql_issue_count(st.session_state.jira_client, jql_baseline)
                     if isinstance(baseline_raw, (int, float)): baseline = baseline_raw
             
-            else: # source_type == 'visual'
+            else: 
                 main_value = calculate_kpi_value(chart_config.get('num_op'), chart_config.get('num_field'), df_chart_filtered)
                 if chart_config.get('use_baseline', False):
                     baseline = calculate_kpi_value(chart_config.get('base_op'), chart_config.get('base_field'), df_chart_filtered)
@@ -1284,7 +1263,6 @@ def create_os_pdf(data, os_title=None):
 
         line_height = 6
 
-        # --- LÓGICA DE ALINHAMENTO CORRIGIDA ---
         if is_two_col and next_field_is_two_col:
             field2 = layout_fields[i+1]
             y_start = pdf.get_y()
@@ -1322,7 +1300,6 @@ def create_os_pdf(data, os_title=None):
             render_pdf_field(pdf, field1, field_actual_value, width=full_width)
             pdf.ln(4)
             i += 1
-        # --- FIM DA CORREÇÃO ---
             
     items = data.get('items')
     totals = data.get('items_totals')
@@ -1564,7 +1541,7 @@ def get_ai_insights(project_name, chart_summaries, provider):
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
             return response.text
-        else: # OpenAI
+        else: 
             response = model_client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}])
             return response.choices[0].message.content
     except openai.RateLimitError:
@@ -1892,13 +1869,12 @@ def get_field_value(issue, field_config):
         return None
 
     # Lógica para os diferentes tipos de objeto do Jira
-    if hasattr(value, 'displayName'): return value.displayName # Para campos de Utilizador
-    if hasattr(value, 'value'): return value.value           # Para campos de Lista de Seleção
-    if hasattr(value, 'name'): return value.name             # Para campos de Objeto Simples (Status, Priority)
+    if hasattr(value, 'displayName'): return value.displayName
+    if hasattr(value, 'value'): return value.value
+    if hasattr(value, 'name'): return value.name
     if isinstance(value, list):
-        return ', '.join([getattr(v, 'name', str(v)) for v in value]) # Para listas
+        return ', '.join([getattr(v, 'name', str(v)) for v in value])
 
-    # Se for um tipo simples (texto, número, data)
     return str(value).split('T')[0]
 
 def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
@@ -1945,7 +1921,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
 
     elif provider == 'Gmail (SMTP)':
         try:
-            # Lógica completa para o Gmail (adicionando o 'pass' para evitar o erro)
             pass
         except Exception as e:
             print(f"DEBUG: Erro ao enviar com Gmail - {e}")
@@ -1953,16 +1928,15 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
 
     return False, "Provedor de e-mail não configurado ou inválido."
 
-# --- NOVAS FUNÇÕES DE VALIDAÇÃO ---
 def is_valid_url(url):
     """Verifica se uma string corresponde ao formato de um URL."""
     # Expressão regular simples para validar URLs
     regex = re.compile(
-        r'^(?:http|ftp)s?://' # http:// or https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' # domain...
-        r'localhost|' # localhost...
+        r'^(?:http|ftp)s?://'
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'
+        r'localhost|'
         r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
-        r'(?::\d+)?' # optional port
+        r'(?::\d+)?'
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return re.match(regex, url) is not None
 
@@ -2012,7 +1986,7 @@ def get_ai_product_vision(project_name, issues_data):
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
             return response.text
-        else: # OpenAI
+        else:
             response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -2031,7 +2005,7 @@ def get_ai_strategic_diagnosis(project_name, client_name, issues_data, flow_metr
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
-    cleaned_response = "" # Inicializa para o bloco except
+    cleaned_response = "" 
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
@@ -2336,7 +2310,7 @@ def get_ai_user_story_from_text(user_context):
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
-        else: # OpenAI
+        else:
             response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
@@ -2353,7 +2327,7 @@ def get_ai_os_from_jira_issue(issue_data_dict, layout_fields):
     """
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
-    raw_response_text = "" # Inicializa para o bloco except
+    raw_response_text = ""
 
     model_client = _get_ai_client_and_model(provider, user_data)
     if not model_client:
@@ -2680,7 +2654,7 @@ def get_ai_page_summary_and_faq(page_name, page_content):
         if provider == "Google Gemini":
             response = model_client.generate_content(prompt)
             return response.text
-        else: # OpenAI
+        else:
             response = model_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}]
