@@ -40,8 +40,8 @@
         "soft_skills": []
     },
     "smtp_settings": {
-        "provider": "Gmail (SMTP)",
+        "provider": "Brevo",
         "from_email": "ti.marcelomendes@gmail.com",
-        "app_password_encrypted": "gAAAAABpATNU7JilrpGkamOJzOelRknc9eldz54RFyR6o7wyOX62adFfhDzmxaHvyJISeZW3amyNgU8jfNZMHeN7i50enLmmz-WBihcK5nOaM2I7oSmSdXA="
+        "brevo_api_key_encrypted": "gAAAAABpAhS-xZgpQ7naEQuxF7UAExi2vth1yl31jwnAJhH_govOgj_azk4-487DqQk-RLMzPL_dmka_wT-sLjkNxYu_lB8PFS-3QpN4C3Yh0J2VSoteKWixBsucRCtUgqtol2WtzsLrlkfPOp3SFfehLKzAg8qe-IE5w_qGzjMugUAiy0BK8YsLzm6CadEes4iBRKBizniP"
     }
 }

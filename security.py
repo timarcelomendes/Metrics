@@ -15,6 +15,8 @@ import json
 from cryptography.fernet import Fernet, InvalidToken
 import smtplib
 import sendgrid
+import mailersend
+import sib_api_v3_sdk
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 from datetime import datetime, timedelta
 import bcrypt
@@ -583,6 +585,54 @@ def validate_smtp_connection(provider, from_email, credential):
         except Exception as e:
             return False, f"Erro ao conectar ao SMTP do Gmail: {e}"
             
+    elif provider == 'Mailersend':
+        try:
+            from mailersend import Mailersend
+            ms = Mailersend(credential) 
+            response_dict, status_code = ms.domains.list() 
+            
+            if 200 <= status_code < 300:
+                return True, "Credenciais do Mailersend validadas com sucesso!"
+            elif status_code == 401:
+                return False, "Falha na autenticação com o Mailersend. A chave de API parece ser inválida."
+            else:
+                 error_msg = response_dict.get('message', 'Erro desconhecido')
+                 return False, f"Erro do Mailersend (Status: {status_code}): {error_msg}"
+
+        except ImportError:
+            return False, "A biblioteca 'mailersend' não está instalada. Adicione-a ao requirements.txt."
+        except Exception as e:
+            return False, f"Erro ao conectar ao Mailersend: {e}"
+
+    # --- ALTERAÇÃO: Adicionar bloco de validação do Brevo ---
+    elif provider == 'Brevo':
+        try:
+            import sib_api_v3_sdk
+            from sib_api_v3_sdk.rest import ApiException
+
+            # Configurar a API
+            config = sib_api_v3_sdk.Configuration()
+            config.api_key['api-key'] = credential
+            
+            # Tentar uma chamada de API leve (get_account)
+            api_client = sib_api_v3_sdk.ApiClient(config)
+            account_api = sib_api_v3_sdk.AccountApi(api_client)
+            
+            # Se esta chamada for bem-sucedida, a chave é válida
+            account_api.get_account() 
+            
+            return True, "Credenciais do Brevo validadas com sucesso!"
+
+        except ImportError:
+             return False, "A biblioteca 'sib-api-v3-sdk' não está instalada. Adicione-a ao requirements.txt."
+        except ApiException as e:
+            if e.status == 401:
+                return False, "Falha na autenticação com o Brevo. A chave de API parece ser inválida."
+            else:
+                return False, f"Erro ao conectar ao Brevo (API Exception): {e.reason}"
+        except Exception as e:
+            return False, f"Erro inesperado ao conectar ao Brevo: {e}"
+
     return False, "Provedor desconhecido."
 
 def generate_assessment_token(hub_owner_email, evaluated_email, valid_for_hours=72):

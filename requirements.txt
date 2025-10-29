@@ -21,3 +21,5 @@ streamlit-option-menu
 scipy
 reportlab
 streamlit-jodit
+mailersend
+sib-api-v3-sdk

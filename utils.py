@@ -23,6 +23,8 @@ import re
 from security import *
 import fitz
 import sendgrid
+import mailersend
+import sib_api_v3_sdk
 import io
 import base64
 import requests
@@ -1881,7 +1883,7 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
     """
     Função central para enviar e-mails, com base no provedor
     configurado globalmente. Trata o corpo do e-mail como HTML.
-    Funciona com SendGrid e Gmail (SMTP).
+    Funciona com SendGrid, Gmail (SMTP), Mailersend e Brevo.
     """
     # --- Carrega as configs GLOBAIS diretamente ---
     smtp_configs = get_global_smtp_configs()
@@ -1892,87 +1894,76 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
 
     provider = smtp_configs.get('provider')
     from_email = smtp_configs.get('from_email')
+    
+    # Define o "Alias" (Nome de Exibição)
+    sender_name = "Gauge Metrics"
 
-    # --- Lógica SendGrid (Mantida) ---
+    # --- Lógica SendGrid ---
     if provider == 'SendGrid':
         try:
-            # Usa 'api_key_encrypted' como chave primária
             api_key_encrypted = smtp_configs.get('api_key_encrypted')
             if not api_key_encrypted:
                 return False, "Chave de API do SendGrid não encontrada nas configurações globais."
 
             api_key = decrypt_token(api_key_encrypted)
-            if not api_key: # Verifica se a descriptografia falhou
+            if not api_key: 
                  return False, "Falha ao descriptografar a chave de API do SendGrid."
-
-            import sendgrid
-            from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 
             sg = sendgrid.SendGridAPIClient(api_key)
 
-            message = Mail(from_email=from_email, to_emails=to_address, subject=subject, html_content=body)
+            message = Mail(
+                from_email=From(email=from_email, name=sender_name), 
+                to_emails=to_address, 
+                subject=subject, 
+                html_content=body
+            )
 
             if attachment_bytes and attachment_filename:
                 encoded_file = base64.b64encode(attachment_bytes).decode()
                 attachedFile = Attachment(
                     FileContent(encoded_file),
                     FileName(attachment_filename),
-                    FileType('application/pdf'), # Assume PDF, ajuste se necessário
+                    FileType('application/pdf'), 
                     Disposition('attachment')
                 )
                 message.attachment = attachedFile
 
             response = sg.send(message)
             print(f"DEBUG: Resposta do SendGrid - Status {response.status_code}")
-            # Considera sucesso se for 2xx
             is_success = 200 <= response.status_code < 300
             return is_success, f"Status SendGrid: {response.status_code}"
         except Exception as e:
             print(f"DEBUG: Erro ao enviar com SendGrid - {e}")
-            # traceback.print_exc() # Descomente para ver o stacktrace completo no log
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
-    # --- INÍCIO DA IMPLEMENTAÇÃO PARA GMAIL (SMTP) ---
+    # --- Lógica Gmail (SMTP) ---
     elif provider == 'Gmail (SMTP)':
         try:
-            # Usa 'app_password_encrypted' como chave primária
             app_password_encrypted = smtp_configs.get('app_password_encrypted')
             if not app_password_encrypted:
                 return False, "Senha de aplicação do Gmail não encontrada nas configurações globais."
 
             app_password = decrypt_token(app_password_encrypted)
-            if not app_password: # Verifica se a descriptografia falhou
+            if not app_password: 
                  return False, "Falha ao descriptografar a senha de aplicação do Gmail."
 
-            # Configuração da Mensagem MIME
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            
-            # --- CORREÇÃO APLICADA AQUI ---
-            # Define o "Alias" (Nome de Exibição)
-            # Pode mudar "Gauge Metrics" para qualquer nome que desejar.
-            sender_name = "Gauge Metrics" 
-            msg['From'] = f"{sender_name} <{from_email}>"
-            # --- FIM DA CORREÇÃO ---
-
-            # Garante que to_address seja uma string (caso seja uma lista acidentalmente)
+            msg['From'] = f"{sender_name} <{from_email}>" 
             msg['To'] = to_address if isinstance(to_address, str) else ', '.join(to_address)
 
-            # Anexa o corpo HTML
             part_html = MIMEText(body, 'html')
             msg.attach(part_html)
 
-            # Anexa o ficheiro, se existir
             if attachment_bytes and attachment_filename:
                 part_attach = MIMEApplication(attachment_bytes, Name=attachment_filename)
                 part_attach['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
                 msg.attach(part_attach)
 
-            # Conexão e Envio via SMTP do Gmail
             with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls() # Inicia conexão segura TLS
-                server.login(from_email, app_password) # Faz login com o e-mail real
-                server.sendmail(from_email, to_address, msg.as_string()) # Envia o e-mail formatado
+                server.starttls() 
+                server.login(from_email, app_password) 
+                server.sendmail(from_email, to_address, msg.as_string()) 
                 print(f"DEBUG: E-mail enviado com sucesso via Gmail para {to_address}")
 
             return True, "E-mail enviado com sucesso via Gmail."
@@ -1980,19 +1971,119 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
         except smtplib.SMTPAuthenticationError:
              print(f"DEBUG: Erro de autenticação SMTP Gmail para {from_email}")
              return False, "Falha na autenticação com o Gmail. Verifique o e-mail e a senha de aplicação."
-        except smtplib.SMTPServerDisconnected:
-             print("DEBUG: Servidor SMTP desconectado inesperadamente (Gmail).")
-             return False, "O servidor SMTP do Gmail desconectou inesperadamente."
         except smtplib.SMTPException as e:
              print(f"DEBUG: Erro SMTP Gmail - {e}")
              return False, f"Ocorreu um erro SMTP ao enviar via Gmail: {e}"
         except Exception as e:
              print(f"DEBUG: Erro inesperado ao enviar com Gmail - {e}")
              return False, f"Ocorreu um erro inesperado ao enviar e-mail via Gmail: {e}"
+
+    # --- Lógica Mailersend ---
+    elif provider == 'Mailersend':
+        try:
+            from mailersend import Mailersend, Email, Recipient, Attachment
+            
+            api_key_encrypted = smtp_configs.get('mailersend_api_key_encrypted')
+            if not api_key_encrypted:
+                return False, "Chave de API do Mailersend não encontrada nas configurações globais."
+            
+            api_key = decrypt_token(api_key_encrypted)
+            if not api_key:
+                return False, "Falha ao descriptografar a chave de API do Mailersend."
+
+            ms = Mailersend(api_key)
+            mail = Email()
+            
+            mail.set_from({"email": from_email, "name": sender_name})
+            mail.set_to([to_address])
+            mail.set_subject(subject)
+            mail.set_html(body)
+            
+            if attachment_bytes and attachment_filename:
+                encoded_file = base64.b64encode(attachment_bytes).decode()
+                att = Attachment(
+                    content=encoded_file,
+                    filename=attachment_filename
+                )
+                mail.set_attachments([att])
+
+            response_dict, status_code = ms.email.send(mail.get_params())
+            
+            print(f"DEBUG: Resposta do Mailersend - Status {status_code}, Body: {response_dict}")
+
+            is_success = 200 <= status_code < 300 
+            if is_success:
+                return True, f"E-mail enviado com sucesso via Mailersend (Status: {status_code})."
+            else:
+                error_msg = response_dict.get('message', 'Erro desconhecido')
+                return False, f"Falha no envio pelo Mailersend (Status: {status_code}): {error_msg}"
+                
+        except ImportError:
+            return False, "A biblioteca 'mailersend' não está instalada. Adicione-a ao requirements.txt."
+        except Exception as e:
+            print(f"DEBUG: Erro ao enviar com Mailersend - {e}")
+            return False, f"Ocorreu um erro ao enviar e-mail via Mailersend: {e}"
+
+    # --- ALTERAÇÃO: Adicionar bloco de envio do Brevo ---
+    elif provider == 'Brevo':
+        try:
+            # Importar classes do Brevo
+            import sib_api_v3_sdk
+            from sib_api_v3_sdk.rest import ApiException
+            
+            api_key_encrypted = smtp_configs.get('brevo_api_key_encrypted')
+            if not api_key_encrypted:
+                return False, "Chave de API do Brevo não encontrada nas configurações globais."
+            
+            api_key = decrypt_token(api_key_encrypted)
+            if not api_key:
+                return False, "Falha ao descriptografar a chave de API do Brevo."
+
+            # Configurar a API
+            config = sib_api_v3_sdk.Configuration()
+            config.api_key['api-key'] = api_key
+            api_client = sib_api_v3_sdk.ApiClient(config)
+            
+            # Criar instância da API Transacional
+            api_instance = sib_api_v3_sdk.TransactionalEmailsApi(api_client)
+            
+            # Definir o e-mail
+            send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+                sender=sib_api_v3_sdk.SendSmtpEmailSender(name=sender_name, email=from_email),
+                to=[sib_api_v3_sdk.SendSmtpEmailTo(email=to_address)],
+                subject=subject,
+                html_content=body
+            )
+
+            # Lidar com anexos
+            if attachment_bytes and attachment_filename:
+                encoded_file = base64.b64encode(attachment_bytes).decode()
+                attachment = sib_api_v3_sdk.SendSmtpEmailAttachment(
+                    content=encoded_file,
+                    name=attachment_filename
+                )
+                send_smtp_email.attachment = [attachment]
+
+            # Enviar o e-mail
+            api_response = api_instance.send_transac_email(send_smtp_email)
+            print(f"DEBUG: Resposta do Brevo - {api_response}")
+            
+            # Se a chamada foi bem-sucedida, não lança exceção
+            return True, "E-mail enviado com sucesso via Brevo."
+
+        except ImportError:
+             return False, "A biblioteca 'sib-api-v3-sdk' não está instalada. Adicione-a ao requirements.txt."
+        except ApiException as e:
+            print(f"DEBUG: Erro ao enviar com Brevo (ApiException) - {e}")
+            return False, f"Falha no envio pelo Brevo: {e.reason} (Status: {e.status})"
+        except Exception as e:
+            print(f"DEBUG: Erro inesperado ao enviar com Brevo - {e}")
+            return False, f"Ocorreu um erro inesperado ao enviar e-mail via Brevo: {e}"
+
     else:
         print(f"DEBUG: Provedor de e-mail desconhecido ou não configurado: {provider}")
         return False, f"Provedor de e-mail '{provider}' não configurado ou inválido nas configurações globais."
-
+    
 def is_valid_url(url):
     """Verifica se uma string corresponde ao formato de um URL."""
     # Expressão regular simples para validar URLs

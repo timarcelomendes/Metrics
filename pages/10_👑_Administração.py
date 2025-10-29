@@ -245,7 +245,6 @@ with main_tab_system:
         st.markdown("###### 🗂️ Campos Padrão (Standard Fields)")
         st.info("Estes são campos nativos do Jira. Ative aqueles que são relevantes para as suas análises.")
 
-        # --- CAMPOS PADRÃO ---
         STANDARD_FIELDS_MAP = st.session_state.get('standard_fields_map', {})
         available_options = list(STANDARD_FIELDS_MAP.keys())
         
@@ -494,40 +493,67 @@ with main_tab_system:
                 st.rerun()
 
     with system_tab_email:
-        # ... (código existente) ...
         st.markdown("##### Configuração Global de Envio de E-mail")
         st.caption("Estas credenciais serão usadas por toda a aplicação para enviar e-mails.")
         current_smtp_configs = configs.get('smtp_settings', {})
         current_provider = current_smtp_configs.get('provider', 'SendGrid')
-        provider_options = ["SendGrid", "Gmail (SMTP)"]
+        
+        # --- ALTERAÇÃO 1: Adicionar Brevo às opções ---
+        provider_options = ["SendGrid", "Gmail (SMTP)", "Mailersend", "Brevo"]
+        
         provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
         email_provider = st.radio("Selecione o provedor de e-mail do sistema:", provider_options, horizontal=True, index=provider_index)
+        
         with st.form("global_smtp_config_form"):
             from_email = ""
             credential = ""
+            
             if email_provider == 'SendGrid':
                 if current_smtp_configs.get('api_key_encrypted'): st.success("Uma chave de API do SendGrid já está configurada.", icon="✅")
                 from_email = st.text_input("E-mail de Origem (SendGrid)", value=current_smtp_configs.get('from_email', ''))
                 credential = st.text_input("SendGrid API Key", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
+            
             elif email_provider == 'Gmail (SMTP)':
                 if current_smtp_configs.get('app_password_encrypted'): st.success("Uma senha de aplicação do Gmail já está configurada.", icon="✅")
                 st.info("Para usar o Gmail, é necessário criar uma 'senha de aplicação' na sua conta Google.")
                 from_email = st.text_input("E-mail de Origem (Gmail)", value=current_smtp_configs.get('from_email', ''))
                 credential = st.text_input("Senha de Aplicação (App Password)", type="password", placeholder="Insira uma nova senha para salvar ou alterar")
+
+            elif email_provider == 'Mailersend':
+                if current_smtp_configs.get('mailersend_api_key_encrypted'): st.success("Uma chave de API do Mailersend já está configurada.", icon="✅")
+                st.info("O e-mail de origem deve ser de um domínio verificado na sua conta Mailersend.")
+                from_email = st.text_input("E-mail de Origem (Mailersend)", value=current_smtp_configs.get('from_email', ''))
+                credential = st.text_input("Mailersend API Key", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
+
+            # --- ALTERAÇÃO 2: Adicionar o bloco de UI do Brevo ---
+            elif email_provider == 'Brevo':
+                if current_smtp_configs.get('brevo_api_key_encrypted'): st.success("Uma chave de API do Brevo (v3) já está configurada.", icon="✅")
+                st.info("O e-mail de origem deve ser um remetente verificado na sua conta Brevo.")
+                from_email = st.text_input("E-mail de Origem (Brevo)", value=current_smtp_configs.get('from_email', ''))
+                credential = st.text_input("Brevo API Key (v3)", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
+
             if st.form_submit_button("Validar e Salvar Credenciais Globais", width='stretch', type="primary"):
                 if from_email and credential:
                     with st.spinner("A validar as suas credenciais..."):
                         is_valid, message = validate_smtp_connection(email_provider, from_email, credential)
+                    
                     if is_valid:
                         encrypted_credential = encrypt_token(credential)
                         smtp_data_to_save = {
                             'provider': email_provider, 
                             'from_email': from_email,
                         }
+                        
+                        # --- ALTERAÇÃO 3: Adicionar lógica para salvar a chave do Brevo ---
                         if email_provider == 'SendGrid':
                             smtp_data_to_save['api_key_encrypted'] = encrypted_credential
-                        else:
+                        elif email_provider == 'Gmail (SMTP)':
                             smtp_data_to_save['app_password_encrypted'] = encrypted_credential
+                        elif email_provider == 'Mailersend':
+                            smtp_data_to_save['mailersend_api_key_encrypted'] = encrypted_credential
+                        elif email_provider == 'Brevo':
+                            smtp_data_to_save['brevo_api_key_encrypted'] = encrypted_credential
+                        
                         configs['smtp_settings'] = smtp_data_to_save
                         save_global_configs(configs) 
                         get_global_configs.clear()
@@ -537,7 +563,6 @@ with main_tab_system:
                         st.error(message)
                 else:
                     st.error("Por favor, preencha todos os campos para validar e salvar.")
-
 
     with tab_link:
         st.subheader("Configurações Gerais da Aplicação")
