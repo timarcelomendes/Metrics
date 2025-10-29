@@ -34,5 +34,14 @@
             "name": "Estimate"
         }
     ],
-    "strategic_grouping_field": "Cliente"
+    "strategic_grouping_field": "Cliente",
+    "competency_framework": {
+        "hard_skills": [],
+        "soft_skills": []
+    },
+    "smtp_settings": {
+        "provider": "Gmail (SMTP)",
+        "from_email": "ti.marcelomendes@gmail.com",
+        "app_password_encrypted": "gAAAAABpATNU7JilrpGkamOJzOelRknc9eldz54RFyR6o7wyOX62adFfhDzmxaHvyJISeZW3amyNgU8jfNZMHeN7i50enLmmz-WBihcK5nOaM2I7oSmSdXA="
+    }
 }

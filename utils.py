@@ -1880,25 +1880,35 @@ def get_field_value(issue, field_config):
 def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
     """
     Função central para enviar e-mails, com base no provedor
-    configurado pelo utilizador na sua conta. Trata o corpo do e-mail como HTML.
+    configurado globalmente. Trata o corpo do e-mail como HTML.
+    Funciona com SendGrid e Gmail (SMTP).
     """
-    smtp_configs = st.session_state.get('smtp_configs')
+    # --- Carrega as configs GLOBAIS diretamente ---
+    smtp_configs = get_global_smtp_configs()
 
-    if not smtp_configs or not smtp_configs.get('provider'):
-        print("DEBUG: Nenhuma configuração de SMTP encontrada na sessão.")
-        return False, "Falha: Configurações de SMTP não carregadas na sessão."
+    if not smtp_configs or not smtp_configs.get('provider') or not smtp_configs.get('from_email'):
+        print("DEBUG: Configurações globais de SMTP incompletas ou não encontradas.")
+        return False, "Falha: Configurações globais de SMTP incompletas ou não encontradas."
 
     provider = smtp_configs.get('provider')
+    from_email = smtp_configs.get('from_email')
 
+    # --- Lógica SendGrid (Mantida) ---
     if provider == 'SendGrid':
         try:
-            api_key_encrypted = smtp_configs.get('api_key_encrypted') or smtp_configs.get('api_key')
+            # Usa 'api_key_encrypted' como chave primária
+            api_key_encrypted = smtp_configs.get('api_key_encrypted')
             if not api_key_encrypted:
-                return False, "Chave de API do SendGrid não encontrada."
+                return False, "Chave de API do SendGrid não encontrada nas configurações globais."
 
             api_key = decrypt_token(api_key_encrypted)
+            if not api_key: # Verifica se a descriptografia falhou
+                 return False, "Falha ao descriptografar a chave de API do SendGrid."
+
+            import sendgrid
+            from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+
             sg = sendgrid.SendGridAPIClient(api_key)
-            from_email = smtp_configs['from_email']
 
             message = Mail(from_email=from_email, to_emails=to_address, subject=subject, html_content=body)
 
@@ -1907,26 +1917,75 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 attachedFile = Attachment(
                     FileContent(encoded_file),
                     FileName(attachment_filename),
-                    FileType('application/pdf'),
+                    FileType('application/pdf'), # Assume PDF, ajuste se necessário
                     Disposition('attachment')
                 )
                 message.attachment = attachedFile
 
             response = sg.send(message)
             print(f"DEBUG: Resposta do SendGrid - Status {response.status_code}")
-            return response.status_code in [200, 202], f"Status SendGrid: {response.status_code}"
+            # Considera sucesso se for 2xx
+            is_success = 200 <= response.status_code < 300
+            return is_success, f"Status SendGrid: {response.status_code}"
         except Exception as e:
             print(f"DEBUG: Erro ao enviar com SendGrid - {e}")
+            # traceback.print_exc() # Descomente para ver o stacktrace completo no log
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
+    # --- INÍCIO DA IMPLEMENTAÇÃO PARA GMAIL (SMTP) ---
     elif provider == 'Gmail (SMTP)':
         try:
-            pass
-        except Exception as e:
-            print(f"DEBUG: Erro ao enviar com Gmail - {e}")
-            return False, f"Ocorreu um erro ao enviar e-mail via Gmail: {e}"
+            # Usa 'app_password_encrypted' como chave primária
+            app_password_encrypted = smtp_configs.get('app_password_encrypted')
+            if not app_password_encrypted:
+                return False, "Senha de aplicação do Gmail não encontrada nas configurações globais."
 
-    return False, "Provedor de e-mail não configurado ou inválido."
+            app_password = decrypt_token(app_password_encrypted)
+            if not app_password: # Verifica se a descriptografia falhou
+                 return False, "Falha ao descriptografar a senha de aplicação do Gmail."
+
+            # Configuração da Mensagem MIME
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = from_email
+            # Garante que to_address seja uma string (caso seja uma lista acidentalmente)
+            msg['To'] = to_address if isinstance(to_address, str) else ', '.join(to_address)
+
+            # Anexa o corpo HTML
+            part_html = MIMEText(body, 'html')
+            msg.attach(part_html)
+
+            # Anexa o ficheiro, se existir
+            if attachment_bytes and attachment_filename:
+                part_attach = MIMEApplication(attachment_bytes, Name=attachment_filename)
+                part_attach['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
+                msg.attach(part_attach)
+
+            # Conexão e Envio via SMTP do Gmail
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls() # Inicia conexão segura TLS
+                server.login(from_email, app_password) # Faz login
+                server.sendmail(from_email, to_address, msg.as_string()) # Envia o e-mail
+                print(f"DEBUG: E-mail enviado com sucesso via Gmail para {to_address}")
+
+            return True, "E-mail enviado com sucesso via Gmail."
+
+        except smtplib.SMTPAuthenticationError:
+             print(f"DEBUG: Erro de autenticação SMTP Gmail para {from_email}")
+             return False, "Falha na autenticação com o Gmail. Verifique o e-mail e a senha de aplicação."
+        except smtplib.SMTPServerDisconnected:
+             print("DEBUG: Servidor SMTP desconectado inesperadamente (Gmail).")
+             return False, "O servidor SMTP do Gmail desconectou inesperadamente."
+        except smtplib.SMTPException as e:
+             print(f"DEBUG: Erro SMTP Gmail - {e}")
+             return False, f"Ocorreu um erro SMTP ao enviar via Gmail: {e}"
+        except Exception as e:
+             print(f"DEBUG: Erro inesperado ao enviar com Gmail - {e}")
+             return False, f"Ocorreu um erro inesperado ao enviar e-mail via Gmail: {e}"
+
+    else:
+        print(f"DEBUG: Provedor de e-mail desconhecido ou não configurado: {provider}")
+        return False, f"Provedor de e-mail '{provider}' não configurado ou inválido nas configurações globais."
 
 def is_valid_url(url):
     """Verifica se uma string corresponde ao formato de um URL."""

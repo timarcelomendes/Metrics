@@ -549,7 +549,7 @@ def get_user_figma_token(user_email):
 def get_global_smtp_configs():
     try:
         configs = get_global_configs()
-        return configs.get("smtp_configs")
+        return configs.get("smtp_settings") # <-- Correção
     except Exception as e:
         print(f"Erro ao buscar configurações globais de SMTP: {e}")
         return None
