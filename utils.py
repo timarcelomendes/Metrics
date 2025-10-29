@@ -1947,7 +1947,14 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             # Configuração da Mensagem MIME
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
-            msg['From'] = from_email
+            
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Define o "Alias" (Nome de Exibição)
+            # Pode mudar "Gauge Metrics" para qualquer nome que desejar.
+            sender_name = "Gauge Metrics" 
+            msg['From'] = f"{sender_name} <{from_email}>"
+            # --- FIM DA CORREÇÃO ---
+
             # Garante que to_address seja uma string (caso seja uma lista acidentalmente)
             msg['To'] = to_address if isinstance(to_address, str) else ', '.join(to_address)
 
@@ -1964,8 +1971,8 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             # Conexão e Envio via SMTP do Gmail
             with smtplib.SMTP('smtp.gmail.com', 587) as server:
                 server.starttls() # Inicia conexão segura TLS
-                server.login(from_email, app_password) # Faz login
-                server.sendmail(from_email, to_address, msg.as_string()) # Envia o e-mail
+                server.login(from_email, app_password) # Faz login com o e-mail real
+                server.sendmail(from_email, to_address, msg.as_string()) # Envia o e-mail formatado
                 print(f"DEBUG: E-mail enviado com sucesso via Gmail para {to_address}")
 
             return True, "E-mail enviado com sucesso via Gmail."
@@ -1982,7 +1989,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
         except Exception as e:
              print(f"DEBUG: Erro inesperado ao enviar com Gmail - {e}")
              return False, f"Ocorreu um erro inesperado ao enviar e-mail via Gmail: {e}"
-
     else:
         print(f"DEBUG: Provedor de e-mail desconhecido ou não configurado: {provider}")
         return False, f"Provedor de e-mail '{provider}' não configurado ou inválido nas configurações globais."
