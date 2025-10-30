@@ -221,7 +221,7 @@ st.divider()
 
 start_date, end_date = st.session_state.start_date_fluxo, st.session_state.end_date_fluxo
 done_statuses = status_mapping.get('done', [])
-in_progress_statuses = status_mapping.get('in_progress', [])
+in_progress_statuses = [s['name'].lower() for s in status_mapping.get('in_progress', []) if isinstance(s, dict)]
 
 if not done_statuses:
     st.warning("Nenhum 'status final' está configurado para este projeto.", icon="⚠️")
@@ -242,7 +242,7 @@ if not df_times.empty:
     df_times.dropna(subset=['Cycle Time (dias)'], inplace=True)
 
 # 5. Usa 'issues_for_flow_calc'
-wip_issues = [i for i in issues_for_flow_calc if hasattr(i.fields, 'status') and i.fields.status and i.fields.status.name.lower() in [s.lower() for s in in_progress_statuses]]
+wip_issues = [i for i in issues_for_flow_calc if hasattr(i.fields, 'status') and i.fields.status and i.fields.status.name.lower() in in_progress_statuses]
 throughput = len(completed_issues_in_period)
 lead_time_avg = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0
 cycle_time_avg = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0

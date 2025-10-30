@@ -1022,7 +1022,9 @@ def calculate_executive_summary_metrics(issues, project_config):
                 due_date = pd.to_datetime(getattr(i.fields, due_date_field_id)).tz_localize(None).normalize()
                 completion_date = find_completion_date(i, project_config)
                 if completion_date:
-                    deadline_diffs.append((completion_date.normalize() - due_date).days)
+                    # Converte completion_date para um Timestamp do Pandas ANTES de chamar .normalize()
+                    completion_date_ts = pd.to_datetime(completion_date)
+                    deadline_diffs.append((completion_date_ts.normalize() - due_date).days)
 
     avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
     schedule_adherence = calculate_schedule_adherence(issues, project_config)

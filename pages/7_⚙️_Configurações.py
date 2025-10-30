@@ -73,92 +73,189 @@ with tab_mapping:
     st.info("Para calcular métricas como Lead Time e Cycle Time, precisamos que nos ajude a entender o seu fluxo de trabalho.")
     
     try:
-        # 1. Busca os objetos de status (que contêm .name e .id)
+        # 1. Busca os objetos de status (que contêm .name, .id, e .statusCategory)
         statuses = get_jira_statuses(st.session_state.jira_client, project_key)
         
         if not statuses:
             st.warning("Não foi possível carregar os status do Jira para este projeto.")
             statuses = []
             
-        # 2. Cria mapas de ID <-> Nome (para a migração e UI)
+        # 2. Cria mapas de ID <-> Nome
         status_id_map = {s.id: s.name for s in statuses}
         status_name_map = {s.name: s.id for s in statuses}
         status_names_sorted = sorted(list(status_name_map.keys()))
+
+        # --- NOVO: Extrai Categorias ---
+        all_categories = []
+        category_to_status_names_map = {}
+        status_to_category_map = {}
+
+        for s in statuses:
+            if hasattr(s, 'statusCategory') and hasattr(s.statusCategory, 'name'):
+                cat_name = s.statusCategory.name
+                if cat_name not in all_categories:
+                    all_categories.append(cat_name)
+                
+                if cat_name not in category_to_status_names_map:
+                    category_to_status_names_map[cat_name] = []
+                
+                category_to_status_names_map[cat_name].append(s.name)
+                status_to_category_map[s.name] = cat_name
+            else:
+                # Trata status sem categoria (raro)
+                if "Não Categorizado" not in all_categories:
+                    all_categories.append("Não Categorizado")
+                if "Não Categorizado" not in category_to_status_names_map:
+                    category_to_status_names_map["Não Categorizado"] = []
+                category_to_status_names_map["Não Categorizado"].append(s.name)
+                status_to_category_map[s.name] = "Não Categorizado"
+        
+        all_categories_sorted = sorted(all_categories)
+        # --- FIM NOVO ---
+
 
         # 3. Carrega a config salva
         project_config = get_project_config(project_key) or {}
         status_mapping = project_config.get('status_mapping', {})
         
-        # --- INÍCIO DA MIGRAÇÃO AUTOMÁTICA ---
+        # --- LÓGICA DE MIGRAÇÃO (MODIFICADA para incluir 'in_progress') ---
         migration_needed = False
         
-        # Checa 'initial'
-        initial_config = status_mapping.get('initial', [])
-        if initial_config and isinstance(initial_config[0], str): # Se for formato antigo (string/nome)
-            migration_needed = True
-            # Converte Nomes para Dicionários (ID + Nome)
-            initial_states_data = [{'id': status_name_map[name], 'name': name} for name in initial_config if name in status_name_map]
-            project_config['status_mapping']['initial'] = initial_states_data
-
-        # Checa 'done'
-        done_config = status_mapping.get('done', [])
-        if done_config and isinstance(done_config[0], str): # Se for formato antigo (string/nome)
-            migration_needed = True
-            # Converte Nomes para Dicionários (ID + Nome)
-            done_states_data = [{'id': status_name_map[name], 'name': name} for name in done_config if name in status_name_map]
-            project_config['status_mapping']['done'] = done_states_data
+        for key in ['initial', 'done', 'in_progress']: # Itera sobre todas as chaves
+            config_list = status_mapping.get(key, [])
+            if config_list and isinstance(config_list[0], str): # Se for formato antigo (string/nome)
+                migration_needed = True
+                new_data_list = [{'id': status_name_map[name], 'name': name} for name in config_list if name in status_name_map]
+                project_config['status_mapping'][key] = new_data_list
 
         if migration_needed:
             save_project_config(project_key, project_config)
             get_project_config.clear() # Limpa o cache
             st.success("Configuração de status antiga detectada e migrada automaticamente para o novo formato de IDs!")
-            # Recarrega a config migrada
-            project_config = get_project_config(project_key) or {}
+            project_config = get_project_config(project_key) or {} # Recarrega
             status_mapping = project_config.get('status_mapping', {})
-        # --- FIM DA MIGRAÇÃO AUTOMÁTICA ---
+        # --- FIM DA MIGRAÇÃO ---
 
-        # --- Lógica de Leitura (agora só precisa ler o formato novo) ---
+        # --- Lógica de Leitura (agora lê 'in_progress' também) ---
         initial_config = status_mapping.get('initial', [])
         default_initial_names = [d['name'] for d in initial_config if isinstance(d, dict) and d.get('name') in status_name_map]
 
         done_config = status_mapping.get('done', [])
         default_done_names = [d['name'] for d in done_config if isinstance(d, dict) and d.get('name') in status_name_map]
 
-        # Carrega a config de "ignored" (que agora esperamos ser uma lista de dicts)
+        in_progress_config = status_mapping.get('in_progress', [])
+        default_in_progress_names = [d['name'] for d in in_progress_config if isinstance(d, dict) and d.get('name') in status_name_map]
+
         ignored_config = project_config.get('ignored_statuses', [])
-        # Extrai apenas os nomes para usar como 'default' no multiselect
         default_ignored_names = [d['name'] for d in ignored_config if isinstance(d, dict) and d.get('name') in status_name_map]
         
-        # (O resto do código da 'tab_mapping' continua o mesmo)
-        st.markdown("##### 🛫 Status Iniciais")
-        st.caption("Selecione os status que representam o início do trabalho.")
-        selected_initial_names = st.multiselect("Status Iniciais", options=status_names_sorted, default=default_initial_names, label_visibility="collapsed")
+        # Lê o modo salvo (default é 'category' se não existir)
+        saved_mode = project_config.get('status_mapping_mode', 'category')
+        is_manual_mode_default = (saved_mode == 'manual')
 
-        st.markdown("##### ✅ Status Finais")
-        st.caption("Selecione os status que representam a conclusão do trabalho.")
-        selected_done_names = st.multiselect("Status Finais", options=status_names_sorted, default=default_done_names, label_visibility="collapsed")
+        # --- NOVO: Toggle ---
+        st.markdown("---")
+        is_manual_mode = st.toggle(
+            "Mapear por Status individual (Modo Avançado)", 
+            value=is_manual_mode_default, # O valor default é o modo que estava salvo
+            key=f"manual_mapping_toggle_{project_key}",
+            help="Desativado (Padrão): Mapeie por Categoria (ex: 'To Do', 'In Progress'). Ativado: Mapeie status por status (ex: 'Backlog', 'Dev', 'Test')."
+        )
+        st.markdown("---")
 
-        st.markdown("##### ❌ Status a Ignorar")
-        st.caption("Selecione quaisquer status que devam ser completamente ignorados.")
-        ignored_states = st.multiselect("Status a Ignorar", options=status_names_sorted, default=default_ignored_names, label_visibility="collapsed")
+
+        if not is_manual_mode:
+            # --- MODO CATEGORIA (NOVO) ---
+            st.subheader("Mapeamento por Categoria (Padrão)")
+            st.caption("Mapeie por Categoria de Status do Jira. Esta é a forma mais simples e recomendada.")
+            
+            # Lógica para adivinhar o default das categorias
+            default_initial_cats = list(set(status_to_category_map.get(name, 'Não Categorizado') for name in default_initial_names))
+            default_progress_cats = list(set(status_to_category_map.get(name, 'Não Categorizado') for name in default_in_progress_names)) 
+            default_done_cats = list(set(status_to_category_map.get(name, 'Não Categorizado') for name in default_done_names))
+
+            st.markdown("##### 🛫 Categorias Iniciais")
+            st.caption("Selecione as *categorias* que representam o início do trabalho.")
+            selected_initial_categories = st.multiselect("Categorias Iniciais", options=all_categories_sorted, default=default_initial_cats, label_visibility="collapsed", key=f"cat_initial_{project_key}")
+
+            st.markdown("##### ⚙️ Categorias 'Em Andamento'")
+            st.caption("Selecione as *categorias* que representam o trabalho ativo (Cycle Time).")
+            selected_in_progress_categories = st.multiselect("Categorias 'Em Andamento'", options=all_categories_sorted, default=default_progress_cats, label_visibility="collapsed", key=f"cat_progress_{project_key}")
+
+            st.markdown("##### ✅ Categorias Finais")
+            st.caption("Selecione as *categorias* que representam a conclusão do trabalho.")
+            selected_done_categories = st.multiselect("Categorias Finais", options=all_categories_sorted, default=default_done_cats, label_visibility="collapsed", key=f"cat_done_{project_key}")
+            
+        else:
+            # --- MODO MANUAL (CÓDIGO EXISTENTE + 'IN_PROGRESS') ---
+            st.subheader("Mapeamento Manual por Status (Avançado)")
+            st.caption("Mapeie status individuais. Use se o seu fluxo não se alinha perfeitamente com as categorias do Jira.")
+
+            st.markdown("##### 🛫 Status Iniciais")
+            st.caption("Selecione os status que representam o início do trabalho.")
+            selected_initial_names = st.multiselect("Status Iniciais", options=status_names_sorted, default=default_initial_names, label_visibility="collapsed", key=f"manual_initial_{project_key}")
+            
+            st.markdown("##### ⚙️ Status 'Em Andamento' (In Progress)")
+            st.caption("Selecione os status que representam o trabalho ativo. O **Cycle Time** é medido a partir daqui.")
+            selected_in_progress_names = st.multiselect("Status 'Em Andamento'", options=status_names_sorted, default=default_in_progress_names, label_visibility="collapsed", key=f"manual_progress_{project_key}")
+
+            st.markdown("##### ✅ Status Finais")
+            st.caption("Selecione os status que representam a conclusão do trabalho.")
+            selected_done_names = st.multiselect("Status Finais", options=status_names_sorted, default=default_done_names, label_visibility="collapsed", key=f"manual_done_{project_key}")
+        
+        # --- Fim do Bloco if/else ---
+        
+        st.markdown("##### ❌ Status a Ignorar (Aplicado em ambos os modos)")
+        st.caption("Selecione quaisquer status que devam ser completamente ignorados (ex: 'Cancelado', 'Duplicado').")
+        ignored_states = st.multiselect("Status a Ignorar", options=status_names_sorted, default=default_ignored_names, label_visibility="collapsed", key=f"manual_ignore_{project_key}")
 
         if st.button("Salvar Mapeamento de Status", type="primary", width='stretch'):
-            # 7. CONVERTE os nomes selecionados de volta para objetos (com ID e Nome)
-            initial_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_initial_names]
-            done_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_done_names]
             
-            ignored_states_data = [{'id': status_name_map[name], 'name': name} for name in ignored_states]
-            # -----------------
+            initial_states_data = []
+            in_progress_states_data = []
+            done_states_data = []
 
-            # 8. SALVA a nova estrutura (IDs e Nomes)
-            project_config['status_mapping'] = {'initial': initial_states_data, 'done': done_states_data}
+            if not is_manual_mode:
+                # --- Lógica de Salvar (Modo Categoria) ---
+                for cat_name in selected_initial_categories:
+                    for status_name in category_to_status_names_map.get(cat_name, []):
+                        if status_name in status_name_map: # Confirma que o status é válido
+                            initial_states_data.append({'id': status_name_map[status_name], 'name': status_name})
+                
+                for cat_name in selected_in_progress_categories:
+                    for status_name in category_to_status_names_map.get(cat_name, []):
+                         if status_name in status_name_map:
+                            in_progress_states_data.append({'id': status_name_map[status_name], 'name': status_name})
+
+                for cat_name in selected_done_categories:
+                    for status_name in category_to_status_names_map.get(cat_name, []):
+                         if status_name in status_name_map:
+                            done_states_data.append({'id': status_name_map[status_name], 'name': status_name})
             
-            project_config['ignored_statuses'] = ignored_states_data # Salva a lista de dicts
-            # -----------------
+            else:
+                # --- Lógica de Salvar (Modo Manual) ---
+                initial_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_initial_names]
+                in_progress_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_in_progress_names]
+                done_states_data = [{'id': status_name_map[name], 'name': name} for name in selected_done_names]
+
+            # Salva "Ignorados" (comum aos dois modos)
+            ignored_states_data = [{'id': status_name_map[name], 'name': name} for name in ignored_states]
+
+            # Salva a configuração
+            project_config['status_mapping'] = {
+                'initial': initial_states_data, 
+                'done': done_states_data,
+                'in_progress': in_progress_states_data
+            }
+            project_config['ignored_statuses'] = ignored_states_data 
+            
+            # Salva o modo que foi usado
+            project_config['status_mapping_mode'] = 'category' if not is_manual_mode else 'manual'
             
             save_project_config(project_key, project_config)
             st.success("Mapeamento de status salvo com sucesso!")
-            get_project_config.clear() # Limpa o cache
+            get_project_config.clear() 
+            st.rerun()
 
     except Exception as e:
         st.error(f"Não foi possível buscar os status do projeto no Jira: {e}")
@@ -260,10 +357,7 @@ with tab_estimation:
 
         st.divider()
         
-        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO ---
-        # (O seu código para 'Campo de Agrupamento Estratégico' continua aqui...)
-        # (Copie e cole o resto da sua lógica original da tab_estimation aqui)
-        
+        # --- CAMPO DE AGRUPAMENTO ESTRATÉGICO ---        
         st.markdown("###### 🎯 Campo de Agrupamento Estratégico")
         st.info("Selecione o campo que será usado para agrupar dados em visões executivas (Ex: Cliente, Produto, Squad).")
         st.caption("Nota: Este é um campo global. Os campos disponíveis aqui são ativados na página de 'Administração'.")

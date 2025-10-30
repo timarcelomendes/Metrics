@@ -342,7 +342,7 @@ with st.expander("Carregar Dados do Projeto", expanded=expand_loader):
                 st.session_state['project_name'] = selected_project_name
                 
                 # --- CORREÇÃO: Salva os dados brutos como a Pág. 3 faz ---
-                st.session_state['dynamic_df'] = df_loaded 
+                st.session_state['dynamic_df'] = df_loaded # Salva o DF COMPLETO
                 st.session_state['raw_issues_for_fluxo'] = raw_issues
                 # --- FIM DA CORREÇÃO ---
                 
@@ -425,7 +425,7 @@ else:
 
     if selected_context == "— Visão Agregada do Projeto —" or not can_filter_by_context:
         # FILTRA O DF PARA CONCLUÍDOS
-        scope_df = df[pd.notna(df[date_col_name_filter])] 
+        scope_df = df[pd.notna(df[date_col_name_filter])].copy() # .copy() para evitar SettingWithCopyWarning
         scope_issues = all_raw_issues 
         st.subheader(f"Análise Agregada do Projeto: {st.session_state.get('project_name', '')}")
     else:
@@ -433,7 +433,7 @@ else:
         if STRATEGIC_FIELD_NAME in df.columns:
            df_contexto = df[df[STRATEGIC_FIELD_NAME] == selected_context]
            # FILTRA O DF DE CONTEXTO PARA CONCLUÍDOS
-           scope_df = df_contexto[pd.notna(df_contexto[date_col_name_filter])]
+           scope_df = df_contexto[pd.notna(df_contexto[date_col_name_filter])].copy() # .copy()
         else:
            scope_df = pd.DataFrame(columns=df.columns) 
            st.error(f"Erro interno: Campo estratégico '{STRATEGIC_FIELD_NAME}' desapareceu.")
@@ -455,11 +455,13 @@ else:
          auto_metrics = calculate_executive_summary_metrics(scope_issues, project_config)
 
     # --- Busca dados de RAG e KPIs Manuais ---
-    try:
-        rag_status = get_ai_rag_status(selected_context, json.dumps(auto_metrics)) 
-    except Exception as e:
-        rag_status = f"Erro IA: {e}"
-        print(f"Erro ao obter RAG status: {e}")
+    with st.spinner("Processamento IA em andamento..."): # Adiciona spinner personalizado
+        try:
+            # Cacheia a chamada da API (adicione @st.cache_data(ttl=3600) em get_ai_rag_status)
+            rag_status = get_ai_rag_status(selected_context, json.dumps(auto_metrics)) 
+        except Exception as e:
+            rag_status = f"Erro IA: {e}"
+            print(f"Erro ao obter RAG status: {e}")
 
     rag_status_str = str(rag_status)
     if "429" in rag_status_str or "quota" in rag_status_str.lower():
