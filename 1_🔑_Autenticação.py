@@ -195,7 +195,15 @@ else:
                             st.info("Para utilizar a ferramenta, você precisará de uma conexão com o Jira, que pode ser configurada após o seu primeiro login.", icon="ℹ️")
                             welcome_subject = "Bem-vindo ao Gauge Metrics!"
                             welcome_html = "<html><body><h2>Olá!</h2><p>A sua conta na plataforma Gauge Metrics foi criada com sucesso.</p><p>Estamos felizes por tê-lo a bordo. Faça login para começar a transformar os seus dados em insights.</p><p>Atenciosamente,<br>A Equipe Gauge Metrics</p></body></html>"
-                            send_email_with_attachment(new_email, welcome_subject, welcome_html)
+                            welcome_params = {"user_email": new_email}
+                            
+                            send_email_with_attachment(
+                                new_email, 
+                                welcome_subject, 
+                                welcome_html,
+                                template_purpose="welcome",
+                                template_params=welcome_params
+                            )
 
             with tab3:
                 with st.form("recover_form"):
@@ -213,16 +221,31 @@ else:
                                     else:
                                         temp_password = generate_temporary_password()
                                         subject = "Recuperação de Senha - Gauge Metrics"
+                                        
+                                        # 1. Define as variáveis que o template ou o HTML de fallback usarão
+                                        template_vars = {"password": temp_password}
+                                        
+                                        # 2. Define o HTML de fallback (será usado se o ID do template não for definido no Admin)
                                         body_html = f"<html><body><p>Sua senha temporária é: <b>{temp_password}</b></p></body></html>"
-                                        success, message = send_email_with_attachment(recover_email, subject, body_html)
+
+                                        # 3. Chama a função com o PROPÓSITO
+                                        success, message = send_email_with_attachment(
+                                            recover_email, 
+                                            subject, 
+                                            body_html,
+                                            template_purpose="password_recovery", # <--- Propósito
+                                            template_params=template_vars
+                                        )
+
                                         if success:
                                             hashed_password = get_password_hash(temp_password)
                                             update_user_password(recover_email, hashed_password)
                                             st.success("E-mail de recuperação enviado com sucesso!")
                                         else:
                                             st.error(f"Falha ao enviar o e-mail: {message}. A sua senha não foi alterada.")
-                                    if 'smtp_configs' in st.session_state:
-                                        del st.session_state['smtp_configs']
+
+                                        if 'smtp_configs' in st.session_state:
+                                            del st.session_state['smtp_configs']
                             else:
                                 st.success("Se o seu e-mail estiver na nossa base, receberá as instruções.")
                         else:

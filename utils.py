@@ -1733,12 +1733,14 @@ def generate_ai_risk_assessment(project_name, metrics_summary):
     except Exception as e:
         st.error(f"Erro ao gerar análise de riscos: {e}")
         return {"risk_level": "Erro", "risks": [f"Erro na comunicação com a API: {e}"]}
-    
+
+@st.cache_data(ttl=3600)
 def get_ai_rag_status(project_name, metrics_summary):
     """
     Usa a API de IA preferida do utilizador para analisar métricas e determinar
     um status RAG para o projeto.
     """
+    
     user_data = find_user(st.session_state['email'])
     provider = user_data.get('ai_provider_preference', 'Google Gemini')
     
@@ -1879,11 +1881,11 @@ def get_field_value(issue, field_config):
 
     return str(value).split('T')[0]
 
-def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None):
+def send_email_with_attachment(to_address, subject, body, attachment_bytes=None, attachment_filename=None, template_purpose=None, template_params=None):
     """
-    Função central para enviar e-mails, com base no provedor
-    configurado globalmente. Trata o corpo do e-mail como HTML.
-    Funciona com SendGrid, Gmail (SMTP), Mailersend e Brevo.
+    Função central para enviar e-mails.
+    Busca automaticamente um ID de template das configs globais se um 'template_purpose' for fornecido.
+    Reverte para o 'body' (HTML) se nenhum ID de template for encontrado.
     """
     # --- Carrega as configs GLOBAIS diretamente ---
     smtp_configs = get_global_smtp_configs()
@@ -1894,31 +1896,56 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
 
     provider = smtp_configs.get('provider')
     from_email = smtp_configs.get('from_email')
+    sender_name = "Gauge Metrics" # Alias padrão
+
+    # --- ALTERAÇÃO 1: LÓGICA DE LOOKUP DE TEMPLATE ---
+    template_id = None # Padrão é None (enviar HTML bruto)
+    if template_purpose and template_params is not None:
+        # Tenta encontrar o ID do template nas configurações salvas
+        template_id_str = smtp_configs.get("templates", {}).get(template_purpose)
+        try:
+            # Tenta converter o ID para um inteiro
+            template_id = int(template_id_str)
+        except (ValueError, TypeError):
+            # Se falhar (vazio ou não numérico), template_id permanece None
+            template_id = None 
     
-    # Define o "Alias" (Nome de Exibição)
-    sender_name = "Gauge Metrics"
+    # Se template_id for None, a lógica de cada provedor reverterá para 'body'
+    # --- FIM DA ALTERAÇÃO 1 ---
 
     # --- Lógica SendGrid ---
     if provider == 'SendGrid':
         try:
+            # (Código de autenticação SendGrid...)
             api_key_encrypted = smtp_configs.get('api_key_encrypted')
             if not api_key_encrypted:
                 return False, "Chave de API do SendGrid não encontrada nas configurações globais."
-
             api_key = decrypt_token(api_key_encrypted)
             if not api_key: 
                  return False, "Falha ao descriptografar a chave de API do SendGrid."
+
+            import sendgrid
+            from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, From
 
             sg = sendgrid.SendGridAPIClient(api_key)
 
             message = Mail(
                 from_email=From(email=from_email, name=sender_name), 
                 to_emails=to_address, 
-                subject=subject, 
-                html_content=body
+                subject=subject
+                # html_content é adicionado abaixo
             )
 
+            # --- ALTERAÇÃO 2: Adicionar lógica de template ao SendGrid ---
+            if template_id is not None:
+                message.template_id = template_id
+                message.dynamic_template_data = template_params
+            else:
+                message.html_content = body
+            # --- FIM DA ALTERAÇÃO 2 ---
+
             if attachment_bytes and attachment_filename:
+                # (Código do anexo...)
                 encoded_file = base64.b64encode(attachment_bytes).decode()
                 attachedFile = Attachment(
                     FileContent(encoded_file),
@@ -1936,13 +1963,13 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             print(f"DEBUG: Erro ao enviar com SendGrid - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
-    # --- Lógica Gmail (SMTP) ---
+    # --- Lógica Gmail (SMTP) (Não suporta templates, sempre usa HTML) ---
     elif provider == 'Gmail (SMTP)':
         try:
+            # (Código de autenticação Gmail...)
             app_password_encrypted = smtp_configs.get('app_password_encrypted')
             if not app_password_encrypted:
                 return False, "Senha de aplicação do Gmail não encontrada nas configurações globais."
-
             app_password = decrypt_token(app_password_encrypted)
             if not app_password: 
                  return False, "Falha ao descriptografar a senha de aplicação do Gmail."
@@ -1952,10 +1979,12 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             msg['From'] = f"{sender_name} <{from_email}>" 
             msg['To'] = to_address if isinstance(to_address, str) else ', '.join(to_address)
 
+            # Gmail sempre usará o 'body' (HTML)
             part_html = MIMEText(body, 'html')
             msg.attach(part_html)
 
             if attachment_bytes and attachment_filename:
+                # (Código do anexo...)
                 part_attach = MIMEApplication(attachment_bytes, Name=attachment_filename)
                 part_attach['Content-Disposition'] = f'attachment; filename="{attachment_filename}"'
                 msg.attach(part_attach)
@@ -1967,13 +1996,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 print(f"DEBUG: E-mail enviado com sucesso via Gmail para {to_address}")
 
             return True, "E-mail enviado com sucesso via Gmail."
-
-        except smtplib.SMTPAuthenticationError:
-             print(f"DEBUG: Erro de autenticação SMTP Gmail para {from_email}")
-             return False, "Falha na autenticação com o Gmail. Verifique o e-mail e a senha de aplicação."
-        except smtplib.SMTPException as e:
-             print(f"DEBUG: Erro SMTP Gmail - {e}")
-             return False, f"Ocorreu um erro SMTP ao enviar via Gmail: {e}"
         except Exception as e:
              print(f"DEBUG: Erro inesperado ao enviar com Gmail - {e}")
              return False, f"Ocorreu um erro inesperado ao enviar e-mail via Gmail: {e}"
@@ -1981,12 +2003,11 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
     # --- Lógica Mailersend ---
     elif provider == 'Mailersend':
         try:
+            # (Código de autenticação Mailersend...)
             from mailersend import Mailersend, Email, Recipient, Attachment
-            
             api_key_encrypted = smtp_configs.get('mailersend_api_key_encrypted')
             if not api_key_encrypted:
                 return False, "Chave de API do Mailersend não encontrada nas configurações globais."
-            
             api_key = decrypt_token(api_key_encrypted)
             if not api_key:
                 return False, "Falha ao descriptografar a chave de API do Mailersend."
@@ -1997,9 +2018,18 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             mail.set_from({"email": from_email, "name": sender_name})
             mail.set_to([to_address])
             mail.set_subject(subject)
-            mail.set_html(body)
+            
+            # --- ALTERAÇÃO 3: Adicionar lógica de template ao Mailersend ---
+            if template_id is not None:
+                # O Mailersend usa "variáveis" e não "params"
+                mail.set_template_id(template_id)
+                mail.set_variables([{"email": to_address, "substitutions": [{"var": k, "value": v} for k, v in template_params.items()]}])
+            else:
+                mail.set_html(body)
+            # --- FIM DA ALTERAÇÃO 3 ---
             
             if attachment_bytes and attachment_filename:
+                # (Código do anexo...)
                 encoded_file = base64.b64encode(attachment_bytes).decode()
                 att = Attachment(
                     content=encoded_file,
@@ -2008,7 +2038,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 mail.set_attachments([att])
 
             response_dict, status_code = ms.email.send(mail.get_params())
-            
             print(f"DEBUG: Resposta do Mailersend - Status {status_code}, Body: {response_dict}")
 
             is_success = 200 <= status_code < 300 
@@ -2017,46 +2046,44 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
             else:
                 error_msg = response_dict.get('message', 'Erro desconhecido')
                 return False, f"Falha no envio pelo Mailersend (Status: {status_code}): {error_msg}"
-                
-        except ImportError:
-            return False, "A biblioteca 'mailersend' não está instalada. Adicione-a ao requirements.txt."
         except Exception as e:
             print(f"DEBUG: Erro ao enviar com Mailersend - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via Mailersend: {e}"
 
-    # --- ALTERAÇÃO: Adicionar bloco de envio do Brevo ---
+    # --- Lógica Brevo (O if/else já estava correto) ---
     elif provider == 'Brevo':
         try:
-            # Importar classes do Brevo
+            # (Código de autenticação Brevo...)
             import sib_api_v3_sdk
             from sib_api_v3_sdk.rest import ApiException
-            
             api_key_encrypted = smtp_configs.get('brevo_api_key_encrypted')
             if not api_key_encrypted:
                 return False, "Chave de API do Brevo não encontrada nas configurações globais."
-            
             api_key = decrypt_token(api_key_encrypted)
             if not api_key:
                 return False, "Falha ao descriptografar a chave de API do Brevo."
 
-            # Configurar a API
             config = sib_api_v3_sdk.Configuration()
             config.api_key['api-key'] = api_key
             api_client = sib_api_v3_sdk.ApiClient(config)
-            
-            # Criar instância da API Transacional
             api_instance = sib_api_v3_sdk.TransactionalEmailsApi(api_client)
             
-            # Definir o e-mail
             send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
                 sender=sib_api_v3_sdk.SendSmtpEmailSender(name=sender_name, email=from_email),
                 to=[sib_api_v3_sdk.SendSmtpEmailTo(email=to_address)],
-                subject=subject,
-                html_content=body
+                subject=subject
             )
 
-            # Lidar com anexos
+            # --- ALTERAÇÃO 4: Lógica de template do Brevo (já estava correta, apenas verificando) ---
+            if template_id is not None and template_params is not None:
+                send_smtp_email.template_id = template_id
+                send_smtp_email.params = template_params
+            else:
+                send_smtp_email.html_content = body
+            # --- FIM DA ALTERAÇÃO 4 ---
+
             if attachment_bytes and attachment_filename:
+                # (Código do anexo...)
                 encoded_file = base64.b64encode(attachment_bytes).decode()
                 attachment = sib_api_v3_sdk.SendSmtpEmailAttachment(
                     content=encoded_file,
@@ -2064,18 +2091,10 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 )
                 send_smtp_email.attachment = [attachment]
 
-            # Enviar o e-mail
             api_response = api_instance.send_transac_email(send_smtp_email)
             print(f"DEBUG: Resposta do Brevo - {api_response}")
             
-            # Se a chamada foi bem-sucedida, não lança exceção
             return True, "E-mail enviado com sucesso via Brevo."
-
-        except ImportError:
-             return False, "A biblioteca 'sib-api-v3-sdk' não está instalada. Adicione-a ao requirements.txt."
-        except ApiException as e:
-            print(f"DEBUG: Erro ao enviar com Brevo (ApiException) - {e}")
-            return False, f"Falha no envio pelo Brevo: {e.reason} (Status: {e.status})"
         except Exception as e:
             print(f"DEBUG: Erro inesperado ao enviar com Brevo - {e}")
             return False, f"Ocorreu um erro inesperado ao enviar e-mail via Brevo: {e}"

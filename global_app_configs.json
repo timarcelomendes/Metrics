@@ -42,6 +42,10 @@
     "smtp_settings": {
         "provider": "Brevo",
         "from_email": "ti.marcelomendes@gmail.com",
-        "brevo_api_key_encrypted": "gAAAAABpAhS-xZgpQ7naEQuxF7UAExi2vth1yl31jwnAJhH_govOgj_azk4-487DqQk-RLMzPL_dmka_wT-sLjkNxYu_lB8PFS-3QpN4C3Yh0J2VSoteKWixBsucRCtUgqtol2WtzsLrlkfPOp3SFfehLKzAg8qe-IE5w_qGzjMugUAiy0BK8YsLzm6CadEes4iBRKBizniP"
+        "brevo_api_key_encrypted": "gAAAAABpAhS-xZgpQ7naEQuxF7UAExi2vth1yl31jwnAJhH_govOgj_azk4-487DqQk-RLMzPL_dmka_wT-sLjkNxYu_lB8PFS-3QpN4C3Yh0J2VSoteKWixBsucRCtUgqtol2WtzsLrlkfPOp3SFfehLKzAg8qe-IE5w_qGzjMugUAiy0BK8YsLzm6CadEes4iBRKBizniP",
+        "templates": {
+            "password_recovery": "1",
+            "welcome": ""
+        }
     }
 }

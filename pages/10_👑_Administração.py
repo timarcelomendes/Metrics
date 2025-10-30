@@ -495,16 +495,19 @@ with main_tab_system:
     with system_tab_email:
         st.markdown("##### Configuração Global de Envio de E-mail")
         st.caption("Estas credenciais serão usadas por toda a aplicação para enviar e-mails.")
+        
+        # Carrega as configs UMA VEZ no topo
+        configs = get_global_configs()
         current_smtp_configs = configs.get('smtp_settings', {})
         current_provider = current_smtp_configs.get('provider', 'SendGrid')
         
-        # --- ALTERAÇÃO 1: Adicionar Brevo às opções ---
         provider_options = ["SendGrid", "Gmail (SMTP)", "Mailersend", "Brevo"]
-        
         provider_index = provider_options.index(current_provider) if current_provider in provider_options else 0
-        email_provider = st.radio("Selecione o provedor de e-mail do sistema:", provider_options, horizontal=True, index=provider_index)
         
+        # --- FORMULÁRIO 1: CREDENCIAIS (Como antes, mas sem os templates) ---
         with st.form("global_smtp_config_form"):
+            email_provider = st.radio("Selecione o provedor de e-mail do sistema:", provider_options, horizontal=True, index=provider_index)
+            
             from_email = ""
             credential = ""
             
@@ -525,7 +528,6 @@ with main_tab_system:
                 from_email = st.text_input("E-mail de Origem (Mailersend)", value=current_smtp_configs.get('from_email', ''))
                 credential = st.text_input("Mailersend API Key", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
 
-            # --- ALTERAÇÃO 2: Adicionar o bloco de UI do Brevo ---
             elif email_provider == 'Brevo':
                 if current_smtp_configs.get('brevo_api_key_encrypted'): st.success("Uma chave de API do Brevo (v3) já está configurada.", icon="✅")
                 st.info("O e-mail de origem deve ser um remetente verificado na sua conta Brevo.")
@@ -533,18 +535,22 @@ with main_tab_system:
                 credential = st.text_input("Brevo API Key (v3)", type="password", placeholder="Insira uma nova chave para salvar ou alterar")
 
             if st.form_submit_button("Validar e Salvar Credenciais Globais", width='stretch', type="primary"):
+                # Este botão SÓ salva as credenciais, não os templates
                 if from_email and credential:
                     with st.spinner("A validar as suas credenciais..."):
                         is_valid, message = validate_smtp_connection(email_provider, from_email, credential)
                     
                     if is_valid:
                         encrypted_credential = encrypt_token(credential)
+                        
+                        # Prepara o dicionário de dados SÓ com as credenciais
                         smtp_data_to_save = {
                             'provider': email_provider, 
                             'from_email': from_email,
+                            # Mantém os templates existentes
+                            'templates': current_smtp_configs.get('templates', {}) 
                         }
                         
-                        # --- ALTERAÇÃO 3: Adicionar lógica para salvar a chave do Brevo ---
                         if email_provider == 'SendGrid':
                             smtp_data_to_save['api_key_encrypted'] = encrypted_credential
                         elif email_provider == 'Gmail (SMTP)':
@@ -554,6 +560,7 @@ with main_tab_system:
                         elif email_provider == 'Brevo':
                             smtp_data_to_save['brevo_api_key_encrypted'] = encrypted_credential
                         
+                        # Atualiza as configs globais e salva
                         configs['smtp_settings'] = smtp_data_to_save
                         save_global_configs(configs) 
                         get_global_configs.clear()
@@ -563,6 +570,45 @@ with main_tab_system:
                         st.error(message)
                 else:
                     st.error("Por favor, preencha todos os campos para validar e salvar.")
+
+        st.divider()
+
+        # --- FORMULÁRIO 2: IDs DE TEMPLATE (Salvo individualmente) ---
+        st.markdown("##### IDs de Templates Transacionais (Opcional)")
+        st.caption("Insira o ID do template do seu provedor (ex: Brevo, SendGrid) para substituir os e-mails HTML padrão.")
+        
+        current_templates = current_smtp_configs.get('templates', {})
+
+        with st.form("templates_form"):
+            password_recovery_id = st.text_input(
+                "ID Template - Recuperação de Senha", 
+                value=current_templates.get('password_recovery', ''),
+                placeholder="Ex: 5"
+            )
+            welcome_id = st.text_input(
+                "ID Template - Boas-Vindas", 
+                value=current_templates.get('welcome', ''),
+                placeholder="Ex: 2"
+            )
+            
+            if st.form_submit_button("Salvar Configurações de Template", width='stretch', type="secondary"):
+                # Este botão SÓ salva os IDs dos templates
+                
+                # Garante que as configs e as smtp_settings existem
+                if 'smtp_settings' not in configs:
+                    configs['smtp_settings'] = {}
+                
+                # Atualiza apenas o sub-dicionário de templates
+                configs['smtp_settings']['templates'] = {
+                    'password_recovery': password_recovery_id,
+                    'welcome': welcome_id
+                }
+                
+                # Salva as alterações
+                save_global_configs(configs)
+                get_global_configs.clear()
+                st.success("IDs de template salvos com sucesso!")
+                st.rerun()
 
     with tab_link:
         st.subheader("Configurações Gerais da Aplicação")
