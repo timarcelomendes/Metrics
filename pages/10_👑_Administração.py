@@ -1,4 +1,6 @@
 # pages/10_👑_Administração.py
+# (MODIFICADO para remover o input manual, corrigir StreamlitAPIException e NameError)
+# (MODIFICADO NOVAMENTE para adicionar Mapeamento de Campos Estratégicos)
 
 import streamlit as st
 from security import *
@@ -7,9 +9,8 @@ import pandas as pd
 from config import SESSION_TIMEOUT_MINUTES
 from streamlit_quill import st_quill
 import uuid
-from jira_connector import get_jira_fields
-from security import load_standard_fields_map
-
+from datetime import datetime 
+from jira_connector import get_jira_fields # Mantido do seu ficheiro original
 
 st.set_page_config(page_title="Administração", page_icon="👑", layout="wide")
 st.header("👑 Painel de Administração", divider='rainbow')
@@ -17,26 +18,16 @@ st.header("👑 Painel de Administração", divider='rainbow')
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
     st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
-
 if check_session_timeout():
-    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
-    st.stop()
-
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
-
-# --- VERIFICAÇÃO DE ADMIN CORRIGIDA ---
-# Usamos a função centralizada is_admin() que verifica Master Users e admins do banco de dados.
 if not is_admin(st.session_state['email']):
-    st.error("🚫 Acesso Negado. Esta página é reservada para administradores.");
-    st.stop()
-# --- FIM DA CORREÇÃO ---
+    st.error("🚫 Acesso Negado. Esta página é reservada para administradores."); st.stop()
 
-configs = get_global_configs()
+configs = get_global_configs() # <-- Variável 'configs' definida aqui
 
 def force_hub_reload():
-    """Remove a flag de dados carregados do hub para forçar o recarregamento na próxima visita."""
     if 'hub_data_loaded' in st.session_state:
         del st.session_state['hub_data_loaded']
 
@@ -44,23 +35,171 @@ def force_hub_reload():
 with st.sidebar:
     project_root = Path(__file__).parent.parent
     logo_path = project_root / "images" / "gauge-logo.svg"
-    try:
-        st.logo(str(logo_path), size="large")
-    except (FileNotFoundError, AttributeError):
-        st.write("Gauge Metrics") 
-    
+    try: st.logo(str(logo_path), size="large")
+    except: st.write("Gauge Metrics") 
     if st.session_state.get("email"):
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
-    else:
-        st.info("⚠️ Usuário não conectado!")
-
+    else: st.info("⚠️ Usuário não conectado!")
     if st.button("Logout", width='stretch', type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.switch_page("1_🔑_Autenticação.py")
 
-# --- Interface Principal com Abas Reorganizadas ---
-main_tab_content, main_tab_system = st.tabs(["**📄 Gestão de Conteúdo**", "**⚙️ Configurações do Sistema**"])
+# --- Interface Principal com 3 Abas ---
+main_tab_kpis, main_tab_content, main_tab_system = st.tabs([
+    "**💰 KPIs e Finanças**", 
+    "**📄 Gestão de Conteúdo**", 
+    "**⚙️ Configurações do Sistema**"
+])
 
+# --- NOVA ABA PRINCIPAL: KPIs e Finanças ---
+with main_tab_kpis:
+    st.markdown("##### 💰 Gestão de KPIs Financeiros e de Perfil")
+    st.markdown("Defina os dados manuais (KPIs, Orçamento, Perfil) para os contextos estratégicos.")
+    st.info("O contexto selecionado deve ser *exatamente* igual ao valor no Jira (ex: 'Cliente A', '— Visão Agregada do Projeto —').")
+
+    # Carrega os dados financeiros do config global
+    dados_financeiros_kpis = configs.get('dados_financeiros_kpis', {}) # Nomeado para maior clareza
+
+    # --- LÓGICA DE SELEÇÃO DE CONTEXTO (CORRIGIDA) ---
+    lista_de_contextos = []
+    
+    # Busca o nome do campo estratégico (ex: "Cliente")
+    # --- CORREÇÃO DO NameError ---
+    strategic_field_name = configs.get('strategic_grouping_field', 'Contexto') 
+    if not strategic_field_name: strategic_field_name = 'Contexto' # Garante um fallback
+    # --- FIM DA CORREÇÃO ---
+    
+    # Tenta carregar contextos do dynamic_df (se existir no cache de outra página)
+    if 'dynamic_df' in st.session_state and not st.session_state.dynamic_df.empty:
+        if strategic_field_name in st.session_state.dynamic_df.columns:
+            lista_de_contextos = sorted(st.session_state.dynamic_df[strategic_field_name].dropna().unique())
+            
+    # Adiciona contextos já salvos que podem não estar no DF
+    for ctx in dados_financeiros_kpis.keys():
+        if ctx not in lista_de_contextos:
+            lista_de_contextos.append(ctx)
+            
+    # Garante a Visão Agregada
+    if '— Visão Agregada do Projeto —' not in lista_de_contextos:
+        lista_de_contextos.insert(0, '— Visão Agregada do Projeto —')
+
+    # --- CORREÇÃO: Remove o 'text_input' manual e o link entre eles ---
+    st.markdown(f"###### 1. Selecione um Contexto ({strategic_field_name})")
+    st.caption("A lista é populada com dados do último projeto carregado (no Radar ou Métricas) e contextos já salvos.")
+    contexto_final = st.selectbox(
+        f"Selecione o {strategic_field_name} para editar:",
+        options=[""] + sorted(list(set(lista_de_contextos))), # Adiciona opção vazia
+        key="kpi_context_select",
+        index=0,
+        help="Selecione um contexto da lista para carregar ou editar os seus dados."
+    )
+    # --- FIM DA CORREÇÃO ---
+    
+    st.markdown("---")
+    
+    # Só mostra o formulário se um contexto for selecionado
+    if contexto_final:
+        st.subheader(f"A editar dados para: '{contexto_final}'")
+        
+        with st.form(f"form_kpis_{contexto_final.replace(' ', '_').replace('—', '')}"):
+            # Pega os dados atuais para este contexto
+            dados_atuais = dados_financeiros_kpis.get(contexto_final, {})
+            
+            st.markdown("**1. Perfil (Módulo 3)**")
+            col1, col2, col3 = st.columns(3)
+            responsavel = col1.text_input("Responsável", value=dados_atuais.get('responsavel', ''))
+            
+            start_date_val = pd.to_datetime(dados_atuais.get('start_date')).date() if dados_atuais.get('start_date') else None
+            end_date_val = pd.to_datetime(dados_atuais.get('end_date')).date() if dados_atuais.get('end_date') else None
+            
+            start_date = col2.date_input("Data de Início", value=start_date_val)
+            end_date = col3.date_input("Data de Fim Prevista", value=end_date_val)
+
+            st.markdown("---")
+            st.markdown("**2. Forecast Preditivo (Módulo 2)**")
+            col1, col2 = st.columns(2)
+            orcamento = col1.number_input(
+                "Orçamento Total (R$)", 
+                value=dados_atuais.get('orcamento', 0.0), 
+                min_value=0.0, step=1000.0,
+                help="Qual o orçamento total aprovado para este contexto?"
+            )
+            custo_time_mes = col2.number_input(
+                "Custo Mensal do Time (R$)", 
+                value=dados_atuais.get('custo_time_mes', 0.0), 
+                min_value=0.0, step=500.0,
+                help="Qual o custo mensal (burn rate) médio do time neste contexto?"
+            )
+            
+            st.markdown("---")
+            st.markdown("**3. KPIs de Negócio Manuais (Módulo 3)**")
+            col1, col2, col3 = st.columns(3)
+            mrr = col1.number_input("Receita Recorrente (MRR)", min_value=0.0, value=dados_atuais.get('mrr', 0.0), format="%.2f")
+            receita_nao_recorrente = col2.number_input("Receitas Não Recorrentes", min_value=0.0, value=dados_atuais.get('receita_nao_recorrente', 0.0), format="%.2f")
+            total_despesas = col3.number_input("Total de Despesas", min_value=0.0, value=dados_atuais.get('total_despesas', 0.0), format="%.2f")
+            
+            nps_value = dados_atuais.get('nps', 0)
+            try: nps_default = int(nps_value) if nps_value != 'N/A' else 0
+            except: nps_default = 0
+            nps = col1.number_input("NPS (Net Promoter Score)", min_value=-100, max_value=100, value=nps_default)
+
+            if st.form_submit_button("Salvar Contexto", type="primary"):
+                # Salva no config global usando o nome do contexto como chave
+                configs.setdefault('dados_financeiros_kpis', {})[contexto_final] = {
+                    'responsavel': responsavel,
+                    'start_date': start_date.isoformat() if start_date else None,
+                    'end_date': end_date.isoformat() if end_date else None,
+                    'orcamento': orcamento,
+                    'custo_time_mes': custo_time_mes,
+                    'mrr': mrr,
+                    'receita_nao_recorrente': receita_nao_recorrente,
+                    'total_despesas': total_despesas,
+                    'nps': nps
+                }
+                save_global_configs(configs) 
+                get_global_configs.clear() 
+                st.success(f"Dados financeiros e KPIs para '{contexto_final}' salvos!")
+                st.rerun()
+                
+    else:
+        st.info("Selecione um contexto existente na lista acima para inserir ou editar dados.")
+
+    st.divider()
+    st.markdown("###### Contextos Atuais (com dados salvos)")
+    
+    if not dados_financeiros_kpis:
+        st.info("Nenhum contexto financeiro/KPI foi cadastrado.")
+    else:
+        rows = []
+        for nome, dados in dados_financeiros_kpis.items():
+            row = dados.copy() 
+            row["Contexto"] = nome 
+            rows.append(row)
+        
+        df_fin = pd.DataFrame(rows)
+        
+        cols_ordem = [
+            "Contexto", "Responsável", "orcamento", "custo_time_mes", 
+            "mrr", "receita_nao_recorrente", "total_despesas", "nps", 
+            "start_date", "end_date"
+        ]
+        cols_finais = [col for col in cols_ordem if col in df_fin.columns]
+        
+        st.dataframe(df_fin[cols_finais], use_container_width=True, hide_index=True)
+        
+        contexto_para_remover = st.selectbox("Selecione um contexto para remover", options=[""] + list(dados_financeiros_kpis.keys()), key="remove_fin_context")
+        if st.button("Remover Contexto Selecionado", type="secondary"):
+            if contexto_para_remover and contexto_para_remover in configs.get('dados_financeiros_kpis', {}):
+                del configs['dados_financeiros_kpis'][contexto_para_remover]
+                save_global_configs(configs) 
+                get_global_configs.clear()
+                st.success(f"Contexto '{contexto_para_remover}' removido.")
+                st.rerun()
+            elif not contexto_para_remover:
+                st.warning("Nenhum contexto selecionado para remoção.")
+
+
+# --- ABA 2: Gestão de Conteúdo ---
 with main_tab_content:
     st.subheader("Gestão de Conteúdo do Product Hub")
     
@@ -71,7 +210,7 @@ with main_tab_content:
     ])
 
     with content_tab_playbooks:
-        # ... (código existente) ...
+        # ... (O seu código para Playbooks - sem alterações) ...
         st.markdown("##### Gestão de Conteúdo dos Playbooks")
         playbooks = configs.get('playbooks', {})
         
@@ -86,7 +225,7 @@ with main_tab_content:
                     new_theme_name = new_theme_name_input.strip()
                     if new_theme_name and new_theme_content:
                         configs.setdefault('playbooks', {})[new_theme_name] = new_theme_content
-                        save_global_configs(configs)
+                        save_global_configs(configs) 
                         force_hub_reload()
                         st.rerun()
         
@@ -102,17 +241,17 @@ with main_tab_content:
                 c1, c2 = st.columns(2)
                 if c1.button("Salvar Alterações", width='stretch', key=f"save_{theme_to_edit}"):
                     configs['playbooks'][theme_to_edit] = edited_content
-                    save_global_configs(configs)
+                    save_global_configs(configs) 
                     force_hub_reload()
                     st.rerun()
                 if c2.button("❌ Remover Tema", width='stretch', type="secondary", key=f"del_{theme_to_edit}"):
                     del configs['playbooks'][theme_to_edit]
-                    save_global_configs(configs)
+                    save_global_configs(configs) 
                     force_hub_reload()
                     st.rerun()
 
     with content_tab_competencies:
-        # ... (código existente) ...
+        # ... (O seu código para Competências - sem alterações) ...
         st.markdown("##### Framework de Competências")
         st.caption("Defina as competências e descrições que serão usadas na plataforma.")
 
@@ -144,12 +283,13 @@ with main_tab_content:
         if st.button("Salvar Framework de Competências", type="primary", width='stretch'):
             configs['competency_framework']['hard_skills'] = edited_hard_skills.to_dict('records')
             configs['competency_framework']['soft_skills'] = edited_soft_skills.to_dict('records')
-            save_global_configs(configs)
+            save_global_configs(configs) 
             force_hub_reload()
             st.success("Framework de competências salvo com sucesso!")
             st.rerun()
 
     with content_tab_roles:
+        # ... (O seu código para Papéis - sem alterações) ...
         st.markdown("##### Papéis do Product Hub")
         st.caption("Adicione ou remova os papéis (funções) que podem ser atribuídos às equipas.")
         
@@ -163,7 +303,7 @@ with main_tab_content:
                 if isinstance(role, str): migrated_roles.append({"id": str(uuid.uuid4()), "name": role, "description": ""})
                 elif isinstance(role, dict) and 'id' in role: migrated_roles.append(role)
             configs['user_roles'] = migrated_roles
-            save_global_configs(configs)
+            save_global_configs(configs) 
             user_roles = migrated_roles
             st.toast("Dados de papéis foram atualizados para o novo formato.", icon="✨")
         else:
@@ -182,7 +322,7 @@ with main_tab_content:
                         new_role = {"id": str(uuid.uuid4()), "name": role_name, "description": role_description}
                         user_roles.append(new_role)
                         configs['user_roles'] = sorted(user_roles, key=lambda x: x['name'])
-                        save_global_configs(configs)
+                        save_global_configs(configs) 
                         force_hub_reload()
                         st.rerun()
         
@@ -203,7 +343,7 @@ with main_tab_content:
                             edited_name = edited_name_input.strip()
                             user_roles[i] = {"id": role['id'], "name": edited_name, "description": edited_description}
                             configs['user_roles'] = sorted(user_roles, key=lambda x: x['name'])
-                            save_global_configs(configs)
+                            save_global_configs(configs) 
                             force_hub_reload()
                             st.session_state.editing_role_id = None
                             st.rerun()
@@ -222,11 +362,10 @@ with main_tab_content:
                             if btn_cols[1].button("❌", key=f"del_role_{role['id']}", help="Remover Papel", width='stretch'):
                                 user_roles.pop(i)
                                 configs['user_roles'] = user_roles
-                                save_global_configs(configs)
+                                save_global_configs(configs) 
                                 force_hub_reload()
                                 st.rerun()
                         st.markdown(role.get('description', 'Nenhuma descrição.'), unsafe_allow_html=True)
-
 
 with main_tab_system:
     st.subheader("Configurações Gerais do Sistema")
@@ -319,6 +458,77 @@ with main_tab_system:
                     get_global_configs.clear()
                     st.success("Campos personalizados salvos com sucesso!")
                     st.rerun()
+
+                # --- NOVO BLOCO INSERIDO ---
+                # Esta seção depende de 'all_jira_custom_fields' e 'current_configs_for_display'
+                
+                st.divider()
+                st.markdown("###### 🎯 Mapeamento de Campos Estratégicos (Radar Preditivo)")
+                st.info(
+                    "Selecione quais campos personalizados devem ser usados para agrupar os dados no Radar Preditivo. "
+                    "O 'Seletor de Clientes' define o campo de agrupamento principal (strategic_grouping_field)."
+                )
+
+                # 1. Criar um mapa de NOME -> NOME (para consistência, já que vamos salvar o nome)
+                #    e uma lista de nomes para as opções.
+                custom_field_name_list = sorted([field['name'] for field in all_jira_custom_fields])
+                options_list = [""] + custom_field_name_list # Adiciona opção vazia
+
+                # 2. Obter valores atuais (os nomes dos campos)
+                current_strategic_field = current_configs_for_display.get('strategic_grouping_field', None)
+                current_project_field = current_configs_for_display.get('radar_project_field', None)
+                current_board_field = current_configs_for_display.get('radar_board_field', None)
+                
+                # 3. Calcular índices para os selectbox
+                try:
+                    index_cliente = options_list.index(current_strategic_field) if current_strategic_field in options_list else 0
+                except ValueError: index_cliente = 0
+                
+                try:
+                    index_projeto = options_list.index(current_project_field) if current_project_field in options_list else 0
+                except ValueError: index_projeto = 0
+                
+                try:
+                    index_quadro = options_list.index(current_board_field) if current_board_field in options_list else 0
+                except ValueError: index_quadro = 0
+
+                # 4. Criar os seletores
+                selected_customer_field = st.selectbox(
+                    "Seletor de Clientes (strategic_grouping_field)",
+                    options=options_list,
+                    index=index_cliente,
+                    help="Selecione o campo usado para agrupar por Cliente/Contexto no Radar Preditivo."
+                )
+                
+                selected_project_field = st.selectbox(
+                    "Seletor de Projetos (Opcional)",
+                    options=options_list,
+                    index=index_projeto,
+                    help="Selecione o campo que identifica o 'Projeto' (se for diferente do projeto Jira)."
+                )
+                
+                selected_board_field = st.selectbox(
+                    "Seletor de Quadros (Opcional)",
+                    options=options_list,
+                    index=index_quadro,
+                    help="Selecione o campo que identifica o 'Quadro' ou 'Time'."
+                )
+
+                # 5. Botão de Salvar
+                if st.button("Salvar Mapeamento Estratégico", key="save_strategic_mapping", width='stretch', type="secondary"):
+                    configs_to_save = get_global_configs()
+                    
+                    configs_to_save['strategic_grouping_field'] = selected_customer_field if selected_customer_field else None
+                    configs_to_save['radar_project_field'] = selected_project_field if selected_project_field else None
+                    configs_to_save['radar_board_field'] = selected_board_field if selected_board_field else None
+                    
+                    save_global_configs(configs_to_save)
+                    get_global_configs.clear()
+                    st.success("Mapeamento de campos estratégicos salvo com sucesso!")
+                    st.rerun()
+                
+                # --- FIM DO NOVO BLOCO ---
+
             else:
                  st.error("Não foi possível carregar os campos personalizados do Jira. Verifique a conexão e as permissões.")
         except Exception as e:
@@ -376,7 +586,7 @@ with main_tab_system:
         def clear_temp_password():
             """Limpa a senha temporária da session_state."""
             if 'temp_password_info' in st.session_state:
-                del st.session_state.temp_password_info
+                del st.session_state['temp_password_info']
         
         if 'temp_password_info' in st.session_state:
             user_email = st.session_state.temp_password_info['email']

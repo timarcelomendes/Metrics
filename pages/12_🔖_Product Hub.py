@@ -144,7 +144,7 @@ if check_session_timeout():
     st.stop()
 
 if 'jira_client' not in st.session_state:
-    user_connections = get_user_connections(st.session_state['email'])
+    user_connections = get_users_collection(st.session_state['email'])
     if not user_connections:
         st.warning("Nenhuma conexão Jira foi configurada ainda.", icon="🔌"); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Configurar sua Primeira Conexão", icon="🔗"); st.stop()
     else:

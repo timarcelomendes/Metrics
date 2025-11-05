@@ -23,3 +23,9 @@ reportlab
 streamlit-jodit
 mailersend
 sib-api-v3-sdk
+python-dateutil
+leia
+pysentimiento
+fastapi
+uvicorn[standard]
+toml

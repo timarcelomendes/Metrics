@@ -998,41 +998,101 @@ def prepare_burndown_data_by_estimation(client, sprint_obj, estimation_config, p
     }).set_index('Data')
 
 def calculate_executive_summary_metrics(issues, project_config):
-    """Calcula todas as métricas, agora com a lógica de fuso horário corrigida."""
+    """
+    Calcula todas as métricas, agora com a lógica de fuso horário corrigida
+    e com o cálculo de WIP e % em Progresso.
+    """
     if not issues:
-        return {'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0, 'schedule_adherence': 0}
+        return {
+            'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0, 
+            'schedule_adherence': 0, 'total_issues': 0, 'completed_issues': 0,
+            'total_wip': 0, 'pct_in_progress': 0
+        }
+
+    # --- Carregar Status ---
+    # Esta função espera que o 'project_config' já tenha o 'status_mapping' 
+    # (traduzido pelo jira_connector.py e passado pela página)
+    status_mapping = project_config.get('status_mapping', {})
+    done_ids = {d['id'] for d in status_mapping.get('done', []) if isinstance(d, dict) and 'id' in d}
+    initial_ids = {d['id'] for d in status_mapping.get('initial', []) if isinstance(d, dict) and 'id' in d}
+
+    # Se nenhum status estiver mapeado (configuração vazia), retorna 0
+    # (Verifica se as listas de IDs estão vazias)
+    if not done_ids and not initial_ids:
+        # AVISO CORRIGIDO: Só mostra o aviso se o mapeamento *avançado* estiver vazio
+        if not project_config.get('status_mapping'):
+             st.warning("Mapeamento de status não configurado para este projeto. Métricas operacionais serão zeradas.")
+        return {
+            'completion_pct': 0, 'deliveries_month': 0, 'avg_deadline_diff': 0, 
+            'schedule_adherence': 0, 'total_issues': len(issues), 'completed_issues': 0,
+            'total_wip': 0, 'pct_in_progress': 0
+        }
 
     total_issues = len(issues)
-    completed_issues_list = [i for i in issues if find_completion_date(i, project_config) is not None]
+    completed_issues_list = []
+    wip_issues_list = []
+
+    # --- Iterar para classificar issues ---
+    for i in issues:
+        try:
+            current_status_id = i.fields.status.id
+            
+            if current_status_id in done_ids:
+                completed_issues_list.append(i)
+            elif current_status_id not in initial_ids:
+                # Se não está 'Done' e não está 'Initial' = 'In Progress' (WIP)
+                wip_issues_list.append(i)
+            
+            # (Se estiver em initial_ids, não conta para WIP nem para Concluído)
+        except Exception:
+            pass # Ignora issues com status inválido
 
     completion_pct = (len(completed_issues_list) / total_issues) * 100 if total_issues > 0 else 0
+    
+    # --- Cálculos de WIP e % em Progresso ---
+    total_wip = len(wip_issues_list)
+    pct_in_progress = (total_wip / total_issues) * 100 if total_issues > 0 else 0
 
+    # --- Cálculos de Entregas no Mês ---
     current_month = datetime.now().month; current_year = datetime.now().year
     deliveries_month = len([
         i for i in completed_issues_list
+        # A função find_completion_date (linha 15) também usa 'status_mapping',
+        # por isso também funcionará agora.
         if (cd := find_completion_date(i, project_config)) and cd.month == current_month and cd.year == current_year
     ])
 
+    # --- Cálculos de Aderência ao Prazo ---
     date_mappings = project_config.get('date_mappings', {}); due_date_field_id = date_mappings.get('due_date_field_id')
 
     deadline_diffs = []
     if due_date_field_id:
         for i in completed_issues_list:
             if hasattr(i.fields, due_date_field_id) and getattr(i.fields, due_date_field_id):
-                due_date = pd.to_datetime(getattr(i.fields, due_date_field_id)).tz_localize(None).normalize()
+                due_date_str = getattr(i.fields, due_date_field_id)
+                if not due_date_str: continue # Pula se a data estiver vazia
+                
+                due_date = pd.to_datetime(due_date_str).tz_localize(None).normalize()
                 completion_date = find_completion_date(i, project_config)
+                
                 if completion_date:
-                    # Converte completion_date para um Timestamp do Pandas ANTES de chamar .normalize()
                     completion_date_ts = pd.to_datetime(completion_date)
                     deadline_diffs.append((completion_date_ts.normalize() - due_date).days)
 
     avg_deadline_diff = np.mean(deadline_diffs) if deadline_diffs else 0
-    schedule_adherence = calculate_schedule_adherence(issues, project_config)
+    # A sua função 'calculate_schedule_adherence' (linha 860) também depende de
+    # 'find_completion_date', pelo que também será corrigida por esta mudança.
+    schedule_adherence = calculate_schedule_adherence(issues, project_config) 
 
     return {
-        'completion_pct': completion_pct, 'deliveries_month': deliveries_month,
-        'avg_deadline_diff': avg_deadline_diff, 'schedule_adherence': schedule_adherence,
-        'total_issues': total_issues, 'completed_issues': len(completed_issues_list)
+        'completion_pct': completion_pct, 
+        'deliveries_month': deliveries_month,
+        'avg_deadline_diff': avg_deadline_diff, 
+        'schedule_adherence': schedule_adherence,
+        'total_issues': total_issues,                 # "Backlog Total"
+        'completed_issues': len(completed_issues_list),
+        'total_wip': total_wip,                   
+        'pct_in_progress': pct_in_progress            # "% em Progresso"
     }
 
 def calculate_throughput_trend(project_issues, num_weeks=4):
@@ -1298,3 +1358,108 @@ def apply_status_category_mapping(df, project_config):
     df['Categoria de Status'].fillna('Não Categorizado', inplace=True)
     
     return df
+
+def calculate_throughput_series(df_concluido):
+    """
+    Calcula a vazão (throughput) semanal a partir de um DataFrame de itens concluídos.
+
+    Argumentos:
+        df_concluido (pd.DataFrame): Um DataFrame contendo *apenas* itens concluídos.
+
+    Retorna:
+        list: Uma lista de inteiros, onde cada número representa a
+              quantidade de itens concluídos por semana (incluindo semanas com 0).
+              Retorna uma lista vazia se não houver dados.
+    """
+    if df_concluido is None or df_concluido.empty:
+        return []
+
+    # 1. Encontrar a coluna de data de conclusão (lógica baseada no Radar_Preditivo.py)
+    possible_date_cols = ['Data de Conclusão', 'Completion Date', 'Resolution Date', 'Data de Resolução', 'Done Date']
+    date_col_name = None
+    for col in possible_date_cols:
+        if col in df_concluido.columns:
+            date_col_name = col
+            break
+
+    if date_col_name is None:
+        print(f"Aviso [calculate_throughput_series]: Nenhuma coluna de data de conclusão encontrada. Colunas: {df_concluido.columns}")
+        return []
+
+    try:
+        # 2. Preparar os dados
+        df = df_concluido.copy()
+        
+        # Converte para datetime, removendo fuso horário se existir (para facilitar o resample)
+        df[date_col_name] = pd.to_datetime(df[date_col_name], errors='coerce').dt.tz_localize(None)
+        df = df.dropna(subset=[date_col_name])
+
+        if df.empty:
+            print("Aviso [calculate_throughput_series]: DataFrame vazio após limpeza de datas.")
+            return []
+
+        # 3. Definir o índice e reamostrar por semana (Weekly, terminando no Domingo)
+        df = df.set_index(date_col_name)
+        
+        # .size() conta o número de itens em cada "bin" semanal.
+        # Isso inclui semanas com 0 itens entre a primeira e a última entrega,
+        # o que é essencial para o forecast.
+        weekly_throughput_series = df.resample('W').size()
+        
+        if weekly_throughput_series.empty:
+             return []
+
+        # 4. Retornar como uma lista de valores
+        return weekly_throughput_series.tolist()
+
+    except Exception as e:
+        print(f"Erro em calculate_throughput_series: {e}")
+        return []
+
+def forecast_completion_date(items_backlog, weekly_throughput, num_simulations=10000, percentile=85):
+    """
+    Calcula a data de conclusão de um backlog usando simulação de Monte Carlo.
+    (Esta é a função de FORECAST que estava faltando)
+    """
+    
+    # --- CORREÇÃO: Filtra semanas com 0 entregas ---
+    # A simulação só deve usar semanas onde o time realmente entregou algo
+    throughput_historico_filtrado = [t for t in weekly_throughput if t > 0]
+
+    # Agora, usa a lista filtrada
+    if not throughput_historico_filtrado:
+        print("Aviso [forecast_completion_date]: Nenhum throughput > 0 encontrado. Impossível simular.")
+        return None # Não há histórico de entregas
+        
+    if items_backlog <= 0:
+        return datetime.now() # Se não há backlog, a data é agora.
+
+    try:
+        throughput_array = np.array(throughput_historico_filtrado)
+        
+        completion_weeks = []
+        for _ in range(num_simulations):
+            weeks_to_complete = 0
+            items_remaining = items_backlog
+            
+            # O loop agora é seguro, pois não contém '0'
+            while items_remaining > 0:
+                simulated_week_throughput = np.random.choice(throughput_array)
+                items_remaining -= simulated_week_throughput
+                weeks_to_complete += 1
+            
+            completion_weeks.append(weeks_to_complete)
+
+        if not completion_weeks:
+           return None 
+
+        # Calcula o percentil (ex: 85%) de semanas necessárias
+        final_weeks = np.percentile(completion_weeks, percentile)
+        
+        # Adiciona as semanas à data de hoje
+        completion_date = datetime.now() + timedelta(weeks=int(np.ceil(final_weeks)))
+        return completion_date
+        
+    except Exception as e:
+        print(f"Erro durante a simulação de Monte Carlo em forecast_completion_date: {e}")
+        return None

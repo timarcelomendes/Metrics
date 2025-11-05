@@ -40,20 +40,32 @@ from reportlab.lib.units import inch
 import unicodedata
 from stqdm import stqdm
 from security import find_user, get_project_config, get_global_configs
+from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
+from jira_connector import get_project_issues, get_jira_statuses
+
+# Em: Metrics/jira_connector.py
+
+# ... (outras importações no topo do ficheiro) ...
+# (Certifique-se que estas importações estão no topo do seu jira_connector.py)
+from security import get_project_config, get_global_configs
+from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
+from stqdm import stqdm
+import pandas as pd
+from jira import JIRA, Issue, JIRAError
+import streamlit as st
+from datetime import datetime
+# ... (fim das importações) ...
+
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
     # Renomeia internamente para usar sem o underscore
     user_data = _user_data
-
-    # Importações dentro da função para evitar problemas de dependência circular, se houver
-    from jira_connector import get_project_issues, get_jira_fields
-    from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
-
+    
     """
     Carrega, processa e enriquece os dados de um projeto Jira.
+    (MODIFICADO para incluir o tradutor de categoria de status)
     """
-    print("\n--- INICIANDO load_and_process_project_data ---") 
     project_config = get_project_config(project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
@@ -62,8 +74,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     user_enabled_standard_fields_ids = user_data.get('standard_fields', [])
     user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', [])
-    print(f"DEBUG: Standard Fields Habilitados (IDs): {user_enabled_standard_fields_ids}") 
-    print(f"DEBUG: Custom Fields Habilitados (Nomes): {user_enabled_custom_fields_names}")
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
@@ -73,17 +83,52 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         except Exception: st.session_state.project_name = project_key
 
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
+        # A sua função 'get_project_issues' (linha 351) é a correta
         raw_issues_list = get_project_issues(_jira_client, project_key)
-        issues = filter_ignored_issues(raw_issues_list, project_config)
-    print(f"DEBUG: {len(issues)} issues carregadas após filtro inicial.") 
+        
+    # --- INÍCIO DO TRADUTOR DE CONFIGURAÇÃO CENTRAL ---
+    if 'status_category_mapping' in project_config and 'status_mapping' not in project_config:
+        try:
+            with st.spinner("A traduzir mapeamento de categorias de status..."):
+                # A sua função 'get_jira_statuses' (linha 484) é a correta
+                all_statuses = get_jira_statuses(_jira_client, project_key) 
+                
+                cat_mapping = project_config['status_category_mapping']
+                initial_cats = [c.lower() for c in cat_mapping.get('initial', [])]
+                inprogress_cats = [c.lower() for c in cat_mapping.get('in_progress', [])]
+                done_cats = [c.lower() for c in cat_mapping.get('done', [])]
+                
+                new_status_mapping = {'initial': [], 'in_progress': [], 'done': []}
+                for s in all_statuses:
+                    if not hasattr(s, 'statusCategory') or not s.statusCategory:
+                        continue
+                        
+                    s_cat_name = s.statusCategory.name.lower()
+                    status_obj = {'id': s.id, 'name': s.name}
+                    
+                    if s_cat_name in initial_cats:
+                        new_status_mapping['initial'].append(status_obj)
+                    elif s_cat_name in inprogress_cats:
+                        new_status_mapping['in_progress'].append(status_obj)
+                    elif s_cat_name in done_cats:
+                        new_status_mapping['done'].append(status_obj)
+                
+                # Injeta o mapeamento traduzido no project_config
+                project_config['status_mapping'] = new_status_mapping
+                
+        except Exception as e:
+            st.error(f"Erro ao traduzir categorias de status: {e}")
+    # --- FIM DO TRADUTOR ---
 
-    if not issues: return pd.DataFrame(), []
+    # Agora o filter_ignored_issues funciona com o 'project_config' traduzido
+    issues = filter_ignored_issues(raw_issues_list, project_config)
+
+    if not issues: return pd.DataFrame(), [], project_config # Retorna a config mesmo se vazio
 
     # Mapas para campos personalizados
     all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
     user_custom_field_name_to_id_map = { name: id for id, name in all_custom_field_id_to_name_map.items() if name in user_enabled_custom_fields_names }
     strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
-    print(f"DEBUG: Mapa Nome Custom -> ID (Utilizador): {user_custom_field_name_to_id_map}")
 
     # --- MAPEAMENTO PADRÃO ID -> ATRIBUTO JIRA ---
     standard_field_id_to_attribute_map = {
@@ -94,7 +139,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         'Description': 'description', 'Environment': 'environment', 'Security Level': 'security',
         'Time Spent': 'timespent', 'Time Estimate': 'timeestimate', 'Original Estimate': 'timeoriginalestimate',
         'StatusCategory': 'statuscategory', 'Parent': 'parent',
-        # Adicione outros IDs de campos padrão aqui se faltar
     }
 
     # --- EXTRACT_VALUE ROBUSTO ---
@@ -124,9 +168,8 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                 return ', '.join(filter(None, extracted_items)) if extracted_items else None
             return str(raw_value) # Fallback
         except Exception as e:
-             print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}', Valor Bruto: '{raw_value}', Erro: {e}")
-             
-             return None 
+            print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}', Valor Bruto: '{raw_value}', Erro: {e}")
+            return None 
 
     processed_issues_data = []
     try: _ = find_completion_date
@@ -138,15 +181,14 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         try: all_project_statuses = list(set([s.name for s in _jira_client.project_statuses(project_key)]))
         except Exception:
             try: all_project_statuses = list(set([s.name for s in _jira_client.statuses()]))
-            except Exception as e: print(f"Aviso: Falha ao buscar status: {e}")
+            except Exception as e: 
+                print(f"Aviso: Falha ao buscar status: {e}")
 
     processed_by_default = {'ID', 'Issue', 'Tipo de Issue', 'Status', 'Data de Criação',
-                            'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)'}
+                             'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)'}
 
-    print("\n--- INICIANDO PROCESSAMENTO POR ISSUE ---") 
     for issue_index, issue in enumerate(stqdm(issues, desc="A processar issues")):
         fields = issue.fields
-        print(f"\nDEBUG: Processando Issue {issue.key} ({issue_index+1}/{len(issues)})")
 
         # Campos Base
         issue_data = {
@@ -156,134 +198,111 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             'Status': extract_value(getattr(fields, 'status', None), f"{issue.key}-Status"),
             'Data de Criação': extract_value(getattr(fields, 'created', None), f"{issue.key}-DataCriacao"),
         }
+        
+        # --- Cálculo de Datas e Métricas ---
+        # (find_completion_date agora usa o project_config traduzido)
         completion_date_raw = find_completion_date(issue, project_config)
         completion_date_dt = pd.to_datetime(completion_date_raw, errors='coerce')
         issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize() if pd.notna(completion_date_dt) else pd.NaT
+        
         try:
-             # Converte AMBAS as datas para Timestamp do pandas usando pd.to_datetime
-             # errors='coerce' transforma datas inválidas em NaT (Not a Time)
-             dt_conclusao_ts = pd.to_datetime(issue_data.get('Data de Conclusão'), errors='coerce')
-             dt_criacao_ts = pd.to_datetime(issue_data.get('Data de Criação'), errors='coerce')
+            dt_conclusao_ts = pd.to_datetime(issue_data.get('Data de Conclusão'), errors='coerce')
+            dt_criacao_ts = pd.to_datetime(issue_data.get('Data de Criação'), errors='coerce')
 
-             # Calcula o Lead Time apenas se ambas as datas forem válidas (não NaT)
-             if pd.notna(dt_conclusao_ts) and pd.notna(dt_criacao_ts):
-                 # A subtração de Timestamps resulta num Timedelta, .days extrai os dias
-                 issue_data['Lead Time (dias)'] = (dt_conclusao_ts - dt_criacao_ts).days
-             else:
-                 # Se alguma data for inválida ou ausente, Lead Time é None
-                 issue_data['Lead Time (dias)'] = None
+            if pd.notna(dt_conclusao_ts) and pd.notna(dt_criacao_ts):
+                issue_data['Lead Time (dias)'] = (dt_conclusao_ts - dt_criacao_ts).days
+            else:
+                issue_data['Lead Time (dias)'] = None
         except Exception as e:
-             # Captura outros erros inesperados durante a conversão ou cálculo
-             print(f"DEBUG Lead Time ERROR para {issue.key}: {e}")
-             issue_data['Lead Time (dias)'] = None
+            print(f"DEBUG Lead Time ERROR para {issue.key}: {e}")
+            issue_data['Lead Time (dias)'] = None
+            
+        # (calculate_cycle_time agora usa o project_config traduzido)
+        issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
         # --- PROCESSAMENTO CAMPOS PADRÃO ---
-        print(f"DEBUG {issue.key}: Processando Campos Padrão...")
         for field_id in user_enabled_standard_fields_ids:
             if field_id in processed_by_default or field_id in [estimation_field_id, timespent_field_id]:
-                print(f"DEBUG {issue.key}: Pulando Padrão '{field_id}' (já processado ou especial)")
                 continue
 
             attribute_name = standard_field_id_to_attribute_map.get(field_id)
-            raw_value = None # Inicializa raw_value
-            extracted_value = None # Inicializa extracted_value
-            debug_source = "" # Para saber como o valor foi obtido
+            raw_value = None 
+            extracted_value = None 
+            debug_source = "" 
 
             if attribute_name:
                 try:
                     if field_id == 'StatusCategory':
-                         raw_value = getattr(getattr(fields, 'status', None), 'statusCategory', 'NÃO ENCONTRADO')
-                         debug_source = f"via fields.status.statusCategory"
+                        raw_value = getattr(getattr(fields, 'status', None), 'statusCategory', 'NÃO ENCONTRADO')
                     else:
-                         raw_value = getattr(fields, attribute_name, 'NÃO ENCONTRADO')
-                         debug_source = f"via fields.{attribute_name}"
+                        raw_value = getattr(fields, attribute_name, 'NÃO ENCONTRADO')
                     extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
                     issue_data[field_id] = extracted_value 
                 except Exception as e:
-                     print(f"DEBUG Padrão Getattr ERROR para ID '{field_id}', Atributo '{attribute_name}', Erro: {e}")
-                     issue_data[field_id] = None
+                    print(f"DEBUG Padrão Getattr ERROR para ID '{field_id}', Atributo '{attribute_name}', Erro: {e}")
+                    issue_data[field_id] = None
             else:
                 try:
-                     raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
-                     debug_source = f"via fields.{field_id} (fallback)"
-                     extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
-                     issue_data[field_id] = extracted_value
+                    raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
+                    extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
+                    issue_data[field_id] = extracted_value
                 except Exception as e:
-                     print(f"DEBUG Padrão Fallback Getattr ERROR para ID '{field_id}', Erro: {e}")
-                     issue_data[field_id] = None
-
-            print(f"DEBUG {issue.key}: Padrão ID='{field_id}', Attr='{attribute_name or field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}', Fonte='{debug_source}'") 
+                    print(f"DEBUG Padrão Fallback Getattr ERROR para ID '{field_id}', Erro: {e}")
+                    issue_data[field_id] = None
 
         # --- PROCESSAMENTO CAMPOS PERSONALIZADOS ---
-        print(f"DEBUG {issue.key}: Processando Campos Personalizados...")
         for field_name, field_id in user_custom_field_name_to_id_map.items():
             raw_value = None
             extracted_value = None
             try:
-                 raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
-                 extracted_value = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
-                 issue_data[field_name] = extracted_value
+                raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
+                extracted_value = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
+                issue_data[field_name] = extracted_value
             except Exception as e:
-                 print(f"DEBUG Custom Getattr ERROR para Nome '{field_name}', ID '{field_id}', Erro: {e}")
-                 issue_data[field_name] = None
-            print(f"DEBUG {issue.key}: Custom Nome='{field_name}', ID='{field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") 
+                print(f"DEBUG Custom Getattr ERROR para Nome '{field_name}', ID '{field_id}', Erro: {e}")
+                issue_data[field_name] = None
 
         # Campo Estratégico
         if strategic_field_name and strategic_field_id:
-             if strategic_field_name not in issue_data:
-                raw_value = getattr(fields, strategic_field_id, 'NÃO ENCONTRADO')
-                extracted_value = extract_value(raw_value, f"{issue.key}-{strategic_field_name}({strategic_field_id})")
-                issue_data[strategic_field_name] = extracted_value
-                print(f"DEBUG {issue.key}: Estratégico Nome='{strategic_field_name}', ID='{strategic_field_id}', Raw='{str(raw_value)[:100]}...', Extracted='{extracted_value}'") 
-             else:
-                 print(f"DEBUG {issue.key}: Estratégico '{strategic_field_name}' já estava presente.")
+                if strategic_field_name not in issue_data:
+                    raw_value = getattr(fields, strategic_field_id, 'NÃO ENCONTRADO')
+                    extracted_value = extract_value(raw_value, f"{issue.key}-{strategic_field_name}({strategic_field_id})")
+                    issue_data[strategic_field_name] = extracted_value
 
-        # Tempo em Status (sem debug extra aqui, já tem try-except interno)
+        # Tempo em Status
         if should_calc_time_in_status and all_project_statuses:
             time_in_status_data = calculate_time_in_status(issue, all_project_statuses, issue_data['Data de Conclusão'])
             for status_name, time_days in time_in_status_data.items():
                 issue_data[f'Tempo em: {status_name}'] = time_days
 
         processed_issues_data.append(issue_data)
-
+        
     # 1. Cria o DataFrame PRIMEIRO
     df = pd.DataFrame(processed_issues_data)
-    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---")
-    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}")
 
     # 2. AGORA executa a lógica de rename/verificação de Estimativa/Tempo Gasto
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
     rename_map_specific = {}
-    ids_to_drop_specific = []
-    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:")
+    ids_to_drop_specific = [] 
 
-    # Estimativa
-    # AGORA a verificação 'in df.columns' é segura
     if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
-         if estimation_name not in df.columns:
-              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'")
-              rename_map_specific[estimation_field_id] = estimation_name
-         else:
-              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") 
-              ids_to_drop_specific.append(estimation_field_id)
+            if estimation_name not in df.columns:
+                rename_map_specific[estimation_field_id] = estimation_name
+            else:
+                ids_to_drop_specific.append(estimation_field_id)
 
-    # Tempo Gasto
     if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
-         if timespent_name not in df.columns:
-              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'")
-              rename_map_specific[timespent_field_id] = timespent_name
-         else:
-              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") 
-              ids_to_drop_specific.append(timespent_field_id)
+            if timespent_name not in df.columns:
+                rename_map_specific[timespent_field_id] = timespent_name
+            else:
+                ids_to_drop_specific.append(timespent_field_id)
 
     if rename_map_specific:
         df.rename(columns=rename_map_specific, inplace=True)
-        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") 
 
     if ids_to_drop_specific:
         df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
-        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") 
 
     # --- GARANTIR COLUNAS E RENOMEAR ---
     all_expected_standard_ids = user_enabled_standard_fields_ids
@@ -293,94 +312,40 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     if estimation_field_id: expected_cols_before_rename.add(estimation_field_id)
     if timespent_field_id: expected_cols_before_rename.add(timespent_field_id)
 
-    missing_cols_added = []
     for col in expected_cols_before_rename:
         if col not in df.columns:
             df[col] = None
-            missing_cols_added.append(col)
-    if missing_cols_added: print(f"DEBUG: Colunas adicionadas com None (antes rename): {missing_cols_added}") 
 
-    # Renomeia os IDs padrão para Nomes Amigáveis
-    standard_fields_map = st.session_state.get('standard_fields_map', {}) # Carrega o mapa ID -> Nome Amigável
+    standard_fields_map = st.session_state.get('standard_fields_map', {})
     rename_map_standard = {}
-    print("DEBUG: Iniciando rename de campos Padrão:") 
-    for field_id in user_enabled_standard_fields_ids: # Usa a lista de IDs habilitados
-         friendly_name = standard_fields_map.get(field_id)
-         if friendly_name and field_id in df.columns and friendly_name != field_id:
-              print(f"DEBUG: Renomeando Padrão '{field_id}' para '{friendly_name}'") 
-              rename_map_standard[field_id] = friendly_name
-         elif friendly_name and friendly_name != field_id and friendly_name not in df.columns:
-              print(f"DEBUG: Campo Padrão '{field_id}' não carregado, mas Nome Amigável '{friendly_name}' esperado. Adicionando coluna com None.") 
-              df[friendly_name] = None 
-         elif field_id not in standard_fields_map:
-              print(f"DEBUG: ID Padrão '{field_id}' não encontrado no standard_fields_map. Será mantido como ID.") 
+    for field_id in user_enabled_standard_fields_ids:
+            friendly_name = standard_fields_map.get(field_id)
+            if friendly_name and field_id in df.columns and friendly_name != field_id:
+                rename_map_standard[field_id] = friendly_name
+            elif friendly_name and friendly_name != field_id and friendly_name not in df.columns:
+                df[friendly_name] = None 
 
     df.rename(columns=rename_map_standard, inplace=True)
-    print(f"DEBUG: Mapa de rename Padrão aplicado: {rename_map_standard}") 
 
-    df = pd.DataFrame(processed_issues_data)
-    print("\n--- PROCESSAMENTO POR ISSUE CONCLUÍDO ---") 
-    print(f"DEBUG: Colunas no DataFrame ANTES de garantir/renomear: {df.columns.tolist()}") 
-
-    # Renomeia colunas de Estimativa/Tempo Gasto para seus nomes amigáveis, SE NECESSÁRIO
-    estimation_name = estimation_config.get('name') if estimation_config else None
-    timespent_name = timespent_config.get('name') if timespent_config else None
-    rename_map_specific = {}
-    ids_to_drop_specific = [] # Para remover IDs que não serão renomeados porque o nome já existe
-    print("DEBUG: Iniciando rename/verificação de campos Estimativa/Tempo:") 
-
-    # Estimativa
-    if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
-         if estimation_name not in df.columns:
-              print(f"DEBUG: Renomeando Estimativa '{estimation_field_id}' para '{estimation_name}'") 
-              rename_map_specific[estimation_field_id] = estimation_name
-         else:
-              print(f"DEBUG: Coluna Estimativa '{estimation_name}' já existe. Marcando ID '{estimation_field_id}' para remoção.") 
-              ids_to_drop_specific.append(estimation_field_id)
-
-    # Tempo Gasto
-    if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
-         if timespent_name not in df.columns:
-              print(f"DEBUG: Renomeando Tempo Gasto '{timespent_field_id}' para '{timespent_name}'") 
-              rename_map_specific[timespent_field_id] = timespent_name
-         else:
-              print(f"DEBUG: Coluna Tempo Gasto '{timespent_name}' já existe. Marcando ID '{timespent_field_id}' para remoção.") 
-              ids_to_drop_specific.append(timespent_field_id)
-
-    if rename_map_specific:
-        df.rename(columns=rename_map_specific, inplace=True)
-        print(f"DEBUG: Mapa de rename Específico aplicado: {rename_map_specific}") 
-
-    if ids_to_drop_specific:
-        df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
-        print(f"DEBUG: Colunas de ID específicas removidas (pois nome já existia): {ids_to_drop_specific}") 
-
-    # Garante que as colunas finais esperadas (com nomes amigáveis) existam
     final_expected_col_names = set(list(processed_by_default) +
-                                    [standard_fields_map.get(fid, fid) for fid in all_expected_standard_ids] + # Usa nomes amigáveis ou IDs se mapa falhar
-                                    all_expected_custom_names)
+                                     [standard_fields_map.get(fid, fid) for fid in all_expected_standard_ids] + 
+                                     all_expected_custom_names)
     if strategic_field_name: final_expected_col_names.add(strategic_field_name)
     if estimation_name: final_expected_col_names.add(estimation_name)
     if timespent_name: final_expected_col_names.add(timespent_name)
     if should_calc_time_in_status:
         for status_name in all_project_statuses: final_expected_col_names.add(f'Tempo em: {status_name}')
 
-    missing_cols_final_added = [] 
     for col_name in final_expected_col_names:
-         if col_name not in df.columns:
-              df[col_name] = None
-              missing_cols_final_added.append(col_name)
-    if missing_cols_final_added: print(f"DEBUG: Colunas finais adicionadas com None (pós rename): {missing_cols_final_added}") 
+            if col_name not in df.columns:
+                df[col_name] = None
 
-
-    # Seleciona e reordena as colunas finais que REALMENTE existem no DF
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
-    print(f"DEBUG: Colunas FINAIS no DataFrame (após rename e garantia): {df.columns.tolist()}") 
-    print(f"DEBUG: Exemplo de 1a linha de dados: {df.iloc[0].to_dict() if not df.empty else 'DataFrame Vazio'}") 
-    print("--- FINALIZANDO load_and_process_project_data ---") 
 
-    return df, raw_issues_list
+    # --- ALTERAÇÃO PRINCIPAL ---
+    # Retorna o DF, as issues filtradas E a configuração traduzida
+    return df, issues, project_config
 
 def apply_filters(df, filters):
     """Aplica uma lista de filtros a um DataFrame de forma segura (VERSÃO CORRIGIDA)."""
@@ -1734,7 +1699,7 @@ def generate_ai_risk_assessment(project_name, metrics_summary):
         st.error(f"Erro ao gerar análise de riscos: {e}")
         return {"risk_level": "Erro", "risks": [f"Erro na comunicação com a API: {e}"]}
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_ai_rag_status(project_name, metrics_summary):
     """
     Usa a API de IA preferida do utilizador para analisar métricas e determinar
@@ -1891,7 +1856,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
     smtp_configs = get_global_smtp_configs()
 
     if not smtp_configs or not smtp_configs.get('provider') or not smtp_configs.get('from_email'):
-        print("DEBUG: Configurações globais de SMTP incompletas ou não encontradas.")
         return False, "Falha: Configurações globais de SMTP incompletas ou não encontradas."
 
     provider = smtp_configs.get('provider')
@@ -1956,11 +1920,9 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 message.attachment = attachedFile
 
             response = sg.send(message)
-            print(f"DEBUG: Resposta do SendGrid - Status {response.status_code}")
             is_success = 200 <= response.status_code < 300
             return is_success, f"Status SendGrid: {response.status_code}"
         except Exception as e:
-            print(f"DEBUG: Erro ao enviar com SendGrid - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via SendGrid: {e}"
 
     # --- Lógica Gmail (SMTP) (Não suporta templates, sempre usa HTML) ---
@@ -1993,17 +1955,14 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 server.starttls() 
                 server.login(from_email, app_password) 
                 server.sendmail(from_email, to_address, msg.as_string()) 
-                print(f"DEBUG: E-mail enviado com sucesso via Gmail para {to_address}")
 
             return True, "E-mail enviado com sucesso via Gmail."
         except Exception as e:
-             print(f"DEBUG: Erro inesperado ao enviar com Gmail - {e}")
              return False, f"Ocorreu um erro inesperado ao enviar e-mail via Gmail: {e}"
 
     # --- Lógica Mailersend ---
     elif provider == 'Mailersend':
         try:
-            # (Código de autenticação Mailersend...)
             from mailersend import Mailersend, Email, Recipient, Attachment
             api_key_encrypted = smtp_configs.get('mailersend_api_key_encrypted')
             if not api_key_encrypted:
@@ -2038,7 +1997,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 mail.set_attachments([att])
 
             response_dict, status_code = ms.email.send(mail.get_params())
-            print(f"DEBUG: Resposta do Mailersend - Status {status_code}, Body: {response_dict}")
 
             is_success = 200 <= status_code < 300 
             if is_success:
@@ -2047,7 +2005,6 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 error_msg = response_dict.get('message', 'Erro desconhecido')
                 return False, f"Falha no envio pelo Mailersend (Status: {status_code}): {error_msg}"
         except Exception as e:
-            print(f"DEBUG: Erro ao enviar com Mailersend - {e}")
             return False, f"Ocorreu um erro ao enviar e-mail via Mailersend: {e}"
 
     # --- Lógica Brevo (O if/else já estava correto) ---
@@ -2092,15 +2049,12 @@ def send_email_with_attachment(to_address, subject, body, attachment_bytes=None,
                 send_smtp_email.attachment = [attachment]
 
             api_response = api_instance.send_transac_email(send_smtp_email)
-            print(f"DEBUG: Resposta do Brevo - {api_response}")
             
             return True, "E-mail enviado com sucesso via Brevo."
         except Exception as e:
-            print(f"DEBUG: Erro inesperado ao enviar com Brevo - {e}")
             return False, f"Ocorreu um erro inesperado ao enviar e-mail via Brevo: {e}"
 
     else:
-        print(f"DEBUG: Provedor de e-mail desconhecido ou não configurado: {provider}")
         return False, f"Provedor de e-mail '{provider}' não configurado ou inválido nas configurações globais."
     
 def is_valid_url(url):
@@ -2838,3 +2792,115 @@ def get_ai_page_summary_and_faq(page_name, page_content):
     except Exception as e:
         st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
         return "Ocorreu uma falha ao tentar gerar a análise. Por favor, tente novamente."
+
+def get_ai_sentiment_analysis(project_name, issues_list, max_items=50, max_comments_per_issue=3):
+    """
+    Usa a IA para analisar o sentimento geral de uma lista de issues (títulos, descrições, e os N últimos comentários).
+    Retorna um dicionário com sentimento, emoji, confiança e justificativa.
+    """
+    user_data = find_user(st.session_state['email'])
+    provider = user_data.get('ai_provider_preference', 'Google Gemini')
+    model_client = _get_ai_client_and_model(provider, user_data)
+    
+    if not model_client:
+        return {"sentiment": "Erro", "emoji": "⚪", "confidence": "N/A", "justification": "Cliente de IA não configurado."}
+
+    # 1. Extrair contexto dos issues (mais recentes primeiro)
+    context_snippets = []
+    total_context_len = 0
+    # Limite de segurança para o tamanho total do prompt
+    MAX_CONTEXT_LEN = 15000 
+
+    for issue in reversed(issues_list):
+        if total_context_len >= MAX_CONTEXT_LEN or len(context_snippets) >= max_items:
+            break
+        
+        try:
+            snippet = f"--- Issue {issue.key} ({issue.fields.issuetype.name}) ---\n"
+            snippet += f"Título: {issue.fields.summary}\n"
+            
+            # Adiciona descrição (se houver) e limita o tamanho
+            if issue.fields.description:
+                desc_clean = re.sub(r'\s+', ' ', str(issue.fields.description)).strip()
+                snippet += f"Descrição: {desc_clean[:200]}...\n"
+            
+            # Adiciona os N comentários MAIS RECENTES
+            if hasattr(issue.fields, 'comment') and issue.fields.comment.comments:
+                
+                # Pega os últimos 'max_comments_per_issue' comentários
+                comments_to_add = issue.fields.comment.comments[-max_comments_per_issue:]
+                
+                if comments_to_add:
+                    snippet += f"Últimos {len(comments_to_add)} Comentários:\n"
+                    for comment in comments_to_add:
+                        author = getattr(comment.author, 'displayName', 'Usuário')
+                        comment_clean = re.sub(r'\s+', ' ', str(comment.body)).strip()
+                        # Limita cada comentário
+                        snippet += f"  - [{author}]: {comment_clean[:150]}...\n"
+            
+            # Verifica se o novo snippet excede o limite total
+            if (total_context_len + len(snippet)) <= MAX_CONTEXT_LEN:
+                context_snippets.append(snippet)
+                total_context_len += len(snippet)
+            else:
+                # Se adicionar este snippet estoura o limite, paramos
+                break
+                
+        except Exception:
+            pass # Pula issues que falham na leitura
+    
+    if not context_snippets:
+        return {"sentiment": "Neutro", "emoji": "😐", "confidence": "Alta", "justification": "Não há itens ou comentários suficientes para análise."}
+
+    # 2. Criar o Prompt Melhorado
+    full_context = "\n".join(context_snippets)
+    prompt = f"""
+    Aja como um Analista de QA e Product Owner Sênior. Analise os seguintes trechos de issues (títulos, descrições e comentários recentes) do projeto "{project_name}".
+
+    **Dados das Issues:**
+    {full_context}
+
+    **Sua Tarefa:**
+    1.  Determine o sentimento GERAL predominante (Positivo, Negativo ou Neutro).
+    2.  Preste atenção especial ao tom dos comentários. Procure por sinais de frustração (ex: 'ainda não funciona', 'lento', 'demorando') ou satisfação (ex: 'obrigado', 'perfeito', 'resolvido').
+    3.  Baseie sua análise também no *tipo* de trabalho (ex: muitos 'Bugs' podem indicar um sentimento negativo, mesmo que os comentários sejam neutros).
+    4.  Atribua um nível de confiança (Alta, Média, Baixa) à sua análise.
+    5.  Forneça uma breve justificativa (uma frase) para sua classificação.
+    6.  Forneça um emoji que represente o sentimento (😃, 😠, 😐).
+
+    **Formato de Saída (Obrigatório - Responda APENAS com este objeto JSON):**
+    {{
+      "sentiment": "Positivo|Negativo|Neutro",
+      "emoji": "😃|😠|😐",
+      "confidence": "Alta|Média|Baixa",
+      "justification": "Sua justificativa de uma frase aqui."
+    }}
+    """
+
+    # 3. Chamar a IA
+    try:
+        cleaned_response = ""
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            # Tenta extrair o JSON mesmo que a IA adicione marcadores
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if match:
+                cleaned_response = match.group(0)
+            else:
+                # Se não encontrar JSON, é uma resposta de fallback/erro
+                cleaned_response = f'{{"sentiment": "Erro", "emoji": "⚪", "confidence": "N/A", "justification": "Resposta inesperada da IA: {response.text}"}}'
+        
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            cleaned_response = response.choices[0].message.content
+        
+        return json.loads(cleaned_response)
+    
+    except json.JSONDecodeError:
+        return {"sentiment": "Erro", "emoji": "⚪", "confidence": "N/A", "justification": f"A IA retornou uma resposta em formato inválido (não-JSON). Resposta: {cleaned_response}"}
+    except Exception as e:
+        return {"sentiment": "Erro", "emoji": "⚪", "confidence": "N/A", "justification": f"Falha na API de IA: {e}"}

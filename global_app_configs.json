@@ -47,5 +47,20 @@
             "password_recovery": "1",
             "welcome": ""
         }
-    }
+    },
+    "dados_financeiros_kpis": {
+        "Apex Brasil": {
+            "responsavel": "Bruna",
+            "start_date": "2025-10-01",
+            "end_date": "2025-12-31",
+            "orcamento": 60000.0,
+            "custo_time_mes": 34000.0,
+            "mrr": 47000.0,
+            "receita_nao_recorrente": 11000.0,
+            "total_despesas": 36000.0,
+            "nps": 9
+        }
+    },
+    "radar_project_field": "Projeto da Atlassian",
+    "radar_board_field": null
 }
