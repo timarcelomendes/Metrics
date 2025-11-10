@@ -6,14 +6,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import uuid
 import json
-from jira_connector import *
 from metrics_calculator import *
 from config import *
 from utils import *
 from security import *
 from pathlib import Path
 import importlib
-import jira_connector
 from datetime import datetime, timedelta
 import copy
 
@@ -28,9 +26,9 @@ else:
 
 # --- Verificações de segurança e sessão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if check_session_timeout():
-    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡"); st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
@@ -42,8 +40,18 @@ def ensure_project_data_is_loaded():
     if 'dynamic_df' not in st.session_state or st.session_state.get('dynamic_df') is None:
         project_key = st.session_state.get('project_key')
         if project_key and 'jira_client' in st.session_state:
-            df = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
-            st.session_state.dynamic_df = df
+        # 1. Busca os dados do utilizador (necessário para a nova função)
+            user_data = find_user(st.session_state['email'])
+            
+            # 2. Chama a função correta (de utils.py)
+            df_loaded, raw_issues, proj_config = load_and_process_project_data(
+                st.session_state.jira_client, 
+                project_key,
+                user_data # <--- Passa os dados do utilizador
+            )
+            
+            # 3. Guarda o dataframe na sessão
+            st.session_state.dynamic_df = df_loaded
             st.session_state.loaded_project_key = project_key
 
 def add_chart_callback():
@@ -128,21 +136,35 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, placeholder="Escolha um projeto...")
     if selected_project_name:
         if st.button("Visualizar Dashboard", width='stretch', type="primary"):
-            importlib.reload(jira_connector)
+            # importlib.reload(jira_connector) # Removido
             project_key = projects[selected_project_name]
             save_last_project(st.session_state['email'], project_key)
             st.session_state.project_key = project_key
             st.session_state.project_name = selected_project_name
-            df = jira_connector.load_and_process_project_data(st.session_state.jira_client, project_key)
-            st.session_state.dynamic_df = df
+            
+            # 1. Busca os dados do utilizador
+            user_data = find_user(st.session_state['email'])
+            
+            # 2. Chama a função correta (de utils.py)
+            df_loaded, raw_issues, proj_config = load_and_process_project_data(
+                st.session_state.jira_client, 
+                project_key,
+                user_data # Passa os dados do utilizador
+            )
+            
+            # 3. Guarda o dataframe na sessão
+            st.session_state.dynamic_df = df_loaded
+            st.session_state.raw_issues_for_fluxo = raw_issues # Bónus: guarda as issues brutas
+            
             st.session_state.loaded_project_key = project_key
             st.rerun()
+            
     st.divider()
     if st.button("Logout", width='stretch', type='secondary'):
         email_to_remember = st.session_state.get('remember_email', '')
         for key in list(st.session_state.keys()): del st.session_state[key]
         if email_to_remember: st.session_state['remember_email'] = email_to_remember
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 df = st.session_state.get('dynamic_df')

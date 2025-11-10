@@ -10,7 +10,6 @@ import uuid
 import base64
 from jira import JIRA
 import google.generativeai as genai
-from security import find_user, decrypt_token, get_project_config, get_global_configs
 from datetime import datetime, date, timedelta
 import openai
 from sklearn.linear_model import LinearRegression
@@ -30,7 +29,6 @@ import base64
 import requests
 from config import COLOR_THEMES
 from sklearn.linear_model import LinearRegression
-from datetime import datetime, date, timedelta
 import html
 from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -39,32 +37,17 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 import unicodedata
 from stqdm import stqdm
-from security import find_user, get_project_config, get_global_configs
-from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
-from jira_connector import get_project_issues, get_jira_statuses
-
-# Em: Metrics/jira_connector.py
-
-# ... (outras importações no topo do ficheiro) ...
-# (Certifique-se que estas importações estão no topo do seu jira_connector.py)
-from security import get_project_config, get_global_configs
-from metrics_calculator import filter_ignored_issues, find_completion_date, calculate_cycle_time, calculate_time_in_status
-from stqdm import stqdm
-import pandas as pd
-from jira import JIRA, Issue, JIRAError
-import streamlit as st
-from datetime import datetime
-# ... (fim das importações) ...
-
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
+
+    from jira_connector import get_project_issues, get_jira_statuses
+    from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
     # Renomeia internamente para usar sem o underscore
     user_data = _user_data
     
     """
     Carrega, processa e enriquece os dados de um projeto Jira.
-    (MODIFICADO para incluir o tradutor de categoria de status)
     """
     project_config = get_project_config(project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
@@ -343,7 +326,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
 
-    # --- ALTERAÇÃO PRINCIPAL ---
     # Retorna o DF, as issues filtradas E a configuração traduzida
     return df, issues, project_config
 
@@ -2682,6 +2664,106 @@ def get_ai_team_performance_analysis(team_performance_df):
     except Exception as e:
         st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
         return "Ocorreu uma falha ao tentar gerar a análise. Por favor, tente novamente."
+    
+def get_ai_global_dashboard_analysis(criados_df, encerrados_df, provider):
+    """
+    Analisa os dataframes de issues criadas e encerradas e gera uma
+    segregação qualitativa dos tipos de trabalho, focada em padrões.
+    """
+    # (Atenção: Esta função requer que 'find_user' e '_get_ai_client_and_model' 
+    # estejam definidos neste mesmo arquivo, o que já deve estar)
+    user_data = find_user(st.session_state['email'])
+    model_client = _get_ai_client_and_model(provider, user_data)
+    
+    if not model_client:
+        return "Cliente de IA não configurado. Por favor, verifique a sua chave de API na página 'Minha Conta'."
+
+    # Prepara resumos de texto, focando na descrição
+    # Limita a 30 itens para não sobrecarregar o prompt
+    criados_sample = criados_df.head(100)
+    encerrados_sample = encerrados_df.head(100)
+    
+    # Filtra por descrições não nulas
+    criados_summary = "\n".join(
+        [f"- TIPO: {row['Issue Type']}, DESCRIÇÃO: {str(row['Description'])[:150]}..."
+         for _, row in criados_sample.iterrows() if pd.notna(row['Description']) and str(row['Description']).strip()]
+    )
+    
+    encerrados_summary = "\n".join(
+        [f"- TIPO: {row['Issue Type']}, DESCRIÇÃO: {str(row['Description'])[:150]}..."
+         for _, row in encerrados_sample.iterrows() if pd.notna(row['Description']) and str(row['Description']).strip()]
+    )
+
+    if not criados_summary and not encerrados_summary:
+        return "Não há descrições de issues suficientes para uma análise qualitativa."
+
+    # --- PROMPT MELHORADO (FOCO EM PADRÕES) ---
+    prompt = f"""
+    Aja como um Analista de PMO especialista em análise qualitativa de dados.
+    A sua tarefa é analisar uma amostra de issues CRIADAS e ENCERRADAS recentemente.
+
+    O seu objetivo é encontrar **padrões emergentes** e **agrupar (clusterizar)**
+    as issues por "assuntos" ou "categorias" com base no conteúdo das suas
+    descrições, e não apenas no 'Tipo de Issue' (Bug, Task).
+
+    **ITENS CRIADOS RECENTEMENTE (Amostra):**
+    {criados_summary if criados_summary else "Nenhum"}
+
+    **ITENS ENCERRADOS RECENTEMENTE (Amostra):**
+    {encerrados_summary if encerrados_summary else "Nenhum"}
+
+    ---
+    **SUA ANÁLISE (Responda em Markdown):**
+
+    ### 🤖 Análise de Padrões e Categorias
+
+    **1. Categorias de Itens Criados:**
+    (Analise os itens criados e identifique de 2 a 4 categorias de assuntos.
+    Para CADA categoria, dê um nome para o padrão e cite 1-2 exemplos de
+    descrição que justifiquem o agrupamento.)
+
+    * **Categoria/Padrão 1: (ex: "Ajustes de UI/UX")**
+        * *Justificativa:* (ex: "Múltiplas solicitações para alterar cores,
+            posicionamento de botões e textos de ajuda.")
+    * **Categoria/Padrão 2: (ex: "Performance e Débito Técnico")**
+        * *Justificativa:* (ex: "Identificadas issues sobre lentidão em
+            relatórios e necessidade de refatoração de código.")
+    * **(Crie outras categorias que encontrar...)**
+
+    **2. Categorias de Itens Encerrados:**
+    (Faça o mesmo para os itens encerrados. Onde o esforço da equipa foi
+    realmente gasto?)
+
+    * **Categoria/Padrão 1: (ex: "Correção de Bugs Críticos")**
+        * *Justificativa:* (ex: "Foco claro em resolver problemas que
+            impediam o login ou o pagamento.")
+    * **Categoria/Padrão 2: (ex: "Demandas de Clientes Específicos")**
+        * *Justificativa:* (ex: "Várias entregas relacionadas a relatórios
+            personalizados para o 'Cliente X'.")
+    * **(Crie outras categorias que encontrar...)**
+
+    **3. Insights (Padrões Ocultos):**
+    (O que os padrões revelam? Há algum "match" interessante?
+    Ex: "O padrão 'Ajustes de UI' nos itens criados sugere que a equipa de
+    design está a fazer uma nova revisão, enquanto os itens encerrados
+    mostram que a equipa de dev ainda está focada em 'Bugs Críticos'
+    da versão anterior.")
+    """
+    # --- FIM DO PROMPT ---
+
+    try:
+        if provider == "Google Gemini":
+            response = model_client.generate_content(prompt)
+            return response.text
+        else: # OpenAI
+            response = model_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao comunicar com a IA: {e}")
+        return "Falha ao gerar análise de IA."
     
 def calculate_kpi_value(op, field, df):
     """

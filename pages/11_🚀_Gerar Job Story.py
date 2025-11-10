@@ -138,10 +138,10 @@ st.markdown("Crie histórias de usuário a partir de uma tela do Figma ou de uma
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão Jira", icon="🔗"); st.stop()
 
@@ -156,7 +156,7 @@ with st.sidebar:
         st.markdown(f"🔐 Logado como: **{st.session_state['email']}**")
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- Inicialização robusta do Estado da Sessão ---
 if 'generated_story' not in st.session_state: st.session_state.generated_story = {}

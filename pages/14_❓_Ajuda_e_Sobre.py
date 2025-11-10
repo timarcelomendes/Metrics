@@ -19,7 +19,7 @@ def get_app_pages():
     app_root = Path(__file__).parent.parent
 
     # Adiciona a página principal
-    main_page_path = app_root / "1_🔑_Autenticação.py"
+    main_page_path = app_root / "0_🔑_Autenticação.py"
     if main_page_path.exists():
         pages["1_🔑_Autenticação"] = main_page_path
 

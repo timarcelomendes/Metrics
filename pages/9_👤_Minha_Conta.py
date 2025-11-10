@@ -13,10 +13,10 @@ st.header("👤 Minha Conta", divider='rainbow')
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
@@ -40,7 +40,7 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- ESTRUTURA DE ABAS PRINCIPAL ---
 tab_perfil, tab_campos, tab_ai, tab_tokens = st.tabs(["👤 Perfil e Senha", "Jira: Campos Dinâmicos", "Configurações de AI", "🔑 Tokens e Credenciais"])

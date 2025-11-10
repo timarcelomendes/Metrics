@@ -52,10 +52,10 @@ else:
 
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 if 'jira_client' not in st.session_state:
     st.warning("Nenhuma conexão Jira está ativa para esta sessão.", icon="⚡")
     st.info("Por favor, ative uma das suas conexões guardadas para carregar os dados.")
@@ -95,7 +95,7 @@ with st.sidebar:
             email_to_remember = st.session_state.get('remember_email', '')
             for key in list(st.session_state.keys()): del st.session_state[key]
             if email_to_remember: st.session_state['remember_email'] = email_to_remember
-            st.switch_page("1_🔑_Autenticação.py")
+            st.switch_page("0_🔑_Autenticação.py")
 
 # --- BLOCO 3: LÓGICA PRINCIPAL E PREPARAÇÃO DE DADOS ---
 df = st.session_state.get('dynamic_df')

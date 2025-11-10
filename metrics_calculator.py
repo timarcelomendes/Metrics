@@ -1,4 +1,5 @@
-# metrics_calculator.py (VERSÃO CORRIGIDA E SEM DUPLICADOS)
+# metrics_calculator.py
+
 import streamlit as st
 import dateutil.parser
 import pandas as pd
@@ -515,6 +516,7 @@ def prepare_burndown_data(client, sprint_obj, estimation_config, project_config)
     }).set_index('Data')
 
 def prepare_cfd_data(issues, start_date, end_date):
+    from jira_connector import get_jira_statuses
     """
     Prepara os dados para o Diagrama de Fluxo Cumulativo (CFD), com a lógica de
     fuso horário corrigida.

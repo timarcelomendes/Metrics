@@ -284,11 +284,11 @@ st.markdown("Respostas diretas sobre riscos, finanças e alinhamento estratégic
 # --- Bloco de Autenticação e Conexão ---
 try:
     if 'email' not in st.session_state:
-        st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+        st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
     if check_session_timeout():
         st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-        st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+        st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
         st.stop()
 
     if 'jira_client' not in st.session_state:

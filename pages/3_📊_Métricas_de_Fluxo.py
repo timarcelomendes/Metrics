@@ -26,12 +26,12 @@ st.header("📊 Métricas de Fluxo e Performance da Equipe", divider='rainbow')
 
 # --- Bloco de Autenticação e Conexão ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
     # Usa uma f-string para formatar a mensagem com o valor da variável
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 
 if 'jira_client' not in st.session_state:
@@ -85,17 +85,21 @@ with st.sidebar:
             st.session_state.start_date_fluxo, st.session_state.end_date_fluxo = date_range[0], date_range[1]
         
     if st.button("Analisar / Atualizar Dados", width='stretch', type="primary"):
-            with st.spinner("A carregar e processar dados do Jira..."):
-                # Busca as configs do utilizador ANTES de chamar a função
-                user_data = find_user(st.session_state['email'])
-                df_loaded, raw_issues = load_and_process_project_data(
-                    st.session_state.jira_client,
-                    st.session_state.project_key,
-                    user_data # Passa as configs para invalidar o cache
-                )
-                st.session_state.dynamic_df = df_loaded
-                st.session_state.raw_issues_for_fluxo = raw_issues
-            st.rerun()
+        with st.spinner("A carregar e processar dados do Jira..."):
+            # Busca as configs do utilizador ANTES de chamar a função
+            user_data = find_user(st.session_state['email'])
+            
+            # --- CORREÇÃO DA VARIÁVEL E INDENTAÇÃO ---
+            df_loaded, raw_issues, project_config = load_and_process_project_data(
+                st.session_state.jira_client, 
+                st.session_state.project_key, # <-- Variável correta
+                user_data
+            )
+            
+            st.session_state.dynamic_df = df_loaded
+            st.session_state.raw_issues_for_fluxo = raw_issues
+            
+        st.rerun()
  
     if st.button("Logout", width='stretch', type='secondary'):
         email_to_remember = st.session_state.get('remember_email', '')
@@ -103,7 +107,7 @@ with st.sidebar:
             del st.session_state[key]
         if email_to_remember:
             st.session_state['remember_email'] = email_to_remember
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- LÓGICA PRINCIPAL DA PÁGINA ---
 df = st.session_state.get('dynamic_df')

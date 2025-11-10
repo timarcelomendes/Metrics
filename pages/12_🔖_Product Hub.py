@@ -136,11 +136,11 @@ st.markdown("<p style='text-align: center; font-size: 1.1rem; color: #525f7f;'>B
 st.markdown("---")
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 
 if 'jira_client' not in st.session_state:
@@ -168,7 +168,7 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True, type='secondary'):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- ABAS PRINCIPAIS ---
 selected_main_tab = option_menu(

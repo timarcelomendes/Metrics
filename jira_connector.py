@@ -426,64 +426,6 @@ def get_issue_count(jira_client, jql):
     except Exception as e:
         return str(e)
 
-# --- FUNÇÃO PRINCIPAL DE PROCESSAMENTO DE DADOS ---
-
-def load_and_process_project_data(jira_client, project_key):
-    """Carrega e processa os dados de um projeto do Jira, retornando um DataFrame."""
-    
-    @st.cache_data(ttl=3600)
-    def get_project_issues_cached(p_key):
-        return get_project_issues(jira_client, p_key)
-
-    with st.spinner(f"Carregando e processando dados do projeto {project_key}..."):
-        issues = get_project_issues_cached(project_key)
-        if not issues:
-            st.warning("Nenhuma issue encontrada para este projeto.")
-            return pd.DataFrame()
-
-        project_config = get_project_config(project_key) or {}
-        data = []
-        # Usa stqdm para mostrar uma barra de progresso no Streamlit
-        for issue in stqdm(issues, desc="Processando issues"):
-            try:
-                fields = issue.fields
-                
-                # Usa pd.to_datetime para uma conversão de data mais robusta
-                created_date = pd.to_datetime(fields.created).tz_localize(None)
-                
-                # Usa a função importada e mais robusta para encontrar a data de conclusão
-                completion_date = find_completion_date(issue, project_config)
-
-                # Usa as funções de cálculo importadas
-                lead_time = calculate_lead_time(issue, completion_date)
-                cycle_time = calculate_cycle_time(issue, completion_date, project_config)
-
-                original_estimate_hours = None
-                if hasattr(fields, 'timeoriginalestimate') and fields.timeoriginalestimate:
-                    original_estimate_hours = float(fields.timeoriginalestimate) / 3600.0
-
-                issue_data = {
-                    'Issue': fields.summary,
-                    'Key': issue.key,
-                    'Tipo de Issue': fields.issuetype.name if fields.issuetype else None,
-                    'Status': fields.status.name if fields.status else None,
-                    'Categoria de Status': fields.status.statusCategory.name if fields.status and hasattr(fields.status, 'statusCategory') else None,
-                    'Data de Criação': created_date,
-                    'Data de Conclusão': completion_date,
-                    'Responsável': fields.assignee.displayName if fields.assignee else 'Não atribuído',
-                    'Prioridade': fields.priority.name if fields.priority else None,
-                    'Lead Time (dias)': lead_time,
-                    'Cycle Time (dias)': cycle_time,
-                    'Estimativa original (horas)': original_estimate_hours,
-                }
-                data.append(issue_data)
-            except Exception as e:
-                st.warning(f"Não foi possível processar a issue {issue.key}: {e}")
-                continue
-
-    df = pd.DataFrame(data)
-    return df
-
 @st.cache_data(ttl=86400, show_spinner="A carregar metadados dos campos do Jira...")
 def get_jira_fields(_client):
     """Retorna uma lista de todos os campos (padrão e customizados) do Jira."""

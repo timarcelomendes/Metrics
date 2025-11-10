@@ -36,7 +36,7 @@ st.markdown("""
 
 # --- Verificações de Segurança ---
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para aceder."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if 'invalid_connection_id' in st.session_state and st.session_state.invalid_connection_id:
     # Obtém a razão específica do erro da sessão, ou usa uma mensagem padrão
@@ -67,7 +67,7 @@ with st.sidebar:
 
     if st.button("Logout", width='stretch', type='secondary'):
         for key in list(st.session_state.keys()): del st.session_state[key]
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 # --- Adicionar Nova Conexão ---
 st.subheader("Adicionar Nova Conexão")

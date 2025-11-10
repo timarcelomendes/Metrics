@@ -107,11 +107,11 @@ def render_os_field(field, custom_field_data, index):
 st.header("💰 Valoração Comercial e Geração de OS", divider='rainbow')
 
 if 'email' not in st.session_state:
-    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
+    st.warning("⚠️ Por favor, faça login para acessar."); st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑"); st.stop()
 
 if check_session_timeout():
     st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-    st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+    st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
     st.stop()
 
 if 'jira_client' not in st.session_state:
@@ -144,7 +144,7 @@ with st.sidebar:
             del st.session_state[key]
         if email_to_remember:
             st.session_state['remember_email'] = email_to_remember
-        st.switch_page("1_🔑_Autenticação.py")
+        st.switch_page("0_🔑_Autenticação.py")
 
 if not selected_project_name:
     st.info("⬅️ Na barra lateral, selecione um projeto para começar.")
