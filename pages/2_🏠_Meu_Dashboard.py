@@ -158,7 +158,7 @@ with st.sidebar:
             
             st.session_state.loaded_project_key = project_key
             st.rerun()
-            
+
     st.divider()
     if st.button("Logout", width='stretch', type='secondary'):
         email_to_remember = st.session_state.get('remember_email', '')

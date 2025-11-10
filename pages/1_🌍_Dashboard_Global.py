@@ -24,7 +24,6 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple): # <--
     Busca todas as issues para uma lista de projetos e aplica cálculos básicos.
     """
     
-    # --- CORREÇÃO 3: Criando uma função de parse local ---
     # (Já que 'parse_jira_issue' não existe no seu jira_connector.py)
     def _parse_issue_simple(issue):
         """Parser local simples para esta página."""
@@ -57,7 +56,6 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple): # <--
             # --- NOVO CAMPO ADICIONADO ---
             'Description': fields.description if hasattr(fields, 'description') else None
         }
-    # --- FIM DA CORREÇÃO 3 ---
 
     if not project_keys_tuple:
         return pd.DataFrame()
@@ -121,7 +119,27 @@ def plot_counts_chart(df, column_name, title):
     fig.update_layout(xaxis_title=None)
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Função Principal da Página ---
+# --- NOVA FUNÇÃO AUXILIAR ---
+def _safe_pct_balanco(criados, encerrados):
+    """Calcula o balanço percentual de forma segura, evitando divisão por zero."""
+    balanco = criados - encerrados
+    
+    if criados > 0:
+        # Cálculo padrão: (Criados - Encerrados) / Criados
+        return (balanco / criados) * 100
+    
+    if criados == 0 and balanco < 0:
+        # Nenhum item criado, mas itens foram encerrados (ótimo cenário)
+        # Retorna um valor simbólico de "redução"
+        return -100.0 
+    
+    # Nenhum item criado e nenhum encerrado, ou
+    # Itens criados = 0 e balanço > 0 (impossível)
+    return 0.0
+# --- FIM DA NOVA FUNÇÃO ---
+
+
+# --- Função Principal da Página (ATUALIZADA) ---
 def run_dashboard_global():
     """
     Função principal para encapsular a lógica da página.
@@ -135,7 +153,6 @@ def run_dashboard_global():
 
     # --- Lógica de Autenticação (Requer Imports) ---
     try:
-        # --- CORREÇÃO 4: Importar 'find_user' aqui ---
         from security import check_session_timeout, find_user
         from config import SESSION_TIMEOUT_MINUTES
     except ImportError as e:
@@ -144,13 +161,12 @@ def run_dashboard_global():
         
     if 'email' not in st.session_state:
         st.warning("⚠️ Por favor, faça login para acessar.")
-        # Corrigido o link de autenticação para '1_...'
-        st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑") 
+        st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑") 
         st.stop()
 
     if check_session_timeout():
         st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-        st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+        st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
         st.stop()
 
     # --- Interface da Página ---
@@ -161,10 +177,9 @@ def run_dashboard_global():
     try:
         from security import get_project_config
         
-        # Usa a conexão da sessão (corrigido anteriormente)
         if 'jira_client' not in st.session_state:
             st.error("Conexão Jira não encontrada na sessão. Por favor, autentique-se novamente.")
-            st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+            st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
             st.stop()
             
         jira = st.session_state.jira_client
@@ -209,7 +224,6 @@ def run_dashboard_global():
     )
     days_to_subtract = period_options[selected_period_name]
 
-    # A 'jira' (conexão) é passada aqui para a função com cache
     all_projects_list = get_all_available_projects(jira)
     selected_projects = st.sidebar.multiselect(
         "Selecione os Projetos:",
@@ -221,53 +235,90 @@ def run_dashboard_global():
         st.warning("Por favor, selecione pelo menos um projeto na barra lateral para começar.")
         st.stop()
 
-    # --- Lógica de Datas e Filtragem ---
+    # --- Lógica de Datas e Filtragem (ATUALIZADA) ---
     utc_tz = pytz.UTC
     date_now = datetime.now(utc_tz)
-    date_start = date_now - timedelta(days=days_to_subtract)
-
-    # A 'jira' (conexão) é passada aqui para a função com cache
+    
+    # Período Atual
+    date_start_atual = date_now - timedelta(days=days_to_subtract)
+    
+    # Período Anterior
+    date_end_anterior = date_start_atual
+    date_start_anterior = date_end_anterior - timedelta(days=days_to_subtract)
+    
+    # Carrega TODOS os dados (isto está correto, pois usa o cache)
     df_global = load_global_data(jira, tuple(selected_projects), tuple(done_statuses))
 
     if df_global.empty:
         st.info("Nenhum dado encontrado para os projetos e filtros selecionados.")
         st.stop()
 
-    df_criados_periodo = df_global[df_global['Created'] >= date_start]
-    df_encerrados_periodo = df_global[
+    # Filtragem para o Período ATUAL
+    df_criados_atual = df_global[df_global['Created'] >= date_start_atual]
+    df_encerrados_atual = df_global[
         (df_global['DataConclusao'].notna()) &
-        (df_global['DataConclusao'] >= date_start)
+        (df_global['DataConclusao'] >= date_start_atual)
+    ]
+    
+    # Filtragem para o Período ANTERIOR
+    df_criados_anterior = df_global[
+        (df_global['Created'] >= date_start_anterior) &
+        (df_global['Created'] < date_end_anterior)
+    ]
+    df_encerrados_anterior = df_global[
+        (df_global['DataConclusao'].notna()) &
+        (df_global['DataConclusao'] >= date_start_anterior) &
+        (df_global['DataConclusao'] < date_end_anterior)
     ]
 
-    # --- Exibição de KPIs (Métricas Principais) ---
+    # --- Exibição de KPIs (Métricas Principais) (ATUALIZADO) ---
     st.subheader(f"Métricas para: {selected_period_name}")
-    col1, col2, col3 = st.columns(3)
+    
+    # --- MUDANÇA 1: Adicionada col4 ---
+    col1, col2, col3, col4 = st.columns(4)
 
-    total_criados = len(df_criados_periodo)
-    total_encerrados = len(df_encerrados_periodo)
-    balanco = total_criados - total_encerrados
+    # Cálculos Atuais
+    total_criados_atual = len(df_criados_atual)
+    total_encerrados_atual = len(df_encerrados_atual)
+    balanco_atual = total_criados_atual - total_encerrados_atual
+    balanco_pct_atual = _safe_pct_balanco(total_criados_atual, total_encerrados_atual)
 
-    col1.metric("Itens Criados no Período", f"{total_criados:,.0f}")
-    col2.metric("Itens Encerrados no Período", f"{total_encerrados:,.0f}")
+    # Cálculos Anteriores
+    total_criados_anterior = len(df_criados_anterior)
+    total_encerrados_anterior = len(df_encerrados_anterior)
+    balanco_pct_anterior = _safe_pct_balanco(total_criados_anterior, total_encerrados_anterior)
+
+    # Cálculo do Delta (Variação)
+    delta_balanco_pct = balanco_pct_atual - balanco_pct_anterior
+
+    col1.metric("Itens Criados no Período", f"{total_criados_atual:,.0f}")
+    col2.metric("Itens Encerrados no Período", f"{total_encerrados_atual:,.0f}")
     col3.metric(
-        "Balanço do Backlog", 
-        f"{balanco:,.0f}",
+        "Balanço (Absoluto)", 
+        f"{balanco_atual:,.0f}",
         help="Itens Criados vs. Encerrados no período."
+    )
+    
+    # --- Novo Indicador ---
+    col4.metric(
+        "Balanço Percentual",
+        f"{balanco_pct_atual:.1f}%",
+        delta=f"{delta_balanco_pct:.1f}% vs. período anterior",
+        help="Variação percentual do backlog em relação aos itens criados. (Criados - Encerrados) / Criados."
     )
 
     st.divider()
 
     # --- Abas de Análise Detalhada ---
-    # --- ABA DE IA ADICIONADA ---
     tab1, tab2, tab_ia = st.tabs([
-        f"📊 Itens Criados ({total_criados})", 
-        f"🏁 Itens Encerrados ({total_encerrados})",
+        f"📊 Itens Criados ({total_criados_atual})", 
+        f"🏁 Itens Encerrados ({total_encerrados_atual})",
         "🤖 Análise IA"
     ])
 
     # Aba 1: Itens Criados
     with tab1:
-        if total_criados == 0:
+        if total_criados_atual == 0:
             st.info("Nenhum item foi criado no período selecionado.")
         else:
             st.header("Análise de Itens Criados")
@@ -275,21 +326,21 @@ def run_dashboard_global():
             
             with col_tipo_criado:
                 plot_counts_chart(
-                    df_criados_periodo, 
+                    df_criados_atual, 
                     'Issue Type', 
                     'Tipos de Itens Mais Criados'
                 )
             
             with col_proj_criado:
                 plot_counts_chart(
-                    df_criados_periodo, 
+                    df_criados_atual, 
                     'Project', 
                     'Itens Criados por Projeto'
                 )
 
     # Aba 2: Itens Encerrados
     with tab2:
-        if total_encerrados == 0:
+        if total_encerrados_atual == 0:
             st.info("Nenhum item foi encerrado no período selecionado.")
         else:
             st.header("Análise de Itens Encerrados")
@@ -297,36 +348,35 @@ def run_dashboard_global():
             
             with col_tipo_enc:
                 plot_counts_chart(
-                    df_encerrados_periodo, 
+                    df_encerrados_atual, 
                     'Issue Type', 
                     'Tipos de Itens Mais Encerrados'
                 )
             
             with col_proj_enc:
                 plot_counts_chart(
-                    df_encerrados_periodo, 
+                    df_encerrados_atual, 
                     'Project', 
                     'Itens Encerrados por Projeto'
                 )
 
-    # --- LÓGICA DA NOVA ABA DE IA ---
+    # --- Lógica da Aba de IA ---
     with tab_ia:
         st.header("Análise Qualitativa com IA")
-        st.markdown(f"Analisando uma amostra de até 100 itens criados e 100 encerrados no período ({selected_period_name}).")
+        st.markdown(f"Analisando uma amostra de até 30 itens criados e 30 encerrados no período ({selected_period_name}).")
         
         if st.button("🤖 Gerar Análise de Segregação", key="gerar_analise_ia_global"):
             try:
-                # Importa a função de IA aqui para evitar erros
+                # Importa a função de IA (deve estar em utils.py)
                 from utils import get_ai_global_dashboard_analysis
                 
-                # Obtém a preferência de provedor de IA do usuário
                 user_data = find_user(st.session_state['email'])
                 provider = user_data.get('ai_provider_preference', 'Google Gemini')
                 
                 with st.spinner("A IA está a analisar o conteúdo das issues..."):
                     response = get_ai_global_dashboard_analysis(
-                        df_criados_periodo,
-                        df_encerrados_periodo,
+                        df_criados_atual,   # Passa o DF do período atual
+                        df_encerrados_atual, # Passa o DF do período atual
                         provider
                     )
                     st.markdown(response)
@@ -335,7 +385,7 @@ def run_dashboard_global():
                 st.error("Erro: A função `get_ai_global_dashboard_analysis` não foi encontrada. "
                          "Certifique-se de que a adicionou ao seu arquivo `utils.py`.")
             except Exception as e:
-                st.error(f"Ocorreu um erro inesperado: {e}")
+                st.error(f"Ocorreu um erro inesperado ao comunicar com a IA: {e}")
 
     # Exibição opcional dos dados brutos
     with st.expander(f"Ver dados brutos (Total: {len(df_global)} issues)"):

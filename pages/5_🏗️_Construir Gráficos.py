@@ -84,7 +84,7 @@ with st.sidebar:
         if st.button("Construir Gráficos", width='stretch', type="primary"):
             # Busca as configs do utilizador ANTES de chamar a função
             user_data = find_user(st.session_state['email'])
-            df_loaded, _ = load_and_process_project_data(
+            df_loaded, raw_issues, proj_config = load_and_process_project_data(
                 st.session_state.jira_client, 
                 st.session_state.project_key,
                 user_data # Passa as configs para invalidar o cache
