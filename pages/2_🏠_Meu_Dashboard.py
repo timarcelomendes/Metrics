@@ -323,7 +323,50 @@ if edit_mode and can_edit:
                                     save_user_dashboard(st.session_state['email'], layouts)
                                     st.success("Dashboard renomeado!")
                                     st.rerun()
+
                     st.divider()
+                    
+                    with st.form("duplicate_dashboard_form"):
+                        # Sugere um nome para a cópia
+                        copy_name = st.text_input(
+                            "Nome para a Cópia:", 
+                            value=f"Cópia de {active_dashboard_name}"
+                        )
+                        
+                        if st.form_submit_button("📥 Duplicar Dashboard Atual", width='stretch'):
+                            if copy_name:
+                                # 1. Recarrega os layouts para garantir que temos os dados mais recentes
+                                layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
+                                proj_layouts = layouts.get(current_project_key, {})
+                                
+                                # 2. Faz uma cópia profunda da configuração do dashboard ATIVO
+                                dashboard_copy = copy.deepcopy(active_dashboard_config)
+                                
+                                # 3. Define novos atributos para a cópia
+                                new_id = str(uuid.uuid4())
+                                dashboard_copy['id'] = new_id
+                                dashboard_copy['name'] = copy_name
+                                dashboard_copy['permission'] = 'owner' # O duplicado pertence a si
+                                
+                                # Remove dados de partilha, se existirem
+                                if 'owner_email' in dashboard_copy:
+                                    del dashboard_copy['owner_email']
+
+                                # 4. Adiciona a cópia ao dicionário de dashboards
+                                proj_layouts['dashboards'][new_id] = dashboard_copy
+                                
+                                # 5. (Opcional) Define o dashboard duplicado como o ativo
+                                proj_layouts['active_dashboard_id'] = new_id
+                                
+                                # 6. Salva tudo
+                                layouts[current_project_key] = proj_layouts
+                                save_user_dashboard(st.session_state['email'], layouts)
+                                
+                                st.success(f"Dashboard '{copy_name}' criado com sucesso!")
+                                st.rerun()
+
+                    st.divider()
+                    
                     st.markdown("###### Partilhar Dashboard Atual")
                     with st.form("assign_dashboard_form"):
                         current_user_email = st.session_state.get('email', '')
