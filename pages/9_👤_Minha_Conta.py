@@ -131,18 +131,41 @@ with tab_campos:
 
             st.success("Suas preferências de campos padrão foram guardadas!")
             st.rerun()
-        # --- FIM DO BOTÃO 1 ---
 
-
-    with tab_custom:
-        # available_custom_fields e id_to_name_map já foram definidos
-        user_enabled_custom_aliases = user_data.get('enabled_custom_fields', []) 
+with tab_custom:
         
+        # 1. Carregar o que está salvo (o 'id_to_name_map' já foi carregado na aba anterior)
+        old_list_by_name = user_data.get('enabled_custom_fields', []) # Lista de Nomes (ex: "Story Points")
+        new_list_by_id = user_data.get('enabled_custom_field_ids', []) # Lista de IDs (ex: "customfield_10042")
+
+        # 2. Lógica de Migração (executa uma vez)
+        # Se a lista antiga (por nome) existe E a lista nova (por ID) não existe, migramos.
+        if old_list_by_name and not new_list_by_id:
+            st.info("A migrar as suas configurações de campos personalizados para o novo formato (baseado em ID)...")
+            
+            # Constrói um mapa reverso (Nome -> ID)
+            # Isto pode falhar se houver nomes duplicados, mas é a melhor tentativa
+            name_to_id_map_reverse = {name: fid for fid, name in id_to_name_map.items()}
+            
+            # Converte os nomes salvos de volta para IDs
+            migrated_ids = [name_to_id_map_reverse.get(name) for name in old_list_by_name if name_to_id_map_reverse.get(name)]
+            
+            # Salva a nova lista de IDs e limpa a antiga
+            updates_to_save = {
+                'enabled_custom_field_ids': list(set(migrated_ids)), # Remove duplicados da migração
+                'enabled_custom_fields': [] # Limpa a lista antiga
+            }
+            update_user_configs(email, updates_to_save)
+            st.success("Migração concluída! Por favor, verifique as suas seleções.")
+            st.rerun()
+        
+        # 3. Lógica de Exibição (agora usa a 'new_list_by_id' como fonte)
         if not available_custom_fields:
             st.info("Nenhum campo personalizado foi configurado pelo administrador.")
         else:
             st.markdown("**Ative os campos personalizados que deseja usar:**")
             
+            # Ordena por nome para uma exibição amigável
             for field in sorted(available_custom_fields, key=lambda x: x.get('name', '')):
                 field_id = field.get('id')
                 field_name = field.get('name')
@@ -152,8 +175,8 @@ with tab_campos:
                     
                 display_label = f"{field_name} ({field_id})"
                 
-                # A configuração atual do utilizador salva o NOME (alias)
-                is_currently_enabled = field_name in user_enabled_custom_aliases
+                # A verificação agora é feita pelo ID
+                is_currently_enabled = field_id in new_list_by_id
                 
                 toggles_custom[field_id] = st.toggle(
                     display_label, 
@@ -161,23 +184,23 @@ with tab_campos:
                     key=f"toggle_custom_{field_id}"
                 )
         
-        # --- BOTÃO 2: SALVAR CAMPOS PERSONALIZADOS ---
+        # --- BOTÃO 2: SALVAR CAMPOS PERSONALIZADOS (CORRIGIDO) ---
         st.divider()
         if st.button("Salvar Campos Personalizados", key="save_custom_fields", use_container_width=True, type="primary"):
             
-            # A lógica de salvar continua a mesma (salvando os NOMES/aliases)
-            new_selection_custom_names = [
-                id_to_name_map[fid] 
-                for fid, is_on in toggles_custom.items() 
-                if is_on and fid in id_to_name_map
+            # A lógica de salvar agora usa os IDs (keys)
+            new_selection_custom_ids = [
+                field_id for field_id, is_on in toggles_custom.items() if is_on
             ]
-            new_selection_custom_names = sorted(list(set(new_selection_custom_names)))
             
-            updates_to_save = {'enabled_custom_fields': new_selection_custom_names}
+            updates_to_save = {
+                'enabled_custom_field_ids': list(set(new_selection_custom_ids)), # Salva a nova lista (por ID)
+                'enabled_custom_fields': [] # Garante que a lista antiga (por Nome) está limpa
+            }
             
             update_user_configs(email, updates_to_save) 
 
-            st.success("Suas preferências de campos personalizados foram guardadas!")
+            st.success("Suas preferências de campos personalizados (por ID) foram guardadas!")
             st.rerun()
 
 with tab_ai:

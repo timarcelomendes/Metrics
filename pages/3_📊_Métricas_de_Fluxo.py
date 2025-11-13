@@ -202,27 +202,6 @@ issues_for_flow_calc = [
 # 3. Atualiza a legenda para refletir a nova contagem
 st.caption(f"A exibir métricas para {len(issues_for_flow_calc)} de {len(all_raw_issues)} issues (após aplicar filtros e remover {len(filtered_issues) - len(issues_for_flow_calc)} issues ignoradas).")
 
-st.divider()
-
-filtered_issue_keys = filtered_df['ID'].tolist()
-all_raw_issues = st.session_state.get('raw_issues_for_fluxo', [])
-# 1. Filtra com base nos filtros de UI (como estava)
-filtered_issues = [issue for issue in all_raw_issues if issue.key in filtered_issue_keys]
-
-# 2. Filtra adicionalmente os status ignorados (Ex: 'Cancelado', 'Duplicado')
-issues_for_flow_calc = [
-    issue for issue in filtered_issues 
-    if (
-        hasattr(issue.fields, 'status') and issue.fields.status and 
-        issue.fields.status.name.lower() not in ignored_statuses_lower
-    )
-]
-
-# 3. Atualiza a legenda para refletir a nova contagem
-st.caption(f"A exibir métricas para {len(issues_for_flow_calc)} de {len(all_raw_issues)} issues (após aplicar filtros e remover {len(filtered_issues) - len(issues_for_flow_calc)} issues ignoradas).")
-
-st.divider()
-
 start_date, end_date = st.session_state.start_date_fluxo, st.session_state.end_date_fluxo
 done_statuses = status_mapping.get('done', [])
 in_progress_statuses = [s['name'].lower() for s in status_mapping.get('in_progress', []) if isinstance(s, dict)]
@@ -231,25 +210,33 @@ if not done_statuses:
     st.warning("Nenhum 'status final' está configurado para este projeto.", icon="⚠️")
 
 # 4. Usa 'issues_for_flow_calc' em TODAS as métricas
+# 4. Obter as issues concluídas (como objetos raw)
 completed_issues_in_period = [i for i in issues_for_flow_calc if (cd_datetime := find_completion_date(i, project_config)) and start_date <= cd_datetime.date() <= end_date]
-times_data = []
-for issue in completed_issues_in_period:
-    completion_date_dt = find_completion_date(issue, project_config)
-    if completion_date_dt:
-        completion_date = pd.to_datetime(completion_date_dt)
-        cycle_time = calculate_cycle_time(issue, completion_date, project_config)
-        lead_time = calculate_lead_time(issue, completion_date)
-        times_data.append({'Lead Time (dias)': lead_time, 'Cycle Time (dias)': cycle_time})
+        
+# 5. Obter as chaves (IDs) dessas issues
+completed_issue_keys = [issue.key for issue in completed_issues_in_period]
 
-df_times = pd.DataFrame(times_data)
-if not df_times.empty:
-    df_times.dropna(subset=['Cycle Time (dias)'], inplace=True)
+# 6. Filtrar o DataFrame principal (que já tem as métricas pré-calculadas pelo utils.py)
+if 'ID' in filtered_df.columns:
+    df_done = filtered_df[filtered_df['ID'].isin(completed_issue_keys)].copy()
+else:
+    df_done = pd.DataFrame() # Fallback
+    
+# 7. Limpar os dados pré-calculados (garantir que são numéricos)
+if not df_done.empty:
+    df_done['Cycle Time (dias)'] = pd.to_numeric(df_done['Cycle Time (dias)'], errors='coerce')
+    df_done['Lead Time (dias)'] = pd.to_numeric(df_done['Lead Time (dias)'], errors='coerce')
+    df_done.dropna(subset=['Cycle Time (dias)'], inplace=True) # Garante que só calculamos média de itens com cycle time
 
-# 5. Usa 'issues_for_flow_calc'
+# 8. Calcular as métricas a partir do df_done (que vem do utils.py)
 wip_issues = [i for i in issues_for_flow_calc if hasattr(i.fields, 'status') and i.fields.status and i.fields.status.name.lower() in in_progress_statuses]
 throughput = len(completed_issues_in_period)
-lead_time_avg = df_times['Lead Time (dias)'].mean() if not df_times.empty else 0
-cycle_time_avg = df_times['Cycle Time (dias)'].mean() if not df_times.empty else 0
+
+# --- INÍCIO DA CORREÇÃO ---
+# Usar o df_done (com dados corretos do utils.py) em vez do df_times (re-calculado)
+lead_time_avg = df_done['Lead Time (dias)'].mean() if not df_done.empty else 0
+cycle_time_avg = df_done['Cycle Time (dias)'].mean() if not df_done.empty else 0
+# --- FIM DA CORREÇÃO ---
 aging_df = get_aging_wip(issues_for_flow_calc) # 6. Usa 'issues_for_flow_calc'
 sla_metrics = {}
 if global_configs.get('sla_policies'):
@@ -299,14 +286,14 @@ with tab_kanban:
         sle_days = st.slider("Definir SLE (em dias)", 1, 90, 15)
         
         sle_percentage = 0.0
-        total_items_for_sle = len(df_times)
+        total_items_for_sle = len(df_done)
         if throughput > 0 and total_items_for_sle > 0:
-            completed_within_sle = df_times[df_times['Cycle Time (dias)'] <= sle_days].shape[0]
+            completed_within_sle = df_done[df_done['Cycle Time (dias)'] <= sle_days].shape[0]
             sle_percentage = (completed_within_sle / total_items_for_sle) * 100
 
-        if throughput > 0 and not df_times.empty:
-            completed_within_sle = df_times[df_times['Cycle Time (dias)'] <= sle_days].shape[0]
-            sle_percentage = (completed_within_sle / len(df_times)) * 100
+        if throughput > 0 and not df_done.empty:
+            completed_within_sle = df_done[df_done['Cycle Time (dias)'] <= sle_days].shape[0]
+            sle_percentage = (completed_within_sle / len(df_done)) * 100
         
         st.metric(f"Conclusão em até {sle_days} dias", f"{sle_percentage:.1f}%", help=f"Percentagem de itens concluídos dentro do prazo definido.")
 
@@ -377,11 +364,19 @@ with tab_performance:
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
 
-    estimation_field_id = estimation_config.get('id')
-    timespent_field_id = timespent_config.get('id')
+    # --- INÍCIO DA CORREÇÃO ---
+    # Precisamos de AMBAS as variáveis:
+    # O NOME (para procurar no DataFrame, que foi renomeado pelo utils.py)
+    # O ID (para verificar o TIPO de campo, ex: 'timespent' vs 'customfield_')
     
-    # 2. Verificar se os campos foram configurados
-    if not estimation_field_id or not timespent_field_id:
+    estimation_field_name = estimation_config.get('name')
+    estimation_field_id = estimation_config.get('id') # <-- Corrigido
+    
+    timespent_field_name = timespent_config.get('name')
+    timespent_field_id = timespent_config.get('id') # <-- Corrigido
+    
+    # 2. Verificar se os campos foram configurados (usar o NOME, que é o que importa para o DF)
+    if not estimation_field_name or not timespent_field_name:
         st.warning("⚠️ Os campos de 'Estimativa' (Previsto) e 'Tempo Gasto' (Realizado) não foram configurados.")
         st.info("Por favor, vá até a página '7_⚙️_Configurações' -> 'Estimativa' e mapeie os dois campos.")
     
@@ -389,14 +384,15 @@ with tab_performance:
     elif 'df_done' not in locals() or df_done.empty:
         st.info("Nenhuma issue foi concluída no período selecionado para calcular a acurácia.")
         
-    # 4. (Verifica se colunas existem)
-    elif estimation_field_id not in df_done.columns or timespent_field_id not in df_done.columns:
+    # 4. (Verifica se colunas (NOMES) existem no DF)
+    elif estimation_field_name not in df_done.columns or timespent_field_name not in df_done.columns:
         missing_fields = []
-        if estimation_field_id not in df_done.columns:
-            missing_fields.append(f"'{estimation_config.get('name', estimation_field_id)}' (Previsto)")
-        if timespent_field_id not in df_done.columns:
-            missing_fields.append(f"'{timespent_config.get('name', timespent_field_id)}' (Realizado)")
+        if estimation_field_name not in df_done.columns:
+            missing_fields.append(f"'{estimation_field_name}' (Previsto)")
+        if timespent_field_name not in df_done.columns:
+            missing_fields.append(f"'{timespent_field_name}' (Realizado)")
         st.error(f"Os seguintes campos configurados não foram encontrados nos dados carregados: {', '.join(missing_fields)}. Por favor, verifique a sua 'Configuração de Conta' para garantir que estes campos estão a ser importados.")
+    # --- FIM DA CORREÇÃO ---
 
     else:
         # --- PONTO DE ALTERAÇÃO 1: Lógica de verificação de unidade mais robusta ---
@@ -407,8 +403,8 @@ with tab_performance:
         time_field_ids_padrao = {'timespent', 'timeoriginalestimate'}
 
         # A unidade é "tempo" se a fonte for 'standard_time' OU se o ID for um campo de tempo padrão
-        estim_is_time = (estim_source == 'standard_time') or (estimation_field_id in time_field_ids_padrao)
-        spent_is_time = (spent_source == 'standard_time') or (timespent_field_id in time_field_ids_padrao)
+        estim_is_time = (estim_source == 'standard_time') or (estimation_field_id in time_field_ids_padrao) # <-- Agora funciona
+        spent_is_time = (spent_source == 'standard_time') or (timespent_field_id in time_field_ids_padrao) # <-- Agora funciona
         # --- FIM DA ALTERAÇÃO 1 ---
 
         # VERIFICAÇÃO PRINCIPAL: As unidades são diferentes?
@@ -426,8 +422,9 @@ with tab_performance:
             )
             
             # Cálculo dos KPIs para exibição (mesmo incompatíveis)
-            total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
-            total_realizado_segundos_ou_pontos = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
+            # Usar os NOMES dos campos para ler o DataFrame
+            total_estimado = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0).sum()
+            total_realizado_segundos_ou_pontos = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0).sum()
 
             # Converte para horas apenas se for um campo de tempo
             if estim_is_time:
@@ -447,9 +444,9 @@ with tab_performance:
         else:
             # NÃO, as unidades são IGUAIS (ex: pts vs pts ou hs vs hs)
             
-            # 5. Calcular os totais
-            total_estimado = pd.to_numeric(df_done[estimation_field_id], errors='coerce').fillna(0).sum()
-            total_realizado = pd.to_numeric(df_done[timespent_field_id], errors='coerce').fillna(0).sum()
+            # 5. Calcular os totais (usando os NOMES)
+            total_estimado = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0).sum()
+            total_realizado = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0).sum()
             
             unit_display = "pts" # Padrão
             

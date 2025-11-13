@@ -288,26 +288,13 @@ if selected_project_key:
                 # 2. Obter a configuração do USUÁRIO ATUAL
                 user_data = find_user(user_email) 
                 enabled_standard_ids = user_data.get('standard_fields', [])
-                enabled_custom_names = user_data.get('enabled_custom_fields', [])
                 
-                # 3. Criar um mapa de Nomes de campos custom para IDs
-                custom_name_to_id_map = {
-                    f['name']: f['id'] 
-                    for f in all_jira_fields 
-                    if f['id'].startswith('customfield_') and 'name' in f
-                }
-                
-                # 4. Converter os Nomes custom habilitados em IDs
-                enabled_custom_ids = [
-                    custom_name_to_id_map.get(name) 
-                    for name in enabled_custom_names 
-                    if custom_name_to_id_map.get(name)
-                ]
+                # Lê a nova lista de IDs diretamente (que foi salva pela 9_Minha_Conta.py)
+                enabled_custom_ids = user_data.get('enabled_custom_field_ids', [])
                 
                 # 5. Criar um CONJUNTO (set) final com TODOS os IDs habilitados
                 all_enabled_ids = set(enabled_standard_ids + enabled_custom_ids)
                 
-                # --- INÍCIO DA NOVA CORREÇÃO ---
                 # Se o usuário ativou "Controle de tempo" (cujo ID é 'timetracking'),
                 # devemos adicionar explicitamente os campos de tempo individuais
                 # para que eles apareçam nos seletores.
@@ -315,7 +302,6 @@ if selected_project_key:
                     all_enabled_ids.add('timespent')
                     all_enabled_ids.add('timeoriginalestimate')
                     all_enabled_ids.add('timeestimate')
-                # --- FIM DA NOVA CORREÇÃO ---
 
                 # 6. Filtrar a lista de 'numeric_fields'
                 # Apenas campos numéricos que TAMBÉM estão na lista de habilitados

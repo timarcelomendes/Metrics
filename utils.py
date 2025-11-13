@@ -52,11 +52,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     project_config = get_project_config(project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
-    estimation_field_id = estimation_config.get('id') if estimation_config else None
-    timespent_field_id = timespent_config.get('id') if timespent_config else None
-
+        
+    # 1. Obter as listas de IDs habilitados pelo usuário
     user_enabled_standard_fields_ids = user_data.get('standard_fields', [])
-    user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', [])
+    user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', []) # <-- LER A LISTA DE IDs
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
@@ -66,9 +65,14 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         except Exception: st.session_state.project_name = project_key
 
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
-        # A sua função 'get_project_issues' (linha 351) é a correta
-        raw_issues_list = get_project_issues(_jira_client, project_key)
-        
+        # 2. Passar a lista de IDs de campos customizados para o conector
+        raw_issues_list = get_project_issues(
+            _jira_client, 
+            project_key,
+            standard_fields=user_enabled_standard_fields_ids, 
+            custom_fields=user_enabled_custom_field_ids # <-- Passa os IDs custom
+        )
+
     # --- INÍCIO DO TRADUTOR DE CONFIGURAÇÃO CENTRAL ---
     if 'status_category_mapping' in project_config and 'status_mapping' not in project_config:
         try:
@@ -101,27 +105,82 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                 
         except Exception as e:
             st.error(f"Erro ao traduzir categorias de status: {e}")
-    # --- FIM DO TRADUTOR ---
 
     # Agora o filter_ignored_issues funciona com o 'project_config' traduzido
     issues = filter_ignored_issues(raw_issues_list, project_config)
 
     if not issues: return pd.DataFrame(), [], project_config # Retorna a config mesmo se vazio
-
-    # Mapas para campos personalizados
-    all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
-    user_custom_field_name_to_id_map = { name: id for id, name in all_custom_field_id_to_name_map.items() if name in user_enabled_custom_fields_names }
+    
+    # 3. Construir os mapas de tradução (ID -> Nome)
+    all_custom_field_id_to_name_map = { 
+        f['id']: f['name'] 
+        for f in global_configs.get('custom_fields', []) 
+        if isinstance(f, dict) and 'id' in f and 'name' in f 
+    }
+    
+    # 4. Criar o mapa reverso (Nome -> ID) APENAS para os campos habilitados
+    # Isto agora lida corretamente com nomes duplicados
+    user_custom_field_name_to_id_map = {
+        all_custom_field_id_to_name_map[fid]: fid
+        for fid in user_enabled_custom_field_ids
+        if fid in all_custom_field_id_to_name_map
+    }
+    
     strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
+    
+    # --- FIM DA CORREÇÃO ---
 
-    # --- MAPEAMENTO PADRÃO ID -> ATRIBUTO JIRA ---
+
+    # --- MAPEAMENTO PADRÃO ID -> ATRIBUTO JIRA (CORRIGIDO) ---
     standard_field_id_to_attribute_map = {
-        'Summary': 'summary', 'Issue Type': 'issuetype', 'Status': 'status', 'Priority': 'priority',
-        'Resolution': 'resolution', 'Assignee': 'assignee', 'Reporter': 'reporter', 'Creator': 'creator',
-        'Created': 'created', 'Updated': 'updated', 'DueDate': 'duedate', 'Components': 'components',
-        'Affects Versions': 'versions', 'Fix Versions': 'fixVersions', 'Labels': 'labels',
-        'Description': 'description', 'Environment': 'environment', 'Security Level': 'security',
-        'Time Spent': 'timespent', 'Time Estimate': 'timeestimate', 'Original Estimate': 'timeoriginalestimate',
-        'StatusCategory': 'statuscategory', 'Parent': 'parent',
+        'summary': 'summary', 'issuetype': 'issuetype', 'status': 'status', 'priority': 'priority',
+        'resolution': 'resolution', 'assignee': 'assignee', 'reporter': 'reporter', 'creator': 'creator',
+        'created': 'created', 'updated': 'updated', 'duedate': 'duedate', 'components': 'components',
+        'versions': 'versions', # 'AffectedVersions' usa 'versions'
+        'fixVersions': 'fixVersions', 'labels': 'labels',
+        'description': 'description', 'environment': 'environment', 'security': 'security',
+        'timespent': 'timespent',
+        'timeestimate': 'timeestimate',
+        'timeoriginalestimate': 'timeoriginalestimate',
+        'statuscategory': 'statuscategory', 'parent': 'parent',
+        'AffectedVersions': 'versions',
+        'Assignee': 'assignee',
+        'Attachments': 'attachment',
+        'Category': 'projectCategory',
+        'Comment': 'comment',
+        'Components': 'components',
+        'Created': 'created',
+        'Creator': 'creator',
+        'Description': 'description',
+        'DueDate': 'duedate',
+        'Environment': 'environment',
+        'FixVersions': 'fixVersions',
+        'IssueType': 'issuetype',
+        'Labels': 'labels',
+        'LastViewed': 'lastViewed',
+        'LinkedIssues': 'issuelinks',
+        'Parent': 'parent',
+        'Priority': 'priority',
+        'Project': 'project',
+        'Reporter': 'reporter',
+        'Resolution': 'resolution',
+        'Resolved': 'resolutiondate',
+        'resolutiondate': 'resolutiondate',
+        'SecurityLevel': 'security',
+        'Status': 'status',
+        'StatusCategory': 'statuscategory',
+        'Summary': 'summary',
+        'subtasks': 'subtasks',
+        'issuelinks': 'issuelinks',
+        'TimeTracking': 'timetracking',
+        'aggregatetimespent': 'aggregatetimespent',
+        'aggregatetimeoriginalestimate': 'aggregatetimeoriginalestimate',
+        'aggregatetimeestimate': 'aggregatetimeestimate',
+        'aggregateprogress': 'aggregateprogress',
+        'workratio': 'workratio',
+        'Updated': 'updated',
+        'Votes': 'votes',
+        'Watchers': 'watches'
     }
 
     # --- EXTRACT_VALUE ROBUSTO ---
@@ -203,10 +262,8 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         # (calculate_cycle_time agora usa o project_config traduzido)
         issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
-# --- PROCESSAMENTO CAMPOS PADRÃO ---
+        # --- PROCESSAMENTO CAMPOS PADRÃO ---
         for field_id in user_enabled_standard_fields_ids:
-
-            # Apenas mantém a verificação de 'processed_by_default'
             if field_id in processed_by_default:
                 continue
 
@@ -235,18 +292,44 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                     print(f"DEBUG Padrão Fallback Getattr ERROR para ID '{field_id}', Erro: {e}")
                     issue_data[field_id] = None
 
-        # --- PROCESSAMENTO CAMPOS PERSONALIZADOS ---
+        # --- PROCESSAMENTO CAMPOS PERSONALIZADOS (AGORA CORRETO) ---
         for field_name, field_id in user_custom_field_name_to_id_map.items():
             raw_value = None
             extracted_value = None
             try:
                 raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
                 extracted_value = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
-                issue_data[field_name] = extracted_value
+                
+                # --- CORREÇÃO IMPORTANTE PARA NOMES DUPLICADOS ---
+                # Se dois campos (ex: 10042 e 10117) têm o *mesmo nome* (ex: "Story Points"),
+                # o DataFrame final deve ter colunas distintas se elas forem usadas
+                # para coisas diferentes (Previsto vs Realizado).
+                
+                estimation_field_id = estimation_config.get('id')
+                timespent_field_id = timespent_config.get('id')
+                
+                final_field_name = field_name
+                
+                # Se este campo NÃO é o campo de estimativa E 
+                # o campo de estimativa TEM o mesmo nome, 
+                # então anexa o ID a este campo.
+                if (field_id != estimation_field_id and 
+                    estimation_config.get('name') == field_name):
+                    final_field_name = f"{field_name} ({field_id})"
+                
+                # Faz o mesmo para o campo de tempo gasto
+                elif (field_id != timespent_field_id and 
+                      timespent_config.get('name') == field_name and
+                      estimation_field_id != timespent_field_id): # Evita renomear duas vezes
+                    final_field_name = f"{field_name} ({field_id})"
+                
+                issue_data[final_field_name] = extracted_value
+                # --- FIM DA CORREÇÃO DE NOMES DUPLICADOS ---
+
             except Exception as e:
                 print(f"DEBUG Custom Getattr ERROR para Nome '{field_name}', ID '{field_id}', Erro: {e}")
                 issue_data[field_name] = None
-
+        
         # Campo Estratégico
         if strategic_field_name and strategic_field_id:
                 if strategic_field_name not in issue_data:
@@ -264,34 +347,14 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         
     # 1. Cria o DataFrame PRIMEIRO
     df = pd.DataFrame(processed_issues_data)
-
-    # 2. AGORA executa a lógica de rename/verificação de Estimativa/Tempo Gasto
+    
+    # Obter os nomes corretos para a verificação final
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
-    rename_map_specific = {}
-    ids_to_drop_specific = [] 
-
-    if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
-            if estimation_name not in df.columns:
-                rename_map_specific[estimation_field_id] = estimation_name
-            else:
-                ids_to_drop_specific.append(estimation_field_id)
-
-    if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
-            if timespent_name not in df.columns:
-                rename_map_specific[timespent_field_id] = timespent_name
-            else:
-                ids_to_drop_specific.append(timespent_field_id)
-
-    if rename_map_specific:
-        df.rename(columns=rename_map_specific, inplace=True)
-
-    if ids_to_drop_specific:
-        df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
 
     # --- GARANTIR COLUNAS E RENOMEAR ---
     all_expected_standard_ids = user_enabled_standard_fields_ids
-    all_expected_custom_names = user_enabled_custom_fields_names
+    all_expected_custom_names = list(user_custom_field_name_to_id_map.keys())
     expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
     if strategic_field_name: expected_cols_before_rename.add(strategic_field_name)
     if estimation_field_id: expected_cols_before_rename.add(estimation_field_id)

@@ -17,7 +17,11 @@ from pathlib import Path
 @lru_cache(maxsize=32)
 def connect_to_jira(server, user_email, api_token):
     try:
-        return JIRA(options={'server': server}, basic_auth=(user_email, api_token))
+        return JIRA(
+            options={'server': server}, 
+            basic_auth=(user_email, api_token),
+            timeout=30 
+        )
     except Exception as e:
         st.error(f"Erro ao conectar ao Jira: {e}")
         return None
@@ -242,10 +246,10 @@ def get_project_boards(jira_client, project_key):
         return []
     
 @st.cache_data(ttl=3600, show_spinner="A buscar issues do projeto no Jira...")
-def get_project_issues(_client, project_key, jql_filter="", user_custom_fields=None):
+def get_project_issues(_client, project_key, jql_filter="", standard_fields=None, custom_fields=None): # <-- PARÂMETROS MODIFICADOS
     """
     Busca todas as issues de um projeto específico, com opção de filtro JQL adicional
-    e agora sem o filtro de status fixo.
+    e agora com seleção de campos.
     """
     if not _client or not project_key:
         return []
@@ -255,8 +259,33 @@ def get_project_issues(_client, project_key, jql_filter="", user_custom_fields=N
 
         if jql_filter:
             jql += f" AND {jql_filter}"
-            
-        issues = _client.search_issues(jql, maxResults=False, expand="changelog")
+        
+        # --- INÍCIO DA CORREÇÃO ---
+        # Lista de campos padrão que a aplicação SEMPRE precisa
+        default_fields = [
+            'summary', 'status', 'issuetype', 'created', 
+            'resolutiondate', 'assignee', 'reporter', 'priority', 
+            'components', 'labels', 'project', 'statuscategory', 'parent'
+        ]
+        
+        # Adiciona os campos padrão habilitados pelo usuário
+        if standard_fields:
+            default_fields.extend(standard_fields)
+        
+        # Adiciona os campos customizados habilitados pelo usuário
+        if custom_fields:
+            default_fields.extend(custom_fields)
+        
+        # Remove duplicados
+        final_fields_list = list(set(default_fields))
+        # --- FIM DA CORREÇÃO ---
+        
+        issues = _client.search_issues(
+            jql, 
+            fields=final_fields_list, # <-- PASSA A LISTA DE CAMPOS
+            maxResults=False, 
+            expand="changelog"
+        )
         return issues
         
     except Exception as e:

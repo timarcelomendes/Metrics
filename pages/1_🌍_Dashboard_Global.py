@@ -3,8 +3,8 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 import pytz
-from utils import load_and_process_project_data
-from jira_connector import get_project_issues
+from utils import load_and_process_project_data # Import não utilizado, mas mantido
+from jira_connector import get_project_issues # Import não utilizado, mas mantido
 
 # --- Funções de Cache (Definidas Globalmente) ---
 
@@ -12,13 +12,12 @@ from jira_connector import get_project_issues
 def get_all_available_projects(_jira):
     """Busca e cacheia a lista de todos os projetos visíveis."""
     try:
-        # Usa a variável com underscore
         projects = _jira.projects()
         project_list = sorted([proj.key for proj in projects])
         return project_list
     except Exception as e:
-        st.error(f"Não foi possível buscar a lista de projetos: {e}")
-        return []
+        # Lança o erro para ser apanhado pela interface
+        raise e
 
 @st.cache_data(ttl=3600, show_spinner="Buscando dados globais de issues...")
 def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
@@ -26,26 +25,18 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
     Busca todas as issues para uma lista de projetos e aplica cálculos básicos.
     """
     
-    # (Já que 'parse_jira_issue' não existe no seu jira_connector.py)
     def _parse_issue_simple(issue):
         """Parser local simples para esta página."""
-        
         fields = issue.fields
-        
-        # Obter a lista de nomes de status "Done"
         done_status_names = [s.lower() for s in done_statuses_tuple]
 
-        # Lógica de Data de Conclusão (simplificada)
         completion_date = None
         if hasattr(fields, 'status') and fields.status.name.lower() in done_status_names:
-            # Tenta 'resolutiondate' primeiro
             if hasattr(fields, 'resolutiondate') and fields.resolutiondate:
                 completion_date = pd.to_datetime(fields.resolutiondate, utc=True)
             else:
-                # Fallback para 'updated' se já estiver em status "Done"
                 completion_date = pd.to_datetime(fields.updated, utc=True)
         elif hasattr(fields, 'resolutiondate') and fields.resolutiondate:
-            # Fallback se o status foi revertido mas a data de resolução existe
              completion_date = pd.to_datetime(fields.resolutiondate, utc=True)
 
         return {
@@ -62,37 +53,34 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
         return pd.DataFrame()
 
     project_keys = list(project_keys_tuple)
-    done_statuses = list(done_statuses_tuple)
     
     jql_query = f'project IN ({", ".join(f'"{key}"' for key in project_keys)}) ORDER BY created DESC'
     
-    try:
-        fields_necessarios = ['summary', 'status', 'issuetype', 'created', 
-                            'updated', 'resolutiondate', 'project', 'description']
-        
-        # Usa a variável com underscore
-        issues_list = _jira_conn.search_issues(
-            jql_query, 
-            maxResults=False,
-            fields=fields_necessarios
-        )
-        
-        if not issues_list:
-            return pd.DataFrame()
-
-        # Processamento usando a função de parse local
-        parsed_data = [_parse_issue_simple(issue) for issue in issues_list]
-        df = pd.DataFrame(parsed_data)
-
-        if 'Created' not in df.columns:
-            df['Created'] = pd.NaT
-        if 'Status' not in df.columns:
-            df['Status'] = 'Desconhecido'
-
-        return df
-    except Exception as e:
-        st.error(f"Erro ao buscar dados do Jira: {e}")
+    # --- CORREÇÃO: O 'try/except' foi removido daqui ---
+    # A exceção será agora tratada na função 'run_dashboard_global'
+    
+    fields_necessarios = ['summary', 'status', 'issuetype', 'created', 
+                        'updated', 'resolutiondate', 'project', 'description']
+    
+    issues_list = _jira_conn.search_issues(
+        jql_query, 
+        maxResults=False,
+        fields=fields_necessarios
+    )
+    
+    if not issues_list:
         return pd.DataFrame()
+
+    parsed_data = [_parse_issue_simple(issue) for issue in issues_list]
+    df = pd.DataFrame(parsed_data)
+
+    if 'Created' not in df.columns:
+        df['Created'] = pd.NaT
+    if 'Status' not in df.columns:
+        df['Status'] = 'Desconhecido'
+
+    return df
+
 
 def plot_counts_chart(df, column_name, title):
     """Renderiza um gráfico de barras de contagem."""
@@ -125,16 +113,11 @@ def _safe_pct_balanco(criados, encerrados):
     balanco = criados - encerrados
     
     if criados > 0:
-        # Cálculo padrão: (Criados - Encerrados) / Criados
         return (balanco / criados) * 100
     
     if criados == 0 and balanco < 0:
-        # Nenhum item criado, mas itens foram encerrados (ótimo cenário)
-        # Retorna um valor simbólico de "redução"
         return -100.0 
     
-    # Nenhum item criado e nenhum encerrado, ou
-    # Itens criados = 0 e balanço > 0 (impossível)
     return 0.0
 
 # --- Função Principal da Página ---
@@ -143,7 +126,7 @@ def run_dashboard_global():
     Função principal para encapsular a lógica da página.
     """
     
-    # --- CORREÇÃO 1: Mover o Título e o Page Config para o TOPO ---
+    # --- Título e Page Config ---
     st.set_page_config(
         page_title="Dashboard Global",
         page_icon="🌍",
@@ -151,7 +134,6 @@ def run_dashboard_global():
     )
     st.title("🌍 Dashboard Global")
     st.markdown("Análise de *todos* os projetos selecionados, focada em itens criados e encerrados recentemente.")
-    # --- FIM DA CORREÇÃO 1 ---
 
     # --- Lógica de Autenticação (Requer Imports) ---
     try:
@@ -163,13 +145,11 @@ def run_dashboard_global():
         
     if 'email' not in st.session_state:
         st.warning("⚠️ Por favor, faça login para acessar.")
-        # --- CORREÇÃO 2: Apontar para '0_...' ---
         st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑") 
         st.stop()
 
     if check_session_timeout():
         st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
-        # --- CORREÇÃO 3: Apontar para '0_...' ---
         st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
         st.stop()
 
@@ -179,7 +159,6 @@ def run_dashboard_global():
         
         if 'jira_client' not in st.session_state:
             st.error("Conexão Jira não encontrada na sessão. Por favor, autentique-se novamente.")
-            # --- CORREÇÃO 4: Apontar para '0_...' ---
             st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
             st.stop()
             
@@ -195,6 +174,7 @@ def run_dashboard_global():
 
         if project_key_to_check:
              project_config = get_project_config(project_key_to_check)
+             
              if project_config:
                 if project_config.get('done_status_names'):
                     done_statuses = project_config.get('done_status_names')
@@ -204,7 +184,13 @@ def run_dashboard_global():
                         done_statuses = done_names
                         
     except Exception as e: 
-        st.error(f"Falha ao processar as configurações do Jira: {e}")
+        # --- INÍCIO DO TRATAMENTO DE ERRO (Configurações) ---
+        st.warning("ℹ️ Isto pode ser um erro de rede ou falha na ligação à base de dados de configurações.")
+        
+        if st.button("Tentar Novamente 🔂", use_container_width=True, type="primary"):
+            get_project_config.clear() 
+            st.rerun() 
+            
         st.stop()
 
     # --- Filtros na Sidebar ---
@@ -225,11 +211,28 @@ def run_dashboard_global():
     )
     days_to_subtract = period_options[selected_period_name]
 
-    all_projects_list = get_all_available_projects(jira)
+    try:
+        all_projects_list = get_all_available_projects(jira)
+        if not all_projects_list:
+            st.sidebar.warning("Nenhum projeto encontrado para esta conexão.")
+            st.warning("Nenhum projeto encontrado.")
+            st.stop()
+            
+    except Exception as e:
+        st.sidebar.warning("Isso pode ser um timeout temporário ou erro de rede.")
+        
+        if st.sidebar.button("Tentar Carregar Projetos", use_container_width=True, type="primary"):
+            get_all_available_projects.clear() 
+            st.rerun() 
+            
+        st.warning("Não foi possível carregar a lista de projetos. Tente novamente na barra lateral.")
+        st.stop() 
+    # --- FIM DO TRATAMENTO DE ERRO ---
+
     selected_projects = st.sidebar.multiselect(
         "Selecione os Projetos:",
         options=all_projects_list,
-        default=all_projects_list # Default para todos os projetos
+        default=all_projects_list 
     )
 
     if not selected_projects:
@@ -240,19 +243,32 @@ def run_dashboard_global():
     utc_tz = pytz.UTC
     date_now = datetime.now(utc_tz)
     
-    # Período Atual
     date_start_atual = date_now - timedelta(days=days_to_subtract)
-    
-    # Período Anterior
     date_end_anterior = date_start_atual
     date_start_anterior = date_end_anterior - timedelta(days=days_to_subtract)
     
-    df_global = load_global_data(jira, tuple(selected_projects), tuple(done_statuses))
+    # --- INÍCIO DO TRATAMENTO DE ERRO (Dados das Issues) ---
+    try:
+        df_global = load_global_data(jira, tuple(selected_projects), tuple(done_statuses))
+        
+    except Exception as e:
+        # Este é o erro que você está a ver (Read timed out)
+        st.error(f"Erro ao buscar dados do Jira: {e}", icon="🚨")
+        st.warning("Oops! Parece que a conexão com o servidor Jira falhou ou demorou demais (timeout).")
+        st.info("Isto pode ser um problema temporário de rede ou do servidor Jira. Por favor, tente novamente.")
+        
+        # Adiciona o botão "Tentar Novamente"
+        if st.button("Recarregar Dados", use_container_width=True, type="primary"):
+            load_global_data.clear() 
+            st.rerun() 
+        st.stop() 
 
     if df_global.empty:
         st.info("Nenhum dado encontrado para os projetos e filtros selecionados.")
         st.stop()
 
+    # (O restante do seu código da função continua aqui...)
+    
     # Filtragem para o Período ATUAL
     df_criados_atual = df_global[df_global['Created'] >= date_start_atual]
     df_encerrados_atual = df_global[
@@ -298,12 +314,11 @@ def run_dashboard_global():
         help="Itens Criados vs. Encerrados no período."
     )
     
-    # --- Indicador com Cor Invertida ---
     col4.metric(
         "Balanço Percentual",
         f"{balanco_pct_atual:.1f}%",
         delta=f"{delta_balanco_pct:.1f}% vs. período anterior",
-        delta_color="inverse", # <--- Corrigido para inverter (vermelho para > 0)
+        delta_color="inverse", 
         help="Variação percentual do backlog em relação aos itens criados. (Criados - Encerrados) / Criados."
     )
 
@@ -367,7 +382,6 @@ def run_dashboard_global():
         
         if st.button("🤖 Gerar Análise de Segregação", key="gerar_analise_ia_global"):
             try:
-                # Importa a função de IA (deve estar em utils.py)
                 from utils import get_ai_global_dashboard_analysis
                 
                 user_data = find_user(st.session_state['email'])
@@ -375,8 +389,8 @@ def run_dashboard_global():
                 
                 with st.spinner("A IA está a analisar o conteúdo das issues..."):
                     response = get_ai_global_dashboard_analysis(
-                        df_criados_atual,   # Passa o DF do período atual
-                        df_encerrados_atual, # Passa o DF do período atual
+                        df_criados_atual,
+                        df_encerrados_atual,
                         provider
                     )
                     st.markdown(response)

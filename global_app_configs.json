@@ -47,6 +47,10 @@
         {
             "id": "customfield_10682",
             "name": "Tempo at\u00e9 a primeira resposta"
+        },
+        {
+            "id": "customfield_10016",
+            "name": "Story point estimate"
         }
     ],
     "strategic_grouping_field": "Cliente",
