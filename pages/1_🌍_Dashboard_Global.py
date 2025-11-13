@@ -3,15 +3,17 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 import pytz
+from utils import load_and_process_project_data
+from jira_connector import get_project_issues
 
 # --- Funções de Cache (Definidas Globalmente) ---
 
 @st.cache_data(ttl=3600, show_spinner="Buscando lista de projetos...")
-def get_all_available_projects(_jira): # <--- CORREÇÃO 1: Adicionado o underscore
+def get_all_available_projects(_jira):
     """Busca e cacheia a lista de todos os projetos visíveis."""
     try:
         # Usa a variável com underscore
-        projects = _jira.projects() # <--- CORREÇÃO 1
+        projects = _jira.projects()
         project_list = sorted([proj.key for proj in projects])
         return project_list
     except Exception as e:
@@ -19,7 +21,7 @@ def get_all_available_projects(_jira): # <--- CORREÇÃO 1: Adicionado o undersc
         return []
 
 @st.cache_data(ttl=3600, show_spinner="Buscando dados globais de issues...")
-def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple): # <--- CORREÇÃO 2: Adicionado o underscore
+def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
     """
     Busca todas as issues para uma lista de projetos e aplica cálculos básicos.
     """
@@ -53,7 +55,6 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple): # <--
             'Status': fields.status.name if hasattr(fields, 'status') else None,
             'Created': pd.to_datetime(fields.created, utc=True),
             'DataConclusao': completion_date,
-            # --- NOVO CAMPO ADICIONADO ---
             'Description': fields.description if hasattr(fields, 'description') else None
         }
 
@@ -66,14 +67,13 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple): # <--
     jql_query = f'project IN ({", ".join(f'"{key}"' for key in project_keys)}) ORDER BY created DESC'
     
     try:
-        # --- NOVO CAMPO ADICIONADO ---
         fields_necessarios = ['summary', 'status', 'issuetype', 'created', 
                             'updated', 'resolutiondate', 'project', 'description']
         
         # Usa a variável com underscore
-        issues_list = _jira_conn.search_issues( # <--- CORREÇÃO 2
+        issues_list = _jira_conn.search_issues(
             jql_query, 
-            maxResults=False,  # Busca todos
+            maxResults=False,
             fields=fields_necessarios
         )
         
@@ -136,20 +136,22 @@ def _safe_pct_balanco(criados, encerrados):
     # Nenhum item criado e nenhum encerrado, ou
     # Itens criados = 0 e balanço > 0 (impossível)
     return 0.0
-# --- FIM DA NOVA FUNÇÃO ---
 
-
-# --- Função Principal da Página (ATUALIZADA) ---
+# --- Função Principal da Página ---
 def run_dashboard_global():
     """
     Função principal para encapsular a lógica da página.
     """
     
+    # --- CORREÇÃO 1: Mover o Título e o Page Config para o TOPO ---
     st.set_page_config(
         page_title="Dashboard Global",
         page_icon="🌍",
         layout="wide"
     )
+    st.title("🌍 Dashboard Global")
+    st.markdown("Análise de *todos* os projetos selecionados, focada em itens criados e encerrados recentemente.")
+    # --- FIM DA CORREÇÃO 1 ---
 
     # --- Lógica de Autenticação (Requer Imports) ---
     try:
@@ -161,17 +163,15 @@ def run_dashboard_global():
         
     if 'email' not in st.session_state:
         st.warning("⚠️ Por favor, faça login para acessar.")
+        # --- CORREÇÃO 2: Apontar para '0_...' ---
         st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑") 
         st.stop()
 
     if check_session_timeout():
         st.warning(f"Sua sessão expirou por inatividade de {SESSION_TIMEOUT_MINUTES} minutos. Por favor, faça login novamente.")
+        # --- CORREÇÃO 3: Apontar para '0_...' ---
         st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
         st.stop()
-
-    # --- Interface da Página ---
-    st.title("🌍 Dashboard Global")
-    st.markdown("Análise de *todos* os projetos selecionados, focada em itens criados e encerrados recentemente.")
 
     # --- Obter Conexão (Requer Imports) ---
     try:
@@ -179,7 +179,8 @@ def run_dashboard_global():
         
         if 'jira_client' not in st.session_state:
             st.error("Conexão Jira não encontrada na sessão. Por favor, autentique-se novamente.")
-            st.page_link("1_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
+            # --- CORREÇÃO 4: Apontar para '0_...' ---
+            st.page_link("0_🔑_Autenticação.py", label="Ir para Autenticação", icon="🔑")
             st.stop()
             
         jira = st.session_state.jira_client
@@ -235,7 +236,7 @@ def run_dashboard_global():
         st.warning("Por favor, selecione pelo menos um projeto na barra lateral para começar.")
         st.stop()
 
-    # --- Lógica de Datas e Filtragem (ATUALIZADA) ---
+    # --- Lógica de Datas e Filtragem ---
     utc_tz = pytz.UTC
     date_now = datetime.now(utc_tz)
     
@@ -246,7 +247,6 @@ def run_dashboard_global():
     date_end_anterior = date_start_atual
     date_start_anterior = date_end_anterior - timedelta(days=days_to_subtract)
     
-    # Carrega TODOS os dados (isto está correto, pois usa o cache)
     df_global = load_global_data(jira, tuple(selected_projects), tuple(done_statuses))
 
     if df_global.empty:
@@ -271,10 +271,9 @@ def run_dashboard_global():
         (df_global['DataConclusao'] < date_end_anterior)
     ]
 
-    # --- Exibição de KPIs (Métricas Principais) (ATUALIZADO) ---
+    # --- Exibição de KPIs (Métricas Principais) ---
     st.subheader(f"Métricas para: {selected_period_name}")
     
-    # --- MUDANÇA 1: Adicionada col4 ---
     col1, col2, col3, col4 = st.columns(4)
 
     # Cálculos Atuais
@@ -299,11 +298,12 @@ def run_dashboard_global():
         help="Itens Criados vs. Encerrados no período."
     )
     
-    # --- Novo Indicador ---
+    # --- Indicador com Cor Invertida ---
     col4.metric(
         "Balanço Percentual",
         f"{balanco_pct_atual:.1f}%",
         delta=f"{delta_balanco_pct:.1f}% vs. período anterior",
+        delta_color="inverse", # <--- Corrigido para inverter (vermelho para > 0)
         help="Variação percentual do backlog em relação aos itens criados. (Criados - Encerrados) / Criados."
     )
 

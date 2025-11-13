@@ -6,9 +6,9 @@ import os, json
 from datetime import datetime, timedelta
 from stqdm import stqdm 
 from jira_connector import (
-    get_jira_projects, 
-    load_and_process_project_data
+    get_jira_projects,
 )
+
 from metrics_calculator import (
     calculate_executive_summary_metrics,
     calculate_schedule_adherence,
@@ -394,13 +394,18 @@ with st.expander("Carregar Dados do Projeto", expanded=expand_loader):
             try:
                 user_data = find_user(st.session_state['email'])
                 
-                # --- INÍCIO DA CORREÇÃO ---
                 # Agora captura os 3 valores retornados
-                df_loaded, raw_issues, processed_config = load_and_process_project_data(
-                    jira_client,
-                    selected_project_key,
-                    user_data 
+                user_data = find_user(st.session_state['email'])
+
+                # 2. Chama a função correta (de utils.py)
+                df_loaded, raw_issues, proj_config = load_and_process_project_data(
+                    st.session_state.jira_client, 
+                    st.session_state.project_key,
+                    user_data
                 )
+
+                # 3. Use o df_loaded como o seu dataframe
+                df = df_loaded
                 
                 st.session_state['project_key'] = selected_project_key
                 st.session_state['project_name'] = selected_project_name
@@ -408,7 +413,7 @@ with st.expander("Carregar Dados do Projeto", expanded=expand_loader):
                 st.session_state['dynamic_df'] = df_loaded 
                 st.session_state['raw_issues_for_fluxo'] = raw_issues
                 # Salva a configuração TRADUZIDA na sessão
-                st.session_state['processed_project_config'] = processed_config
+                st.session_state['processed_project_config'] = proj_config
                 
                 if df_loaded is None or df_loaded.empty:
                     st.warning(f"Nenhuma issue foi processada para o projeto '{selected_project_name}'.")

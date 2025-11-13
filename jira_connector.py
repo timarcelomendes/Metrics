@@ -264,8 +264,49 @@ def get_project_issues(_client, project_key, jql_filter="", user_custom_fields=N
         return []
 
 def get_issues_by_board(jira_client: JIRA, board_id: str, extra_fields: list = None):
-    jql = f"board = {board_id}" # (Ou a JQL que você usa para boards)
+    jql = ""
     
+    # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
+    try:
+        # 1. Construir a URL correta manualmente para evitar o erro "/api/2/"
+        # A API Agile fica em /rest/agile/1.0/... e não dentro de /api/2
+        base_url = jira_client._options['server'].rstrip('/')
+        url = f"{base_url}/rest/agile/1.0/board/{board_id}/configuration"
+        
+        # 2. Fazer a requisição direta usando a sessão já autenticada do cliente
+        # Isso evita que a biblioteca altere a URL
+        response = jira_client._session.get(url)
+        
+        # Verifica se a requisição funcionou
+        if response.status_code == 200:
+            data = response.json()
+            
+            # 3. Extrair o ID do filtro da configuração
+            if 'filter' in data and 'id' in data['filter']:
+                filter_id = data['filter']['id']
+                
+                # 4. Buscar a JQL do filtro (aqui podemos usar o método padrão)
+                filter_obj = jira_client.filter(filter_id)
+                jql = filter_obj.jql
+                
+                # (Boa prática) Garantir ordenação
+                if "order by" not in jql.lower():
+                    jql += " ORDER BY created DESC"
+            else:
+                # Se não tiver filtro (raro), usa fallback
+                print(f"Aviso: Quadro {board_id} sem filtro configurado.")
+                jql = f"board = {board_id}"
+        else:
+            # Se a API Agile falhar (ex: permissão), usa fallback
+            print(f"Aviso: Falha na API Agile (Status {response.status_code}). Usando fallback.")
+            jql = f"board = {board_id}"
+            
+    except Exception as e:
+        # Em último caso, usa a JQL simples
+        st.warning(f"Não foi possível obter o filtro avançado do quadro. Usando método simplificado. Erro: {e}")
+        jql = f"board = {board_id}"
+    # --- FIM DA CORREÇÃO ---
+
     fields = [
         'summary', 'status', 'issuetype', 'created', 
         'resolutiondate', 'assignee', 'reporter', 'priority', 
@@ -277,13 +318,17 @@ def get_issues_by_board(jira_client: JIRA, board_id: str, extra_fields: list = N
             if field not in fields:
                 fields.append(field)
                 
-    return jira_client.search_issues(
-        jql, 
-        fields=fields, 
-        maxResults=False, 
-        expand="changelog" 
-    )
-
+    try:
+        return jira_client.search_issues(
+            jql, 
+            fields=fields, 
+            maxResults=False, 
+            expand="changelog" 
+        )
+    except JIRAError as e:
+        st.error(f"Erro ao executar a busca de issues: {e.text}")
+        return []
+        
 @st.cache_data(ttl=3600)
 def get_project_issue_types(_jira_client, project_key):
     """Busca os objetos de tipos de issues disponíveis para um projeto, excluindo sub-tarefas."""

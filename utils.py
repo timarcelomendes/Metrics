@@ -203,9 +203,11 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         # (calculate_cycle_time agora usa o project_config traduzido)
         issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
-        # --- PROCESSAMENTO CAMPOS PADRÃO ---
+# --- PROCESSAMENTO CAMPOS PADRÃO ---
         for field_id in user_enabled_standard_fields_ids:
-            if field_id in processed_by_default or field_id in [estimation_field_id, timespent_field_id]:
+
+            # Apenas mantém a verificação de 'processed_by_default'
+            if field_id in processed_by_default:
                 continue
 
             attribute_name = standard_field_id_to_attribute_map.get(field_id)

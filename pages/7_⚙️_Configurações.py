@@ -1,5 +1,5 @@
 # pages/7_⚙️_Configurações.py
-# (MODIFICADO para corrigir Imports, NameError, e usar funções existentes do jira_connector.py)
+# (MODIFICADO para corrigir a lógica de 'Controle de tempo')
 
 import streamlit as st
 # --- CORREÇÃO DE IMPORT ---
@@ -25,7 +25,7 @@ if 'jira_client' not in st.session_state:
     st.warning("⚠️ Nenhuma conexão Jira ativa."); st.page_link("pages/8_🔗_Conexões_Jira.py", label="Ativar uma Conexão", icon="🔗"); st.stop()
 
 jira_client = st.session_state['jira_client']
-user_email = st.session_state['email']
+user_email = st.session_state['email'] # <-- Email do usuário já está aqui
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -79,7 +79,7 @@ if selected_project_key:
         project_config = {} # Garante que é um dict
 
     tab_status, tab_estimativa, tab_tempo, tab_cores = st.tabs([
-        "Status (Workflow)", "Estimativa", "Tempo no Status", "Cores"
+        "Status (Workflow)", "Estimativa e Esforço", "Tempo no Status", "Cores" 
     ])
 
     # --- ABA 1: MAPEAMENTO DE STATUS ---
@@ -91,18 +91,13 @@ if selected_project_key:
         try:
             with st.spinner("Carregando status e categorias do Jira..."):
                 
-                # --- INÍCIO DA CORREÇÃO ---
-                # 1. Carregar Status usando a função do seu jira_connector.py
-                # (Isto retorna a lista de objetos de status)
                 all_statuses_raw = get_jira_statuses(jira_client, selected_project_key)
                 
                 all_statuses_list = []
                 category_names = set()
                 
-                # 2. Processar a lista de status para extrair nomes e categorias
                 for s in all_statuses_raw:
                     try:
-                        # O seu 'jira_connector.py' (linha 484) confirma que 'statusCategory' existe
                         category_name = s.statusCategory.name
                     except Exception:
                         category_name = "Sem Categoria"
@@ -115,7 +110,6 @@ if selected_project_key:
                     category_names.add(category_name)
                 
                 project_categories = sorted(list(category_names))
-                # --- FIM DA CORREÇÃO ---
 
                 if not all_statuses_list:
                     st.error(f"Não foi possível carregar os status do projeto '{selected_project_name}'. Verifique as permissões.")
@@ -131,12 +125,11 @@ if selected_project_key:
         
         with st.form("category_mapping_form"):
             
-            # Carrega os mapeamentos *atuais* salvos no config
             current_mapping_cat = project_config.get('status_category_mapping', {})
             
-            initial_defaults_cat = current_mapping_cat.get('initial', ['Itens Pendentes']) # Default para 'To Do'
-            inprogress_defaults_cat = current_mapping_cat.get('in_progress', ['Em andamento']) # Default para 'In Progress'
-            done_defaults_cat = current_mapping_cat.get('done', ['Itens concluídos']) # Default para 'Done'
+            initial_defaults_cat = current_mapping_cat.get('initial', ['Itens Pendentes'])
+            inprogress_defaults_cat = current_mapping_cat.get('in_progress', ['Em andamento'])
+            done_defaults_cat = current_mapping_cat.get('done', ['Itens concluídos'])
 
             st.multiselect(
                 "🛫 Categorias Iniciais",
@@ -162,7 +155,6 @@ if selected_project_key:
             
             st.divider()
             
-            # --- Status a Ignorar (Comum aos dois modos) ---
             st.markdown("###### ❌ Status a Ignorar (Aplicado em ambos os modos)")
             st.caption("Selecione quaisquer status que devam ser completamente ignorados (ex: 'Cancelado', 'Duplicado').")
             
@@ -178,28 +170,23 @@ if selected_project_key:
             )
 
             if st.form_submit_button("Salvar Mapeamento por Categoria", use_container_width=True, type="primary"):
-                # Carrega os valores dos widgets
                 new_initial_cat = st.session_state.map_cat_initial
                 new_inprogress_cat = st.session_state.map_cat_inprogress
-                new_done_cat = st.session_state.map_cat_done # <-- O valor "Categorias Finais" é lido
+                new_done_cat = st.session_state.map_cat_done
                 new_ignored_status = st.session_state.map_status_ignored 
                 
-                # --- CORREÇÃO DO BUG DE SALVAMENTO ---
                 project_config['status_category_mapping'] = {
                     'initial': new_initial_cat,
                     'in_progress': new_inprogress_cat,
-                    'done': new_done_cat # <-- CORRIGIDO (estava 'new_initial_cat')
+                    'done': new_done_cat
                 }
-                # --- FIM DA CORREÇÃO ---
                 
                 project_config['ignored_statuses'] = new_ignored_status
                 
-                # Limpa o mapeamento antigo (por ID) para garantir que o de categoria seja usado
                 if 'status_mapping' in project_config:
                     del project_config['status_mapping']
                     
                 save_project_config(selected_project_key, project_config)
-                # Limpa os caches relacionados
                 get_project_config.clear()
                 load_and_process_project_data.clear()
                 
@@ -214,10 +201,8 @@ if selected_project_key:
         
         with st.form("status_mapping_form"):
             
-            # Carrega os mapeamentos *atuais* (baseados em ID)
             current_mapping = project_config.get('status_mapping', {})
             
-            # --- INÍCIO DA CORREÇÃO (Bug 'item' is not defined) ---
             def get_names_from_ids(id_list, all_statuses):
                 """Converte a lista de IDs/Nomes/Dicts salvos de volta para Nomes."""
                 if not isinstance(id_list, list): 
@@ -226,16 +211,12 @@ if selected_project_key:
                 saved_names = []
                 for item in id_list:
                     if isinstance(item, str):
-                        # Formato antigo (salvava o nome)
                         saved_names.append(item)
                     elif isinstance(item, dict) and 'name' in item:
-                        # Formato novo (salvava dict)
                         saved_names.append(item['name'])
                 
-                # Filtra para garantir que os nomes ainda existem no Jira
                 current_status_names = {s['name'] for s in all_statuses}
                 return [name for name in saved_names if name in current_status_names]
-            # --- FIM DA CORREÇÃO ---
 
             initial_defaults = get_names_from_ids(current_mapping.get('initial', []), all_statuses_list)
             inprogress_defaults = get_names_from_ids(current_mapping.get('in_progress', []), all_statuses_list)
@@ -273,7 +254,6 @@ if selected_project_key:
                 new_initial = get_status_objects(st.session_state.map_status_initial, all_statuses_list)
                 new_inprogress = get_status_objects(st.session_state.map_status_inprogress, all_statuses_list)
                 new_done = get_status_objects(st.session_state.map_status_done, all_statuses_list)
-                # O 'ignored' já é salvo no formulário de cima, mas podemos salvar aqui também por segurança
                 new_ignored_status = st.session_state.map_status_ignored 
 
                 project_config['status_mapping'] = {
@@ -283,81 +263,180 @@ if selected_project_key:
                 }
                 project_config['ignored_statuses'] = new_ignored_status
                 
-                # Limpa o mapeamento por categoria para garantir que o por status seja usado
                 if 'status_category_mapping' in project_config:
                     del project_config['status_category_mapping']
 
                 save_project_config(selected_project_key, project_config)
-                # Limpa os caches relacionados
                 get_project_config.clear()
                 load_and_process_project_data.clear()
                 
                 st.success("Mapeamento por status (avançado) salvo com sucesso!")
                 st.rerun()
 
-    # --- ABA 2: ESTIMATIVA ---
+    # --- ABA 2: ESTIMATIVA E ESFORÇO ---
     with tab_estimativa:
-        st.markdown("##### Configuração de Estimativa")
-        st.info("Selecione o campo que seu time usa para estimar o tamanho das issues (ex: Story Points ou Horas).")
+        st.markdown("##### Configuração de Estimativa (Previsto) e Esforço (Realizado)")
+        st.info("Selecione os campos que seu time usa para 'Estimativa' (ex: Story Points ou Horas) e 'Tempo Gasto' (ex: Time Spent).")
+        st.caption("ℹ️ Apenas os campos que você **habilitou** na página 'Minha Conta' aparecerão aqui.")
         
         try:
-            with st.spinner("Carregando campos de estimativa..."):
-                all_fields = get_jira_fields(jira_client) # Usa a função que existe
-                # Filtra apenas campos numéricos (float ou int)
-                numeric_fields = [
-                    f for f in all_fields 
-                    if f.get('schema', {}).get('type') in ['number', 'float'] 
-                    and f['id'].startswith('customfield_')
+            # --- INÍCIO DA MODIFICAÇÃO (FILTRO POR CONTA) ---
+            with st.spinner("Carregando e filtrando campos habilitados..."):
+                # 1. Obter TODOS os campos do Jira (para mapear Nomes <-> IDs)
+                all_jira_fields = get_jira_fields(jira_client)
+                
+                # 2. Obter a configuração do USUÁRIO ATUAL
+                user_data = find_user(user_email) 
+                enabled_standard_ids = user_data.get('standard_fields', [])
+                enabled_custom_names = user_data.get('enabled_custom_fields', [])
+                
+                # 3. Criar um mapa de Nomes de campos custom para IDs
+                custom_name_to_id_map = {
+                    f['name']: f['id'] 
+                    for f in all_jira_fields 
+                    if f['id'].startswith('customfield_') and 'name' in f
+                }
+                
+                # 4. Converter os Nomes custom habilitados em IDs
+                enabled_custom_ids = [
+                    custom_name_to_id_map.get(name) 
+                    for name in enabled_custom_names 
+                    if custom_name_to_id_map.get(name)
                 ]
                 
-                # Adiciona os campos padrão de tempo
-                standard_time_fields = [
+                # 5. Criar um CONJUNTO (set) final com TODOS os IDs habilitados
+                all_enabled_ids = set(enabled_standard_ids + enabled_custom_ids)
+                
+                # --- INÍCIO DA NOVA CORREÇÃO ---
+                # Se o usuário ativou "Controle de tempo" (cujo ID é 'timetracking'),
+                # devemos adicionar explicitamente os campos de tempo individuais
+                # para que eles apareçam nos seletores.
+                if 'timetracking' in all_enabled_ids:
+                    all_enabled_ids.add('timespent')
+                    all_enabled_ids.add('timeoriginalestimate')
+                    all_enabled_ids.add('timeestimate')
+                # --- FIM DA NOVA CORREÇÃO ---
+
+                # 6. Filtrar a lista de 'numeric_fields'
+                # Apenas campos numéricos que TAMBÉM estão na lista de habilitados
+                numeric_fields = [
+                    f for f in all_jira_fields 
+                    if f.get('schema', {}).get('type') in ['number', 'float'] 
+                    and f['id'].startswith('customfield_')
+                    and f['id'] in all_enabled_ids # <-- O FILTRO PRINCIPAL
+                ]
+                
+                # 7. Definir e Filtrar os campos padrão (standard)
+                
+                # Campos Padrão para "Previsto"
+                standard_previsto_fields_all = [
                     {'id': 'timeoriginalestimate', 'name': 'Original Estimate (Horas)'},
                     {'id': 'timeestimate', 'name': 'Remaining Estimate (Horas)'},
                 ]
-                
-                all_estimation_fields = standard_time_fields + numeric_fields
-                field_map = {f['id']: f['name'] for f in all_estimation_fields}
+                filtered_standard_previsto = [
+                    f for f in standard_previsto_fields_all if f['id'] in all_enabled_ids
+                ]
+
+                # Campos Padrão para "Realizado"
+                standard_realizado_fields_all = [
+                    {'id': 'timespent', 'name': 'Time Spent (Horas)'},
+                ]
+                filtered_standard_realizado = [
+                    f for f in standard_realizado_fields_all if f['id'] in all_enabled_ids
+                ]
+
+                # 8. Construir as listas finais e os mapas
+                # 'numeric_fields' já está filtrada
+                all_previsto_fields = filtered_standard_previsto + numeric_fields
+                previsto_field_map = {f['id']: f['name'] for f in all_previsto_fields}
+
+                all_realizado_fields = filtered_standard_realizado + numeric_fields
+                realizado_field_map = {f['id']: f['name'] for f in all_realizado_fields}
+            # --- FIM DA MODIFICAÇÃO (FILTRO POR CONTA) ---
                 
         except Exception as e:
             st.error(f"Erro ao carregar campos do Jira: {e}")
-            all_estimation_fields = []
-            field_map = {}
+            previsto_field_map = {}
+            realizado_field_map = {}
 
+        # Carrega a config ATUAL para "Previsto"
         current_estimation_config = project_config.get('estimation_field', {})
-        current_field_id = current_estimation_config.get('id', None)
-        
-        default_index = 0
-        if current_field_id:
+        current_estim_field_id = current_estimation_config.get('id', None)
+        default_estim_index = 0
+        if current_estim_field_id and current_estim_field_id in previsto_field_map:
             try:
-                default_index = list(field_map.keys()).index(current_field_id)
+                default_estim_index = list(previsto_field_map.keys()).index(current_estim_field_id)
             except ValueError:
-                default_index = 0 # O campo salvo não está mais disponível
+                default_estim_index = 0 
 
-        if not field_map:
-             st.warning("Nenhum campo numérico (custom field) ou de tempo (standard) encontrado.")
+        # Carrega a config ATUAL para "Realizado"
+        current_timespent_config = project_config.get('timespent_field', {})
+        current_spent_field_id = current_timespent_config.get('id', None)
+        default_spent_index = 0
+        if current_spent_field_id and current_spent_field_id in realizado_field_map:
+            try:
+                default_spent_index = list(realizado_field_map.keys()).index(current_spent_field_id)
+            except ValueError:
+                default_spent_index = 0
+
+        # Modificado para verificar se AMBOS os mapas estão vazios
+        if not previsto_field_map and not realizado_field_map:
+             st.warning("Nenhum campo de estimativa ou tempo foi habilitado na sua página 'Minha Conta'.")
+             st.info("Por favor, vá até 'Minha Conta' -> 'Jira: Campos Dinâmicos' e ative os campos que deseja usar (ex: 'Controle de tempo', 'Story point estimate').")
         else:
-            with st.form("estimation_form"):
-                selected_field_id = st.selectbox(
-                    "Campo de Estimativa Padrão",
-                    options=list(field_map.keys()),
-                    format_func=lambda x: field_map.get(x, "Desconhecido"),
-                    index=default_index,
+            with st.form("effort_form"): 
+                st.markdown("###### 1. Campo de Esforço Previsto (Estimativa)")
+                selected_estim_field_id = st.selectbox(
+                    "Campo de Estimativa (Previsto)",
+                    options=list(previsto_field_map.keys()),
+                    format_func=lambda x: previsto_field_map.get(x, "Desconhecido"),
+                    index=default_estim_index,
                     help="Selecione o campo usado para 'Story Points' ou 'Horas Estimadas'."
                 )
                 
-                if st.form_submit_button("Salvar Configuração de Estimativa", type="primary"):
-                    selected_name = field_map[selected_field_id]
-                    source = 'standard_time' if selected_field_id in ['timeoriginalestimate', 'timeestimate'] else 'custom_field'
+                st.markdown("###### 2. Campo de Esforço Realizado (Tempo Gasto)")
+                selected_spent_field_id = st.selectbox(
+                    "Campo de Tempo Gasto (Realizado)",
+                    options=list(realizado_field_map.keys()),
+                    format_func=lambda x: realizado_field_map.get(x, "Desconhecido"),
+                    index=default_spent_index,
+                    help="Selecione o campo usado para 'Time Spent' (Horas) ou um campo numérico equivalente."
+                )
+                
+                st.divider()
+                
+                if st.form_submit_button("Salvar Configurações de Esforço", type="primary"):
                     
-                    project_config['estimation_field'] = {
-                        'id': selected_field_id,
-                        'name': selected_name,
-                        'source': source
-                    }
+                    # Lógica para o campo "Previsto"
+                    if selected_estim_field_id:
+                        selected_estim_name = previsto_field_map[selected_estim_field_id]
+                        estim_source = 'standard_time' if selected_estim_field_id in ['timeoriginalestimate', 'timeestimate'] else 'custom_field'
+                        
+                        project_config['estimation_field'] = {
+                            'id': selected_estim_field_id,
+                            'name': selected_estim_name,
+                            'source': estim_source
+                        }
+                    else:
+                        project_config['estimation_field'] = {} # Salva como vazio se nada for selecionado
+                    
+                    # Lógica para o campo "Realizado"
+                    if selected_spent_field_id:
+                        selected_spent_name = realizado_field_map[selected_spent_field_id]
+                        spent_source = 'standard_time' if selected_spent_field_id == 'timespent' else 'custom_field'
+                        
+                        project_config['timespent_field'] = {
+                            'id': selected_spent_field_id,
+                            'name': selected_spent_name,
+                            'source': spent_source
+                        }
+                    else:
+                         project_config['timespent_field'] = {} # Salva como vazio
+
                     save_project_config(selected_project_key, project_config)
                     get_project_config.clear()
-                    st.success(f"Campo de estimativa '{selected_name}' salvo com sucesso!")
+                    load_and_process_project_data.clear()
+                    st.success(f"Configurações de esforço (Previsto e Realizado) salvas com sucesso!")
                     st.rerun()
 
     # --- ABA 3: TEMPO NO STATUS ---
