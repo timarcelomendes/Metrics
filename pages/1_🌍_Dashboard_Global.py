@@ -253,7 +253,7 @@ def run_dashboard_global():
         
     except Exception as e:
         # Este é o erro que você está a ver (Read timed out)
-        st.warning("Oops! Parece que a conexão com o servidor Jira falhou ou demorou demais (timeout).")
+a        st.warning("Oops! Parece que a conexão com o servidor Jira falhou ou demorou demais (timeout).")
         st.info("Isto pode ser um problema temporário de rede ou do servidor Jira. Por favor, tente novamente.")
         
         # Adiciona o botão "Tentar Novamente"
