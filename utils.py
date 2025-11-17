@@ -356,9 +356,21 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     all_expected_standard_ids = user_enabled_standard_fields_ids
     all_expected_custom_names = list(user_custom_field_name_to_id_map.keys())
     expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
+    expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
     if strategic_field_name: expected_cols_before_rename.add(strategic_field_name)
-    if estimation_field_id: expected_cols_before_rename.add(estimation_field_id)
-    if timespent_field_id: expected_cols_before_rename.add(timespent_field_id)
+    
+    if estimation_field_id: 
+        if isinstance(estimation_field_id, list): 
+            estimation_field_id = str(estimation_field_id[0]) if estimation_field_id else None
+        if estimation_field_id:
+            expected_cols_before_rename.add(estimation_field_id)
+
+    if timespent_field_id: 
+        if isinstance(timespent_field_id, list): 
+            # Se for lista, pega o primeiro item
+            timespent_field_id = str(timespent_field_id[0]) if timespent_field_id else None
+        if timespent_field_id:
+            expected_cols_before_rename.add(timespent_field_id)
 
     for col in expected_cols_before_rename:
         if col not in df.columns:
