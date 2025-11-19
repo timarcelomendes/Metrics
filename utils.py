@@ -37,6 +37,134 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 import unicodedata
 from stqdm import stqdm
+from typing import Optional, Any, Dict
+try:
+    from pymongo import MongoClient
+    from bson.objectid import ObjectId
+    MONGO_AVAILABLE = True
+except ImportError:
+    MONGO_AVAILABLE = False
+    
+# Importamos a URI do config.py (se for um arquivo Python no mesmo contexto)
+# Embora não possamos acessar config.py diretamente, o Streamlit gerencia a importação
+# O MONGO_URI é lido do secrets.toml, conforme mencionado em config.py
+MONGO_URI = st.secrets.get("connections", {}).get("mongodb_uri")
+DB_NAME = "gauge_metrics" # Nome da base de dados, conforme sugerido em config.py
+
+# Variáveis globais esperadas do ambiente Canvas (Nomes neutros)
+if '__db_config' not in st.session_state:
+    st.session_state['__db_config'] = "{}"
+if '__auth_token' not in st.session_state: # Renomeado de __initial_auth_token
+    st.session_state['__auth_token'] = None
+if '__app_id' not in st.session_state:
+    st.session_state['__app_id'] = 'default-app-id'
+
+# --- Cliente MongoDB (Cache Resource) ---
+@st.cache_resource
+def get_mongo_client():
+    """Conecta-se ao MongoDB usando a URI de segurança e retorna o cliente."""
+    if not MONGO_AVAILABLE:
+        st.error("Biblioteca 'pymongo' não encontrada. A persistência MongoDB está desabilitada.")
+        return None
+    if not MONGO_URI:
+        st.error("MONGO_URI não encontrado. A persistência MongoDB está desabilitada.")
+        return None
+    try:
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        # Tenta uma operação de teste para garantir a conexão
+        client.admin.command('ping')
+        return client
+    except Exception as e:
+        st.error(f"Falha ao conectar ao MongoDB: {e}. Verifique a MONGO_URI em secrets.toml.")
+        return None
+
+# --- Inicialização da Conexão (Renomeado) ---
+
+def setup_db_connection(): # Renomeada de setup_firebase_and_auth
+    """Inicializa um ambiente de persistência (focado no Mongo)."""
+    mongo_client = get_mongo_client()
+    if mongo_client:
+        st.session_state.db_client = mongo_client
+        st.session_state.app_id = st.session_state['__app_id']
+        st.session_state.db_ready = True # Sinaliza sucesso
+        return True, None # Retorna True (pronto) e None (token de auth, se necessário)
+    return False, None
+
+def get_db():
+    """Retorna o objeto de base de dados MongoDB."""
+    if 'db_client' in st.session_state:
+        return st.session_state.db_client[DB_NAME]
+    return None
+
+def get_user_id(auth) -> str:
+    """Retorna um ID de usuário persistente ou um ID anônimo."""
+    if '__user_uid' not in st.session_state:
+        st.session_state['__user_uid'] = str(uuid.uuid4())
+    return st.session_state['__user_uid']
+
+# --- Funções de Persistência MongoDB Compartilhada ---
+
+# CORREÇÃO: Atualizado para 'Entregas' para coincidir com o mock de dados do dashboard
+DEFAULT_CONFIG = {"title": "Gráfico Padrão (Edite para Personalizar)", "x_col": "Mês", "y_col": "Entregas", "color": "#1f77b4"}
+CHART_DOC_ID = "main_flow_chart_config" # ID fixo para o documento
+
+@st.cache_data(ttl=1) # Curto TTL para refletir mudanças rapidamente
+def load_shared_chart_config():
+    """Carrega a configuração do gráfico compartilhada da coleção MongoDB."""
+    db = get_db()
+    # CORREÇÃO AQUI: Verificar explicitamente se db é None
+    if db is None:
+        return DEFAULT_CONFIG
+        
+    try:
+        # Usamos uma coleção pública para o estado compartilhado
+        collection = db["shared_dashboard_charts"]
+        
+        # Busca o documento pelo ID fixo
+        doc = collection.find_one({"_id": CHART_DOC_ID})
+        
+        if doc and 'config' in doc:
+            return doc['config']
+        else:
+            # Se não existir, salva o padrão e retorna
+            save_shared_chart_config(DEFAULT_CONFIG)
+            return DEFAULT_CONFIG
+            
+    except Exception as e:
+        st.warning(f"Erro ao carregar a configuração compartilhada do MongoDB: {e}")
+        return DEFAULT_CONFIG
+
+def save_shared_chart_config(new_config: Dict[str, Any]):
+    """Salva a nova configuração do gráfico na coleção MongoDB."""
+    db = get_db()
+    # CORREÇÃO AQUI: Verificar explicitamente se db é None
+    if db is None:
+        st.error("Falha ao salvar: Cliente MongoDB não está disponível.")
+        return
+        
+    try:
+        collection = db["shared_dashboard_charts"]
+        user_id = get_user_id(None) # Obtém o UID do usuário atual
+        
+        data_to_save = {
+            '_id': CHART_DOC_ID, # Chave primária
+            'config': new_config,
+            'updated_by_uid': user_id,
+            'updated_at': datetime.now()
+        }
+        
+        # Usa replace_one com upsert=True para garantir que o documento exista ou seja atualizado
+        collection.replace_one(
+            {'_id': CHART_DOC_ID},
+            data_to_save,
+            upsert=True
+        )
+        
+        # Invalida o cache para que todos leiam o novo estado global
+        load_shared_chart_config.clear() 
+        
+    except Exception as e:
+        st.error(f"Erro ao salvar a configuração compartilhada no MongoDB: {e}")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
@@ -326,6 +454,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
 
+    # Remove colunas duplicadas, mantendo a primeira ocorrência.
+    # Isso previne o erro "Duplicate column names found" se um campo customizado tiver o mesmo nome de um campo padrão renomeado.
+    df = df.loc[:, ~df.columns.duplicated()]
+
     return df, issues, project_config
 
 def apply_filters(df, filters):
@@ -546,7 +678,24 @@ def render_chart(chart_config, df, chart_key):
         chart_type = chart_config.get('type')
         default_theme = list(COLOR_THEMES.keys())[0]
         color_theme = chart_config.get('color_theme', default_theme)
+        
+        # 1. Aplica os filtros iniciais
         df_chart_filtered = apply_filters(df, chart_config.get('filters', []))
+
+        # --- CORREÇÃO: Recria Dimensões Combinadas se necessário ---
+        # Verifica se as dimensões usadas (ex: "Status & Prioridade") existem. 
+        # Se não, e tiverem " & " no nome, tenta recriá-las juntando as colunas originais.
+        for dim_key in ['dimension', 'secondary_dimension', 'x', 'y', 'color_by', 'size_by']:
+            col_name = chart_config.get(dim_key)
+            if col_name and isinstance(col_name, str) and col_name not in df_chart_filtered.columns and ' & ' in col_name:
+                parts = col_name.split(' & ')
+                # Suporta apenas combinação de 2 colunas por enquanto, conforme a UI de criação
+                if len(parts) == 2:
+                    p1, p2 = parts[0].strip(), parts[1].strip()
+                    if p1 in df_chart_filtered.columns and p2 in df_chart_filtered.columns:
+                        # Recria a lógica: Valor1 - Valor2
+                        df_chart_filtered[col_name] = df_chart_filtered[p1].astype(str) + " - " + df_chart_filtered[p2].astype(str)
+        # -----------------------------------------------------------
 
         # --- BLOCO DE GRÁFICO AGREGADO ---
         if chart_type in ['barra', 'barra_horizontal', 'linha_agregada', 'pizza', 'treemap', 'funil', 'tabela']:
@@ -589,17 +738,19 @@ def render_chart(chart_config, df, chart_key):
 
             # Continua a lógica original, mas agora 'measure' existe ou é None
             if not dimension or not measure or not agg:
-                if not st.session_state.get('_measure_none_warned', False):
-                     st.warning(f"Configuração de gráfico agregado inválida ou medida '{chart_config.get('measure')}' não pôde ser calculada.")
-                     st.session_state._measure_none_warned = True 
-                if '_measure_none_warned' in st.session_state and measure: 
-                    del st.session_state['_measure_none_warned']
+                # (Warning suprimido para evitar spam visual se a config estiver incompleta temporariamente)
                 return
 
             group_by_cols = [dimension]
             secondary_dimension = chart_config.get('secondary_dimension')
             if secondary_dimension:
                 group_by_cols.append(secondary_dimension)
+            
+            # Garante que as colunas de agrupamento existem (após a tentativa de recriação acima)
+            missing_cols = [c for c in group_by_cols if c not in df_chart_filtered.columns]
+            if missing_cols:
+                st.warning(f"Não foi possível renderizar o gráfico: Colunas não encontradas: {', '.join(missing_cols)}")
+                return
 
             # Lógica de Agregação (agora usa 'measure' que PODE ser a coluna calculada)
             agg_col = None 
@@ -629,16 +780,8 @@ def render_chart(chart_config, df, chart_key):
                 agg_col = f"{agg_name_map.get(agg, 'Valor de')} {measure}"
                 agg_df.rename(columns={measure: agg_col}, inplace=True)
             else:
-                 # Verifica se o warning já foi mostrado para evitar repetição
-                 if not st.session_state.get(f'_measure_{measure}_warned', False):
-                      st.error(f"Coluna de medida '{measure}' não encontrada ou inválida após o cálculo.")
-                      st.session_state[f'_measure_{measure}_warned'] = True
                  return
             
-            # Limpa warning se a medida voltou a ser válida
-            if f'_measure_{measure}_warned' in st.session_state and agg_col is not None:
-                 del st.session_state[f'_measure_{measure}_warned']
-
             # Define o título do eixo Y ANTES de qualquer conversão
             y_axis_title_text = agg_col
 
@@ -775,16 +918,16 @@ def render_chart(chart_config, df, chart_key):
             color_by = chart_config.get('color_by')
 
             if not x or not y:
-                st.warning("Configuração de gráfico X-Y inválida: Eixos X e Y são obrigatórios.")
                 return
 
             required_cols = [x, y]
             if size_by and size_by != "Nenhum": required_cols.append(size_by)
             if color_by and color_by != "Nenhum": required_cols.append(color_by)
             
-            if not all(col in df.columns for col in required_cols):
-                missing = [col for col in required_cols if col not in df.columns]
-                st.warning(f"Não foi possível renderizar o gráfico. Coluna(s) não encontrada(s): {', '.join(missing)}")
+            # Valida existência das colunas (após tentativa de recriação)
+            missing_cols = [c for c in required_cols if c not in df_chart_filtered.columns]
+            if missing_cols:
+                st.warning(f"Não foi possível renderizar: colunas faltantes {missing_cols}")
                 return
 
             plot_df = df_chart_filtered.copy().dropna(subset=required_cols)
@@ -979,7 +1122,7 @@ def render_chart(chart_config, df, chart_key):
             delta_agg = chart_config.get('mc_delta_agg')
 
             if not dimension or not measure:
-                st.warning("Configuração de Métrica inválida. Dimensão e Medida são obrigatórias.")
+                # (Warning suprimido)
                 return
 
             measure_col_for_plotting = measure
@@ -1048,11 +1191,6 @@ def render_chart(chart_config, df, chart_key):
             st.error(f"**Tipo de Erro:** {type(e).__name__}")
             st.error(f"**Mensagem:** {e}")
             st.code(traceback.format_exc())
-        with st.expander("Ver dados do gráfico com erro"):
-            try:
-                st.json(chart_config)
-            except:
-                st.write(chart_config)
 
 def combined_dimension_ui(df, categorical_cols, date_cols, key_suffix=""):
     st.markdown("###### **Criar Dimensão Combinada**")

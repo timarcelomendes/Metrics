@@ -51,6 +51,14 @@
         {
             "id": "customfield_10016",
             "name": "Story point estimate"
+        },
+        {
+            "id": "customfield_11009",
+            "name": "P\u00fablico Alvo"
+        },
+        {
+            "id": "customfield_11010",
+            "name": "Tipo de Atividade"
         }
     ],
     "strategic_grouping_field": "Cliente",

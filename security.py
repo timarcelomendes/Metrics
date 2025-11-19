@@ -246,10 +246,23 @@ def get_user_dashboard(user_email, project_key):
     return []
 
 def save_user_dashboard(email, all_dashboard_layouts):
-    get_users_collection().update_one(
-        {'email': email},
-        {'$set': {'dashboard_layout': all_dashboard_layouts}}
-    )
+    """
+    Salva os layouts do dashboard no MongoDB.
+    Inclui proteção contra salvamento de dados vazios acidentais.
+    """
+    if not all_dashboard_layouts:
+        print(f"⚠️ ALERTA: Tentativa de salvar dashboard vazio para {email}. Bloqueado por segurança.")
+        return False
+
+    try:
+        get_users_collection().update_one(
+            {'email': email},
+            {'$set': {'dashboard_layout': all_dashboard_layouts}}
+        )
+        return True
+    except Exception as e:
+        print(f"Erro ao salvar dashboard no Mongo: {e}")
+        return False
 
 # --- Funções de Gestão de Configurações ---
 @st.cache_data

@@ -881,7 +881,6 @@ st.divider()
 # --- BLOCO 6: AÇÕES FINAIS (SALVAR/CANCELAR) ---
 def cleanup_editor_state_and_switch_page():
     """Limpa o estado do editor e volta para o dashboard."""
-    # Adiciona as chaves de config do "Tempo em Status" para limpeza
     keys_to_clear = [
         'chart_to_edit', 'creator_filters', 'chart_config_ia', 'new_chart_config',
         'agg_selected_statuses', 'agg_calc_method',
@@ -889,86 +888,146 @@ def cleanup_editor_state_and_switch_page():
         'kpi_den_selected_statuses', 'kpi_den_calc_method',
         'kpi_base_selected_statuses', 'kpi_base_calc_method',
         'mc_measure_selected_statuses', 'mc_measure_calc_method',
-        'updated_tabs_layout' # Limpa o estado de edição do dashboard também
+        'updated_tabs_layout'
     ]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
     st.switch_page("pages/2_🏠_Meu_Dashboard.py")
 
+# Função auxiliar para identificar o destino correto do salvamento
+def get_dashboard_target(current_email, current_project_key):
+    """
+    Retorna o email do alvo (owner ou o próprio usuário) e os seus layouts.
+    Isso permite que editores salvem alterações diretamente no perfil do proprietário.
+    """
+    # 1. Carrega dados do usuário atual para descobrir quem é o dono do dashboard ativo
+    user_data = find_user(current_email)
+    all_layouts = user_data.get('dashboard_layout', {})
+    project_layouts = all_layouts.get(current_project_key, {})
+    active_dashboard_id = project_layouts.get('active_dashboard_id')
+    
+    target_email = current_email
+    target_layouts = all_layouts
+    
+    if active_dashboard_id and active_dashboard_id in project_layouts.get('dashboards', {}):
+        dashboard_config = project_layouts['dashboards'][active_dashboard_id]
+        owner_email = dashboard_config.get('owner_email')
+        
+        # Se houver um dono definido e não for eu mesmo, precisamos salvar lá
+        if owner_email and owner_email != current_email:
+            owner_data = find_user(owner_email)
+            if owner_data:
+                target_email = owner_email
+                target_layouts = owner_data.get('dashboard_layout', {})
+            else:
+                return None, None, None, "Proprietário do dashboard não encontrado."
+    
+    return target_email, target_layouts, active_dashboard_id, None
+
+
 if editing_mode:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Salvar Alterações", type="primary", width='stretch', icon="💾"):
-            # A fonte de verdade é o estado 'new_chart_config', que mantém o ID original.
             final_config = st.session_state.new_chart_config
             original_chart_id = final_config.get('id')
 
             if final_config and final_config.get('title') and original_chart_id:
-                # Se uma nova coluna foi gerada (ex: Tempo em Status), 'measure' já foi atualizado
-                # Mas precisamos garantir que 'new_measure_col' (que não é mais usado) não sobrescreva
-                
                 final_config['filters'] = convert_dates_in_filters(st.session_state.get('creator_filters', []))
                 
-                user_data = find_user(st.session_state['email'])
-                all_layouts = user_data.get('dashboard_layout', {})
-                project_layouts = all_layouts.get(current_project_key, {})
-                active_dashboard_id = project_layouts.get('active_dashboard_id')
-                
-                if active_dashboard_id and active_dashboard_id in project_layouts.get('dashboards', {}):
-                    tabs_layout = project_layouts['dashboards'][active_dashboard_id]['tabs']
-                    chart_found_and_updated = False
-                    for tab_name, charts in tabs_layout.items():
-                        # Procura o gráfico usando o ID que foi guardado no estado da sessão
-                        for i, item in enumerate(charts):
-                            if isinstance(item, dict) and item.get("id") == original_chart_id:
-                                tabs_layout[tab_name][i] = final_config
-                                chart_found_and_updated = True
+                # --- Lógica de Salvamento no Owner ---
+                target_email, target_layouts, active_dashboard_id, error_msg = get_dashboard_target(
+                    st.session_state['email'], current_project_key
+                )
+
+                if error_msg:
+                    st.error(error_msg)
+                elif target_layouts and active_dashboard_id:
+                    # Verifica se o dashboard existe no layout do ALVO
+                    proj_layouts_target = target_layouts.get(current_project_key, {})
+                    if active_dashboard_id in proj_layouts_target.get('dashboards', {}):
+                        tabs_layout = proj_layouts_target['dashboards'][active_dashboard_id]['tabs']
+                        chart_found_and_updated = False
+                        
+                        for tab_name, charts in tabs_layout.items():
+                            for i, item in enumerate(charts):
+                                if isinstance(item, dict) and item.get("id") == original_chart_id:
+                                    tabs_layout[tab_name][i] = final_config
+                                    chart_found_and_updated = True
+                                    break
+                            if chart_found_and_updated:
                                 break
+                        
                         if chart_found_and_updated:
-                            break
-                    
-                    if chart_found_and_updated:
-                        save_user_dashboard(st.session_state['email'], all_layouts)
-                        st.success("Visualização atualizada com sucesso!")
-                        cleanup_editor_state_and_switch_page()
+                            # Salva no perfil do ALVO (target_email)
+                            save_user_dashboard(target_email, target_layouts)
+                            
+                            if target_email != st.session_state['email']:
+                                st.success(f"Visualização atualizada no perfil do proprietário ({target_email})!")
+                            else:
+                                st.success("Visualização atualizada com sucesso!")
+                                
+                            cleanup_editor_state_and_switch_page()
+                        else:
+                            st.error("Não foi possível encontrar o gráfico original para atualizar.")
                     else:
-                        st.error("Não foi possível encontrar o gráfico original no dashboard para atualizar.")
+                        st.error("Dashboard não encontrado no perfil de destino.")
                 else:
-                    st.error("Dashboard ativo não encontrado para salvar as alterações.")
+                    st.error("Erro ao identificar o dashboard ativo.")
             else:
-                st.warning("Configuração de visualização inválida, sem título ou sem um ID rastreável.")
+                st.warning("Configuração inválida.")
     with col2:
         if st.button("Cancelar Edição", width='stretch'):
             cleanup_editor_state_and_switch_page()
 
-else: # Lógica para adicionar novo gráfico (sem alterações)
+else: # Adicionar novo gráfico
     if st.button("Adicionar ao Dashboard Ativo", type="primary", width='stretch', icon="➕"):
         if chart_config and chart_config.get('title'):
-            # A lógica de 'new_measure_col' já não é necessária,
-            # pois 'chart_config' é atualizado diretamente pela UI
-            
             chart_config['filters'] = convert_dates_in_filters(st.session_state.get('creator_filters', []))
             chart_config['id'] = str(uuid.uuid4())
-            user_data = find_user(st.session_state['email'])
-            all_layouts = user_data.get('dashboard_layout', {})
-            if current_project_key not in all_layouts: all_layouts[current_project_key] = {}
-            project_layouts = all_layouts[current_project_key]
-            if 'dashboards' not in project_layouts: project_layouts['dashboards'] = {}
-            active_dashboard_id = project_layouts.get('active_dashboard_id')
-            if not active_dashboard_id or active_dashboard_id not in project_layouts['dashboards']:
-                active_dashboard_id = str(uuid.uuid4())
-                project_layouts['active_dashboard_id'] = active_dashboard_id
-                project_layouts['dashboards'][active_dashboard_id] = {"id": active_dashboard_id, "name": "Dashboard Principal", "tabs": {"Geral": []}}
-            active_dashboard = project_layouts['dashboards'][active_dashboard_id]
-            all_charts_count = sum(len(charts) for charts in active_dashboard.get('tabs', {}).values())
-            if all_charts_count >= DASHBOARD_CHART_LIMIT:
-                st.warning(f"Limite de {DASHBOARD_CHART_LIMIT} visualizações atingido.")
-            else:
-                if "Geral" not in active_dashboard.get('tabs', {}): active_dashboard['tabs']['Geral'] = []
-                active_dashboard['tabs']['Geral'].append(chart_config)
-                save_user_dashboard(st.session_state['email'], all_layouts)
-                st.success(f"Visualização adicionada ao '{active_dashboard.get('name', 'Dashboard')}'!")
-                cleanup_editor_state_and_switch_page()
+            
+            # --- Lógica de Salvamento no Owner ---
+            target_email, target_layouts, active_dashboard_id, error_msg = get_dashboard_target(
+                st.session_state['email'], current_project_key
+            )
+
+            if error_msg:
+                st.error(error_msg)
+            elif target_layouts: # Se target_layouts existe, podemos prosseguir
+                if current_project_key not in target_layouts: target_layouts[current_project_key] = {}
+                project_layouts = target_layouts[current_project_key]
+                
+                if 'dashboards' not in project_layouts: project_layouts['dashboards'] = {}
+                
+                # Se não houver ID ativo no alvo, cria um novo (apenas se for o próprio user)
+                if not active_dashboard_id or active_dashboard_id not in project_layouts['dashboards']:
+                    if target_email == st.session_state['email']:
+                        active_dashboard_id = str(uuid.uuid4())
+                        project_layouts['active_dashboard_id'] = active_dashboard_id
+                        project_layouts['dashboards'][active_dashboard_id] = {"id": active_dashboard_id, "name": "Dashboard Principal", "tabs": {"Geral": []}}
+                    else:
+                        st.error("Não é possível criar um novo dashboard no perfil de outro usuário.")
+                        st.stop()
+
+                active_dashboard = project_layouts['dashboards'][active_dashboard_id]
+                
+                # Verificação de limite de gráficos
+                all_charts_count = sum(len(charts) for charts in active_dashboard.get('tabs', {}).values())
+                if all_charts_count >= DASHBOARD_CHART_LIMIT:
+                    st.warning(f"Limite de {DASHBOARD_CHART_LIMIT} visualizações atingido.")
+                else:
+                    if "Geral" not in active_dashboard.get('tabs', {}): active_dashboard['tabs']['Geral'] = []
+                    active_dashboard['tabs']['Geral'].append(chart_config)
+                    
+                    # Salva no perfil do ALVO
+                    save_user_dashboard(target_email, target_layouts)
+                    
+                    if target_email != st.session_state['email']:
+                        st.success(f"Visualização adicionada ao dashboard de {target_email}!")
+                    else:
+                        st.success(f"Visualização adicionada ao '{active_dashboard.get('name', 'Dashboard')}'!")
+                        
+                    cleanup_editor_state_and_switch_page()
         else:
-            st.warning("Configuração de visualização inválida ou sem título.")
+            st.warning("Configuração inválida ou sem título.")

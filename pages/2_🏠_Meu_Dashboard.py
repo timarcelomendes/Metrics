@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import uuid
 import json
-from metrics_calculator import *
+from metrics_calculator import * # find_completion_date está aqui
 from config import *
 from utils import *
 from security import *
@@ -40,17 +40,12 @@ def ensure_project_data_is_loaded():
     if 'dynamic_df' not in st.session_state or st.session_state.get('dynamic_df') is None:
         project_key = st.session_state.get('project_key')
         if project_key and 'jira_client' in st.session_state:
-        # 1. Busca os dados do utilizador (necessário para a nova função)
             user_data = find_user(st.session_state['email'])
-            
-            # 2. Chama a função correta (de utils.py)
             df_loaded, raw_issues, proj_config = load_and_process_project_data(
                 st.session_state.jira_client, 
                 project_key,
-                user_data # <--- Passa os dados do utilizador
+                user_data
             )
-            
-            # 3. Guarda o dataframe na sessão
             st.session_state.dynamic_df = df_loaded
             st.session_state.loaded_project_key = project_key
 
@@ -67,26 +62,56 @@ def edit_chart_callback(chart_config):
     ensure_project_data_is_loaded()
     st.switch_page("pages/5_🏗️_Construir Gráficos.py")
 
-def remove_chart_callback(chart_id, tab_name, project_key, all_layouts):
-    user_email = st.session_state['email']
-    active_dashboard_id = all_layouts.get(project_key, {}).get('active_dashboard_id')
-    if active_dashboard_id:
+# --- Callbacks Atualizados para Sincronização (Live Sync) ---
+
+def remove_chart_callback(chart_id, tab_name, project_key, dashboard_id, owner_email):
+    """Remove gráfico do dashboard correto (próprio ou do owner)."""
+    # Determina quem é o dono real dos dados
+    target_email = owner_email if owner_email else st.session_state['email']
+    
+    # Carrega os layouts do alvo
+    target_user_data = find_user(target_email)
+    if not target_user_data:
+        st.error("Erro ao acessar dados do proprietário do dashboard.")
+        return
+
+    all_layouts = target_user_data.get('dashboard_layout', {})
+    active_dashboard_id = dashboard_id # O ID deve ser passado explicitamente para evitar confusão
+
+    # Verifica se o dashboard existe no alvo
+    if project_key in all_layouts and active_dashboard_id in all_layouts[project_key].get('dashboards', {}):
         tabs = all_layouts[project_key]['dashboards'][active_dashboard_id]['tabs']
         if tab_name in tabs:
             tabs[tab_name] = [chart for chart in tabs[tab_name] if chart.get('id') != chart_id]
-            save_user_dashboard(user_email, all_layouts)
+            save_user_dashboard(target_email, all_layouts)
             st.success("Gráfico removido!")
             st.session_state.needs_rerun = True
+    else:
+        st.error("Dashboard não encontrado no perfil de origem.")
 
-def move_chart_callback(charts_list, tab_name, from_index, to_index, project_key, all_layouts):
-    item = charts_list.pop(from_index)
-    charts_list.insert(to_index, item)
-    active_dashboard_id = all_layouts.get(project_key, {}).get('active_dashboard_id')
-    if active_dashboard_id:
-        tabs = all_layouts[project_key]['dashboards'][active_dashboard_id]['tabs']
-        tabs[tab_name] = charts_list
-        save_user_dashboard(st.session_state['email'], all_layouts)
-        st.session_state.needs_rerun = True
+def move_chart_callback(charts_list, tab_name, from_index, to_index, project_key, dashboard_id, owner_email):
+    """Move gráfico no dashboard correto (próprio ou do owner)."""
+    # Nota: charts_list é uma cópia local da renderização, precisamos modificar a fonte
+    target_email = owner_email if owner_email else st.session_state['email']
+    
+    target_user_data = find_user(target_email)
+    if not target_user_data: return
+
+    all_layouts = target_user_data.get('dashboard_layout', {})
+    
+    if project_key in all_layouts and dashboard_id in all_layouts[project_key].get('dashboards', {}):
+        tabs = all_layouts[project_key]['dashboards'][dashboard_id]['tabs']
+        if tab_name in tabs:
+            # Obtém a lista real da fonte
+            source_list = tabs[tab_name]
+            # Realiza a movimentação
+            if 0 <= from_index < len(source_list) and 0 <= to_index < len(source_list):
+                item = source_list.pop(from_index)
+                source_list.insert(to_index, item)
+                
+                # Salva no alvo
+                save_user_dashboard(target_email, all_layouts)
+                st.session_state.needs_rerun = True
 
 def on_layout_change():
     num_cols = st.session_state.dashboard_layout_radio
@@ -136,26 +161,21 @@ with st.sidebar:
     selected_project_name = st.selectbox("Selecione um Projeto", options=project_names, key="project_selector_creator", index=default_index, placeholder="Escolha um projeto...")
     if selected_project_name:
         if st.button("Visualizar Dashboard", width='stretch', type="primary"):
-            # importlib.reload(jira_connector) # Removido
             project_key = projects[selected_project_name]
             save_last_project(st.session_state['email'], project_key)
             st.session_state.project_key = project_key
             st.session_state.project_name = selected_project_name
             
-            # 1. Busca os dados do utilizador
             user_data = find_user(st.session_state['email'])
             
-            # 2. Chama a função correta (de utils.py)
             df_loaded, raw_issues, proj_config = load_and_process_project_data(
                 st.session_state.jira_client, 
                 project_key,
-                user_data # Passa os dados do utilizador
+                user_data 
             )
             
-            # 3. Guarda o dataframe na sessão
             st.session_state.dynamic_df = df_loaded
-            st.session_state.raw_issues_for_fluxo = raw_issues # Bónus: guarda as issues brutas
-            
+            st.session_state.raw_issues_for_fluxo = raw_issues
             st.session_state.loaded_project_key = project_key
             st.rerun()
 
@@ -173,11 +193,12 @@ if df is None or not st.session_state.get('project_name'):
     st.info("⬅️ Na barra lateral, selecione um projeto e clique em 'Visualizar Dashboard' para carregar os dados.")
     st.stop()
 
-# Carregamento e Preparação do Layout
+# Carregamento e Preparação do Layout (Local)
 user_data = find_user(st.session_state['email'])
 all_layouts = user_data.get('dashboard_layout', {})
 project_layouts = all_layouts.get(current_project_key, {})
 available_dashboards = project_layouts.get('dashboards', {})
+
 if not available_dashboards:
     available_dashboards["main"] = {"id": "main", "name": "Dashboard Principal", "tabs": {"Geral": []}, "permission": "owner"}
     project_layouts['dashboards'] = available_dashboards
@@ -185,19 +206,51 @@ if not available_dashboards:
     save_user_dashboard(st.session_state['email'], all_layouts)
 
 active_dashboard_id = project_layouts.get('active_dashboard_id')
+# Pega a configuração inicial da cópia local
 active_dashboard_config = available_dashboards.get(active_dashboard_id, {"tabs": {"Geral": []}})
+
+# --- LÓGICA DE SINCRONIZAÇÃO (LIVE SYNC) ---
+# Se o dashboard tiver um 'owner_email' diferente de mim, buscamos a versão mais recente dele.
+current_user_email = st.session_state['email']
+dashboard_owner_email = active_dashboard_config.get('owner_email')
+
+# Variável para controlar onde salvar as edições
+target_save_email = current_user_email 
+
+if dashboard_owner_email and dashboard_owner_email != current_user_email:
+    # Busca dados frescos do proprietário
+    owner_data = find_user(dashboard_owner_email)
+    if owner_data:
+        owner_layouts = owner_data.get('dashboard_layout', {}).get(current_project_key, {})
+        if active_dashboard_id in owner_layouts.get('dashboards', {}):
+            # Sobrescreve a config local com a config do owner (mantendo a permissão local)
+            fresh_config = owner_layouts['dashboards'][active_dashboard_id]
+            
+            my_permission = active_dashboard_config.get('permission', 'view')
+            
+            # Atualiza o objeto que será usado para renderizar
+            active_dashboard_config = copy.deepcopy(fresh_config)
+            active_dashboard_config['permission'] = my_permission
+            active_dashboard_config['owner_email'] = dashboard_owner_email # Garante que a ref se mantém
+            
+            # Define o alvo de salvamento para o dono
+            target_save_email = dashboard_owner_email
+        else:
+            st.warning("Este dashboard parece ter sido removido pelo proprietário original.")
+
+# Extrai dados para renderização
 tabs_layout = active_dashboard_config.get('tabs', {"Geral": []})
 active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
-
-# Verificação de Permissões e Validação de Gráficos
 dashboard_permission = active_dashboard_config.get('permission', 'owner')
-is_owner = dashboard_permission == 'owner'
-can_edit = is_owner or dashboard_permission == 'edit'
+
+is_owner = (dashboard_permission == 'owner')
+can_edit = is_owner or (dashboard_permission == 'edit')
+
+# Validação básica de gráficos
 for tab_name, charts in list(tabs_layout.items()):
     if not isinstance(charts, list): tabs_layout[tab_name] = []
     tabs_layout[tab_name] = [chart for chart in charts if is_valid_chart(chart)]
 
-# --- Define `all_charts` aqui, em escopo global ---
 all_charts = [chart for tab_charts in tabs_layout.values() for chart in tab_charts]
 project_config = get_project_config(current_project_key) or {}
 default_cols = project_config.get('dashboard_columns', 2)
@@ -226,7 +279,15 @@ with st.expander("Opções do Dashboard", expanded=False):
                 insights = get_ai_insights(st.session_state.project_name, summaries, provider)
                 st.session_state.ai_dashboard_insights = insights
     with cols[4]:
+        # No add_chart, se for compartilhado, o novo gráfico deve ir para o dashboard do owner?
+        # A lógica atual do add_chart usa 'chart_to_edit' e redireciona.
+        # Na página 5, ao salvar, precisaremos garantir que ele salva no lugar certo.
+        # (Por enquanto, a página 5 salva no 'current active dashboard' do usuário. 
+        # Se o usuário for editor, ele salvará na sua cópia local, e a sincronização acima 
+        # pode sobrescrever. *Idealmente*, a página 5 também precisaria de ajuste, 
+        # mas focaremos aqui na organização e exclusão primeiro conforme pedido*)
         if st.button("➕ Gráfico", width='stretch', type="primary", disabled=not can_edit, help="Adicionar um novo gráfico a este dashboard."):
+            # Para garantir integridade, se for editor, avisamos que a criação completa depende da pág 5
             add_chart_callback()
 
 # Se o modo edição não estiver ativo, garante que a variável `edit_mode` seja False
@@ -250,6 +311,9 @@ def render_dashboard_view(is_edit_mode):
                 indicator_charts = [c for c in charts_in_tab if c.get('type') == 'indicator']
                 other_charts = [c for c in charts_in_tab if c.get('type') != 'indicator']
 
+                # Define owner email para passar aos callbacks
+                cb_owner = dashboard_owner_email if (dashboard_owner_email and dashboard_owner_email != current_user_email) else None
+
                 if indicator_charts:
                     num_indicator_cols = 4
                     for j in range(0, len(indicator_charts), num_indicator_cols):
@@ -262,10 +326,10 @@ def render_dashboard_view(is_edit_mode):
                                     if is_edit_mode and can_edit:
                                         st.markdown('<div class="card-actions">', unsafe_allow_html=True)
                                         b_cols = st.columns(4)
-                                        b_cols[0].button("🔼", key=f"up_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0))
-                                        b_cols[1].button("🔽", key=f"down_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1))
+                                        b_cols[0].button("🔼", key=f"up_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index == 0))
+                                        b_cols[1].button("🔽", key=f"down_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index >= len(charts_in_tab) - 1))
                                         if b_cols[2].button("✏️", key=f"edit_{chart_config['id']}"): edit_chart_callback(chart_config)
-                                        b_cols[3].button("❌", key=f"del_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts))
+                                        b_cols[3].button("❌", key=f"del_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
                                         st.markdown('</div>', unsafe_allow_html=True)
                                     render_chart(chart_config, df, f"chart_{chart_config['id']}")
                     if other_charts: st.divider()
@@ -280,10 +344,10 @@ def render_dashboard_view(is_edit_mode):
                                 if is_edit_mode and can_edit:
                                     header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
                                     header_cols[0].markdown(f"**📊 {chart_config.get('title', 'Visualização')}**")
-                                    header_cols[1].button("🔼", key=f"up_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, all_layouts), disabled=(original_index == 0))
-                                    header_cols[2].button("🔽", key=f"down_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, all_layouts), disabled=(original_index >= len(charts_in_tab) - 1))
+                                    header_cols[1].button("🔼", key=f"up_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index == 0))
+                                    header_cols[2].button("🔽", key=f"down_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index >= len(charts_in_tab) - 1))
                                     if header_cols[3].button("✏️", key=f"edit_other_{chart_config['id']}"): edit_chart_callback(chart_config)
-                                    header_cols[4].button("❌", key=f"del_other_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, all_layouts))
+                                    header_cols[4].button("❌", key=f"del_other_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
                                 else:
                                     st.markdown(f"**📊 {chart_config.get('title', 'Visualização')}**")
                                 render_chart(chart_config, df, f"chart_other_{chart_config['id']}")
@@ -327,7 +391,6 @@ if edit_mode and can_edit:
                     st.divider()
                     
                     with st.form("duplicate_dashboard_form"):
-                        # Sugere um nome para a cópia
                         copy_name = st.text_input(
                             "Nome para a Cópia:", 
                             value=f"Cópia de {active_dashboard_name}"
@@ -335,33 +398,21 @@ if edit_mode and can_edit:
                         
                         if st.form_submit_button("📥 Duplicar Dashboard Atual", width='stretch'):
                             if copy_name:
-                                # 1. Recarrega os layouts para garantir que temos os dados mais recentes
                                 layouts = find_user(st.session_state['email']).get('dashboard_layout', {})
                                 proj_layouts = layouts.get(current_project_key, {})
                                 
-                                # 2. Faz uma cópia profunda da configuração do dashboard ATIVO
                                 dashboard_copy = copy.deepcopy(active_dashboard_config)
-                                
-                                # 3. Define novos atributos para a cópia
                                 new_id = str(uuid.uuid4())
                                 dashboard_copy['id'] = new_id
                                 dashboard_copy['name'] = copy_name
-                                dashboard_copy['permission'] = 'owner' # O duplicado pertence a si
-                                
-                                # Remove dados de partilha, se existirem
+                                dashboard_copy['permission'] = 'owner'
                                 if 'owner_email' in dashboard_copy:
                                     del dashboard_copy['owner_email']
 
-                                # 4. Adiciona a cópia ao dicionário de dashboards
                                 proj_layouts['dashboards'][new_id] = dashboard_copy
-                                
-                                # 5. (Opcional) Define o dashboard duplicado como o ativo
                                 proj_layouts['active_dashboard_id'] = new_id
-                                
-                                # 6. Salva tudo
                                 layouts[current_project_key] = proj_layouts
                                 save_user_dashboard(st.session_state['email'], layouts)
-                                
                                 st.success(f"Dashboard '{copy_name}' criado com sucesso!")
                                 st.rerun()
 
@@ -369,42 +420,44 @@ if edit_mode and can_edit:
                     
                     st.markdown("###### Partilhar Dashboard Atual")
                     with st.form("assign_dashboard_form"):
-                        current_user_email = st.session_state.get('email', '')
-                        other_users_emails = get_all_users(exclude_email=current_user_email)
+                        current_user_email_val = st.session_state.get('email', '')
+                        other_users_emails = get_all_users(exclude_email=current_user_email_val)
                         if not other_users_emails:
                             st.info("Não há outros utilizadores registados.")
                             st.form_submit_button("Partilhar", width='stretch', disabled=True)
                         else:
-                            target_user_email = st.selectbox("Partilhar com o utilizador:", options=other_users_emails)
+                            target_user_email_sel = st.selectbox("Partilhar com o utilizador:", options=other_users_emails)
                             permission_level = st.radio("Nível de Permissão:", ["Pode Visualizar", "Pode Editar"], horizontal=True)
                             if st.form_submit_button("📬 Partilhar", width='stretch'):
-                                target_user_data = find_user(target_user_email)
-                                if target_user_data:
+                                target_user_data_share = find_user(target_user_email_sel)
+                                if target_user_data_share:
+                                    # Copia, mas mantém a referência ao owner (o atual)
                                     dashboard_copy = copy.deepcopy(active_dashboard_config)
-                                    dashboard_copy['owner_email'] = current_user_email
+                                    dashboard_copy['owner_email'] = current_user_email_val
                                     dashboard_copy['permission'] = 'edit' if permission_level == "Pode Editar" else 'view'
-                                    target_layouts = target_user_data.get('dashboard_layout', {})
+                                    
+                                    target_layouts = target_user_data_share.get('dashboard_layout', {})
                                     if current_project_key not in target_layouts: target_layouts[current_project_key] = {'dashboards': {}}
                                     target_layouts[current_project_key]['dashboards'][active_dashboard_id] = dashboard_copy
-                                    save_user_dashboard(target_user_email, target_layouts)
-                                    st.success(f"Dashboard '{active_dashboard_name}' partilhado com {target_user_email}!")
+                                    
+                                    save_user_dashboard(target_user_email_sel, target_layouts)
+                                    st.success(f"Dashboard '{active_dashboard_name}' partilhado com {target_user_email_sel}!")
                                 else:
                                     st.error("Utilizador de destino não encontrado.")
                     st.divider()
 
-                    # --- GERIR PARTILHAS (REVOGAR ACESSO) ---
                     st.markdown("###### Gerir Partilhas")
-                    current_user_email = st.session_state.get('email', '')
+                    current_user_email_val = st.session_state.get('email', '')
                     shared_with_list = []
-                    all_other_users_emails = get_all_users(exclude_email=current_user_email)
+                    all_other_users_emails = get_all_users(exclude_email=current_user_email_val)
                     for other_user_email in all_other_users_emails:
                         other_user_data = find_user(other_user_email)
                         if other_user_data:
                             other_user_dashboards = other_user_data.get('dashboard_layout', {}).get(current_project_key, {}).get('dashboards', {})
                             if active_dashboard_id in other_user_dashboards:
                                 dashboard_info = other_user_dashboards[active_dashboard_id]
-                                if dashboard_info.get('owner_email') == current_user_email:
-                                    permission = dashboard_info.get('permission', 'view') # 'view' como padrão
+                                if dashboard_info.get('owner_email') == current_user_email_val:
+                                    permission = dashboard_info.get('permission', 'view')
                                     shared_with_list.append({'email': other_user_email, 'permission': permission})
                     
                     if not shared_with_list:
@@ -419,9 +472,9 @@ if edit_mode and can_edit:
                             r_cols[0].write(f"- {shared_user_email}")
                             r_cols[1].write(f"_{permission_text}_")
                             if r_cols[2].button("Revogar", key=f"revoke_{shared_user_email}", help=f"Revogar acesso de {shared_user_email}", width='stretch'):
-                                target_user_data = find_user(shared_user_email)
-                                if target_user_data:
-                                    target_layouts = target_user_data.get('dashboard_layout', {})
+                                target_user_data_rev = find_user(shared_user_email)
+                                if target_user_data_rev:
+                                    target_layouts = target_user_data_rev.get('dashboard_layout', {})
                                     if current_project_key in target_layouts and active_dashboard_id in target_layouts[current_project_key]['dashboards']:
                                         del target_layouts[current_project_key]['dashboards'][active_dashboard_id]
                                         save_user_dashboard(shared_user_email, target_layouts)
@@ -445,33 +498,18 @@ if edit_mode and can_edit:
                 st.markdown("**2. Gerir Abas e Gráficos do Dashboard Atual**")
                 st.markdown("###### Gerir Abas")
                                 
-                # 1. Usar 'updated_tabs_layout' se existir (para manter as alterações
-                #    feitas pelos botões antes do 'Salvar' no final da página)
                 if 'updated_tabs_layout' in st.session_state:
                     current_tabs_layout = st.session_state.updated_tabs_layout
                 else:
-                    # Carrega o layout original se for a primeira vez
                     current_tabs_layout = copy.deepcopy(tabs_layout)
                     st.session_state.updated_tabs_layout = current_tabs_layout
                 
-                # Usamos uma cópia dos items (nome_aba, lista_de_charts) para iterar
                 tab_items = list(current_tabs_layout.items())
                 
                 for i, (tab_name, charts) in enumerate(tab_items):
-                    
                     cols = st.columns([0.7, 0.1, 0.1, 0.1])
+                    new_name = cols[0].text_input("Nome da Aba", value=tab_name, key=f"tab_rename_key_{tab_name}")
                     
-                    # A key DEVE ser única para a aba (o nome) e não para o índice (i).
-                    # Isto impede que os valores dos text_inputs sejam trocados
-                    # quando as abas são reordenadas.
-                    # Usamos o tab_name original como a key.
-                    new_name = cols[0].text_input(
-                        "Nome da Aba", 
-                        value=tab_name, 
-                        key=f"tab_rename_key_{tab_name}" # Key baseada no nome
-                    )
-                    
-                    # LÓGICA DE MOVER (só mexe no session_state e dá rerun)
                     if cols[1].button("🔼", key=f"up_tab_{tab_name}", help="Mover para cima", width='stretch', disabled=(i == 0)):
                         moved_items = move_item(list(current_tabs_layout.items()), i, i - 1)
                         st.session_state.updated_tabs_layout = dict(moved_items)
@@ -482,7 +520,6 @@ if edit_mode and can_edit:
                         st.session_state.updated_tabs_layout = dict(moved_items)
                         st.rerun()
 
-                    # LÓGICA DE APAGAR (só mexe no session_state e dá rerun)
                     if cols[3].button("❌", key=f"del_tab_{tab_name}", help="Apagar aba", width='stretch', disabled=(len(tab_items) <= 1)):
                         charts_to_move = current_tabs_layout.pop(tab_name)
                         first_tab_name = next(iter(current_tabs_layout))
@@ -490,11 +527,9 @@ if edit_mode and can_edit:
                         st.session_state.updated_tabs_layout = current_tabs_layout
                         st.rerun()
                     
-                    # LÓGICA DE RENOMEAR (só mexe no session_state e dá rerun)
                     if new_name != tab_name and new_name:
-                        # Recria a lista de items com o nome novo
                         current_items_list = list(current_tabs_layout.items())
-                        current_items_list[i] = (new_name, charts) # (new_name, lista_de_charts)
+                        current_items_list[i] = (new_name, charts)
                         st.session_state.updated_tabs_layout = dict(current_items_list)
                         st.rerun()
 
@@ -508,8 +543,6 @@ if edit_mode and can_edit:
 
                 st.markdown("###### Atribuir Gráficos às Abas")
                 
-                
-                # 1. LER OS GRÁFICOS DO MESMO SÍTIO QUE AS ABAS (current_tabs_layout)
                 all_charts_in_state = [chart for tab_charts in current_tabs_layout.values() for chart in tab_charts]
 
                 if not all_charts_in_state:
@@ -517,18 +550,14 @@ if edit_mode and can_edit:
                     updated_chart_assignments = {}
                 else:
                     updated_chart_assignments = {}
-                    # 2. As opções do selectbox vêm do current_tabs_layout (isto estava correto)
                     tab_options = list(current_tabs_layout.keys())
                     
-                    for chart in all_charts_in_state: # 3. Iterar sobre os gráficos em ESTADO
+                    for chart in all_charts_in_state:
                         chart_id = chart['id']
-                        
-                        # Encontra a aba atual no layout MODIFICADO (current_tabs_layout)
                         current_tab_in_state = next((tab for tab, charts in current_tabs_layout.items() if chart_id in [c['id'] for c in charts]), None)
                         
                         if current_tab_in_state is None:
-                            if not tab_options:
-                                continue
+                            if not tab_options: continue
                             current_tab_in_state = tab_options[0]
 
                         default_index = tab_options.index(current_tab_in_state)
@@ -540,35 +569,35 @@ if edit_mode and can_edit:
 
                 st.divider()
 
-                # O BOTÃO DE SALVAR É A ÚNICA FONTE DE SALVAMENTO
                 if st.button("Salvar Alterações de Organização", type="primary", width='stretch'):
                     
-                    # Constrói o layout final a partir do zero
                     final_tabs_layout = {name: [] for name in current_tabs_layout.keys()}
                     
-                    # 4. Iterar sobre os gráficos em ESTADO (all_charts_in_state)
                     for chart in all_charts_in_state:
                         assigned_tab = updated_chart_assignments.get(chart['id'])
                         if assigned_tab in final_tabs_layout:
                             final_tabs_layout[assigned_tab].append(chart)
                     
-                    # Salva o layout final na base de dados (users.json)
-                    project_layouts['dashboards'][active_dashboard_id]['tabs'] = final_tabs_layout
-                    all_layouts[current_project_key] = project_layouts
-                    save_user_dashboard(st.session_state['email'], all_layouts)
+                    # --- SALVAMENTO NA FONTE CORRETA (LIVE SYNC) ---
+                    user_to_save_data = find_user(target_save_email)
+                    layouts_to_save = user_to_save_data.get('dashboard_layout', {})
                     
-                    # Limpa o estado temporário
-                    if 'updated_tabs_layout' in st.session_state:
-                        del st.session_state.updated_tabs_layout
-                        
-                    st.success("Organização do dashboard salva com sucesso!")
-                    st.rerun()
+                    if current_project_key in layouts_to_save and active_dashboard_id in layouts_to_save[current_project_key]['dashboards']:
+                         layouts_to_save[current_project_key]['dashboards'][active_dashboard_id]['tabs'] = final_tabs_layout
+                         save_user_dashboard(target_save_email, layouts_to_save)
+                         
+                         if 'updated_tabs_layout' in st.session_state:
+                             del st.session_state.updated_tabs_layout
+                             
+                         st.success(f"Organização salva com sucesso em '{target_save_email}'!")
+                         st.rerun()
+                    else:
+                        st.error(f"Erro: Dashboard {active_dashboard_id} não encontrado no perfil de destino {target_save_email}.")
                                                 
     with view_tab:
         render_dashboard_view(is_edit_mode=True)
         
 else:
-    # Limpa o estado temporário sempre que o modo edição estiver desligado
     if 'updated_tabs_layout' in st.session_state:
         del st.session_state.updated_tabs_layout
     
