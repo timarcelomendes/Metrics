@@ -11,8 +11,263 @@ from config import DEFAULT_INITIAL_STATES, DEFAULT_DONE_STATES
 from security import *
 from datetime import datetime, timedelta, date, timezone
 from typing import Optional, List, Dict, Any
+import calendar # Adiciona calendar para dias úteis
+from collections import defaultdict # Para agregar as médias
 
 st.cache_data.clear()
+
+# --- REGRAS DE SLA (Service Level Agreement) ---
+# SLA definido em minutos (para Resposta) e horas úteis (para Resolução).
+# Pressuposto de horas úteis: 8 horas/dia (Segunda a Sexta)
+SLA_RULES = {
+    # Mapeia os nomes internos da Prioridade (do Jira)
+    # response_minutes: Meta de tempo de primeiro atendimento em minutos
+    # resolution_hours: Meta de tempo de resolução em horas úteis
+    "Highest": {"priority_name": "P1 (Crítica)", "response_minutes": 15, "resolution_hours": 1},
+    "High": {"priority_name": "P2 (Alta)", "response_minutes": 60, "resolution_hours": 8},
+    "Medium": {"priority_name": "P3 (Média)", "response_minutes": 240, "resolution_hours": 16}, # 2 dias úteis
+    "Low": {"priority_name": "P4 (Baixa)", "response_minutes": 480, "resolution_hours": 40}, # 5 dias úteis
+}
+
+def _find_first_response_date(issue: Any) -> Optional[datetime]:
+    """
+    Encontra a data da primeira resposta (primeiro comentário de um não-criador/não-reporter).
+    A data é retornada como um objeto datetime UTC-naive.
+    """
+    # CORREÇÃO AQUI: Acessa creator e reporter de forma segura com getattr
+    issue_creator = getattr(getattr(issue.fields, 'creator', None), 'name', None)
+    issue_reporter = getattr(getattr(issue.fields, 'reporter', None), 'name', None)
+
+    # 1. Busca o primeiro comentário de um não-criador/não-reporter
+    if hasattr(issue.fields, 'comment') and issue.fields.comment and hasattr(issue.fields.comment, 'comments'):
+        for comment in sorted(issue.fields.comment.comments, key=lambda c: c.created):
+            try:
+                comment_author_name = getattr(comment.author, 'name', None) # Nome de usuário interno
+                comment_author_display = getattr(comment.author, 'displayName', None)
+                
+                # Se o autor não for o criador ou o reporter, consideramos uma resposta
+                if comment_author_name and comment_author_name != issue_creator and comment_author_name != issue_reporter:
+                    first_response_date = dateutil.parser.parse(comment.created)
+                    # Padroniza para UTC-naive
+                    return first_response_date.astimezone(timezone.utc).replace(tzinfo=None)
+                
+                # Se o nome de exibição for diferente (fallback)
+                if comment_author_display and comment_author_display != issue_creator and comment_author_display != issue_reporter:
+                    first_response_date = dateutil.parser.parse(comment.created)
+                    return first_response_date.astimezone(timezone.utc).replace(tzinfo=None)
+                    
+            except AttributeError:
+                continue
+
+    return None
+
+def _calculate_business_time_in_minutes(start_dt: datetime, end_dt: datetime) -> float:
+    """
+    Calcula a diferença de tempo em MINUTOS ÚTEIS entre duas datas.
+    Simplificação: 8 horas úteis por dia (9h às 17h), Segunda a Sexta.
+    """
+    if start_dt is None or end_dt is None or end_dt <= start_dt:
+        return 0.0
+
+    # Normaliza para UTC-naive
+    start_dt = start_dt.replace(tzinfo=None)
+    end_dt = end_dt.replace(tzinfo=None)
+    
+    BUSINESS_START_HOUR = 9
+    BUSINESS_END_HOUR = 17
+    
+    business_seconds = 0.0
+    current = start_dt
+
+    while current < end_dt:
+        # Pega a data de início e fim do dia útil atual (9h e 17h)
+        current_day_start = current.replace(hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0)
+        current_day_end = current.replace(hour=BUSINESS_END_HOUR, minute=0, second=0, microsecond=0)
+        
+        # 1. Verifica se é um dia útil (0=Segunda, 4=Sexta)
+        if 0 <= current.weekday() <= 4:
+            
+            # Define o ponto de início da contagem no dia (máximo entre o tempo atual e 9h)
+            time_start = max(current, current_day_start)
+            # Define o ponto de fim da contagem no dia (mínimo entre o tempo final e 17h)
+            time_end = min(end_dt, current_day_end)
+            
+            # Se o período de contagem for válido (início < fim)
+            if time_start < time_end:
+                business_seconds += (time_end - time_start).total_seconds()
+            
+            # Se o 'end_dt' já foi atingido, saímos.
+            if end_dt <= current_day_end:
+                break
+                
+        # Avança para o próximo dia (Meia-noite)
+        current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    return business_seconds / 60.0 # Retorna em minutos
+
+
+def calculate_priority_sla_metrics(issues: List[Any], project_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calcula as métricas de SLA (Service Level Agreement) de Resposta e Resolução
+    baseadas na prioridade da issue.
+    """
+    if not issues:
+        # Retorna estrutura vazia segura se não houver issues
+        return {
+            'total_issues_with_sla': 0,
+            'total_resolved_with_sla': 0,
+            'pct_response_met': 0.0,
+            'pct_response_violated': 0.0,
+            'pct_resolution_met': 0.0,
+            'pct_resolution_violated': 0.0,
+            'avg_response_by_priority': {},
+            'avg_resolution_by_priority': {},
+            'data_table': pd.DataFrame(columns=['Issue', 'Prioridade', 'SLA Resposta (min)', 'Tempo Resposta (min)', 'Status Resposta', 'SLA Resolução (h úteis)', 'Tempo Resolução (h úteis)', 'Status Resolução'])
+        }
+
+    metrics = {
+        'total_issues_with_priority': 0,
+        'response_met': 0,
+        'response_violated': 0,
+        'resolution_met': 0,
+        'resolution_violated': 0,
+        'avg_response_by_priority': defaultdict(lambda: {'total_time_min': 0.0, 'count': 0}),
+        'avg_resolution_by_priority': defaultdict(lambda: {'total_time_hours': 0.0, 'count': 0}),
+        'data_table': [] # Para o gráfico/tabela detalhada
+    }
+
+    # As regras de mapeamento do Jira são necessárias
+    status_mapping = project_config.get('status_mapping', {})
+
+    for issue in issues:
+        priority_obj = getattr(issue.fields, 'priority', None)
+        if not priority_obj: continue
+
+        # Mapeia o nome da prioridade do Jira (ex: Highest) para a chave de SLA
+        priority_name_jira = priority_obj.name
+        priority_key = next((key for key in SLA_RULES if priority_name_jira.lower().startswith(key.lower())), None)
+        
+        if not priority_key: continue
+        
+        # 1. Extrair Regras
+        rule = SLA_RULES[priority_key]
+        priority_display = rule['priority_name']
+        response_sla_min = rule['response_minutes']
+        resolution_sla_hours = rule['resolution_hours']
+        
+        # Início do SLA (Data de Criação)
+        creation_date = pd.to_datetime(issue.fields.created).tz_localize(None).replace(tzinfo=None)
+        
+        # Contador total para issues com prioridade mapeada
+        metrics['total_issues_with_priority'] += 1
+
+        # --- CÁLCULO DO TEMPO DE RESPOSTA ---
+        first_response_date = _find_first_response_date(issue)
+        time_to_response_min = None
+        
+        if first_response_date:
+            time_to_response_min = _calculate_business_time_in_minutes(creation_date, first_response_date)
+            
+            # Aderência ao SLA de Resposta
+            if time_to_response_min <= response_sla_min:
+                metrics['response_met'] += 1
+                response_status = "Atendido"
+            else:
+                metrics['response_violated'] += 1
+                response_status = "Violado"
+            
+            # Agregação para Média
+            metrics['avg_response_by_priority'][priority_key]['total_time_min'] += time_to_response_min
+            metrics['avg_response_by_priority'][priority_key]['count'] += 1
+        else:
+            response_status = "Pendente/N/A"
+        
+        # --- CÁLCULO DO TEMPO DE RESOLUÇÃO (Cycle Time) ---
+        completion_date = find_completion_date(issue, project_config)
+        time_to_resolution_hours = None
+        resolution_status = "Pendente/N/A"
+        
+        if completion_date:
+            # O Cycle Time começa quando sai do 'Initial' (função find_start_date)
+            cycle_start_date = find_start_date(issue, project_config)
+            
+            if cycle_start_date:
+                # Usa o cálculo simplificado de Horas Úteis (8h/dia) para a resolução
+                time_to_resolution_hours = calculate_business_hours(cycle_start_date, completion_date)
+            
+                if time_to_resolution_hours is not None:
+                    # Aderência ao SLA de Resolução
+                    if time_to_resolution_hours <= resolution_sla_hours:
+                        metrics['resolution_met'] += 1
+                        resolution_status = "Atendido"
+                    else:
+                        metrics['resolution_violated'] += 1
+                        resolution_status = "Violado"
+
+                    # Agregação para Média
+                    metrics['avg_resolution_by_priority'][priority_key]['total_time_hours'] += time_to_resolution_hours
+                    metrics['avg_resolution_by_priority'][priority_key]['count'] += 1
+        
+        # Adicionar à tabela de dados (AGORA ADICIONA TODOS, mesmo pendentes)
+        metrics['data_table'].append({
+            'Issue': issue.key,
+            'Prioridade': priority_display,
+            'SLA Resposta (min)': response_sla_min,
+            'Tempo Resposta (min)': time_to_response_min,
+            'Status Resposta': response_status,
+            'SLA Resolução (h úteis)': resolution_sla_hours,
+            'Tempo Resolução (h úteis)': time_to_resolution_hours,
+            'Status Resolução': resolution_status,
+        })
+
+
+    # --- FINALIZAÇÃO E CÁLCULO DE MÉDIAS ---
+    total_issues = metrics['total_issues_with_priority']
+    
+    # Calcular % de cumprimento
+    # Se total_issues é 0, o resultado é 0.0 (seguro)
+    pct_response_met = (metrics['response_met'] / total_issues * 100) if total_issues > 0 else 0.0
+    pct_response_violated = (metrics['response_violated'] / total_issues * 100) if total_issues > 0 else 0.0
+    # O total para a Resolução é o número de issues CONCLUÍDAS (com completion_date)
+    total_resolved = metrics['resolution_met'] + metrics['resolution_violated']
+    pct_resolution_met = (metrics['resolution_met'] / total_resolved * 100) if total_resolved > 0 else 0.0
+    pct_resolution_violated = (metrics['resolution_violated'] / total_resolved * 100) if total_resolved > 0 else 0.0
+
+    # --- CORREÇÃO DO DATA FRAME VAZIO ---
+    df_table = pd.DataFrame(metrics['data_table'])
+    
+    # Só tenta ordenar se o DataFrame não estiver vazio e tiver a coluna 'Prioridade'
+    if not df_table.empty and 'Prioridade' in df_table.columns:
+        df_table = df_table.sort_values(by='Prioridade', ascending=False)
+    elif df_table.empty:
+        # Se estiver vazio, cria um DataFrame com as colunas esperadas para não quebrar a UI
+        df_table = pd.DataFrame(columns=['Issue', 'Prioridade', 'SLA Resposta (min)', 'Tempo Resposta (min)', 'Status Resposta', 'SLA Resolução (h úteis)', 'Tempo Resolução (h úteis)', 'Status Resolução'])
+
+    final_results = {
+        'total_issues_with_sla': total_issues,
+        'total_resolved_with_sla': total_resolved,
+        'pct_response_met': pct_response_met,
+        'pct_response_violated': pct_response_violated,
+        'pct_resolution_met': pct_resolution_met,
+        'pct_resolution_violated': pct_resolution_violated,
+        'avg_response_by_priority': {},
+        'avg_resolution_by_priority': {},
+        'data_table': df_table # Usa o DataFrame tratado
+    }
+
+    # Calcula as médias por prioridade
+    for key, data in metrics['avg_response_by_priority'].items():
+        if data['count'] > 0:
+            # Média de tempo para resposta em minutos úteis
+            final_results['avg_response_by_priority'][SLA_RULES[key]['priority_name']] = data['total_time_min'] / data['count']
+
+    for key, data in metrics['avg_resolution_by_priority'].items():
+        if data['count'] > 0:
+            # Média de tempo para resolução em horas úteis
+            final_results['avg_resolution_by_priority'][SLA_RULES[key]['priority_name']] = data['total_time_hours'] / data['count']
+
+    return final_results
+
 
 # --- Funções Auxiliares de Data ---
 def find_completion_date(issue: Any, project_config: Dict[str, Any]) -> Optional[datetime]:
@@ -814,39 +1069,13 @@ def calculate_flow_efficiency(issue, project_config):
     if not cycle_time_days or cycle_time_days <= 0:
         return None
 
-    time_spent_seconds = issue.fields.timespent or 0
+    time_spent_seconds = getattr(issue.fields, 'timespent', 0) or 0 # <--- CORRIGIDO: Uso seguro de getattr
     touch_time_days = (time_spent_seconds / 3600) / 8
 
     if touch_time_days > cycle_time_days:
         return 100.0
         
     return (touch_time_days / cycle_time_days) * 100
-
-def calculate_aggregated_metric(df, dimension, measure, agg):
-    if not dimension or dimension not in df.columns:
-        return pd.DataFrame({'Dimensão': [], 'Medida': []})
-
-    if measure and measure.startswith('Tempo em: '):
-        if measure not in df.columns:
-            return pd.DataFrame({'Dimensão': [], 'Medida': []})
-        agg_df = df.groupby(dimension)[measure].mean().reset_index(name='Medida')
-
-    elif measure == 'Contagem de Issues':
-        agg_df = df.groupby(dimension).size().reset_index(name='Medida')
-
-    elif agg == 'Contagem Distinta':
-        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
-        agg_df = df.groupby(dimension)[measure].nunique().reset_index(name='Medida')
-
-    else:
-        if measure not in df.columns: return pd.DataFrame({'Dimensão': [], 'Medida': []})
-        numeric_series = pd.to_numeric(df[measure], errors='coerce')
-        grouped_data = numeric_series.groupby(df[dimension])
-        if agg == 'Soma': agg_df = grouped_data.sum().reset_index(name='Medida')
-        elif agg == 'Média': agg_df = grouped_data.mean().reset_index(name='Medida')
-        else: agg_df = grouped_data.count().reset_index(name='Medida')
-
-    return agg_df.rename(columns={dimension: 'Dimensão'})
 
 def get_aging_wip(issues):
     global_configs = st.session_state.get('global_configs', {})
@@ -1197,8 +1426,8 @@ def calculate_estimation_accuracy(completed_issues, estimation_config):
 
     for issue in completed_issues:
         estimated_value = get_issue_estimation(issue, estimation_config) or 0
-        time_spent_seconds = issue.fields.timespent if hasattr(issue.fields, 'timespent') and issue.fields.timespent is not None else 0
-
+        time_spent_seconds = getattr(issue.fields, 'timespent', 0) or 0 # Uso seguro
+        
         if estimated_value > 0:
             actual_hours = time_spent_seconds / 3600
             total_actual_hours += actual_hours
@@ -1266,13 +1495,23 @@ def calculate_business_hours(start_time, end_time):
     if not start_time or not end_time:
         return 0
 
-    if isinstance(start_time, str): start_time = pd.to_datetime(start_time)
-    if isinstance(end_time, str): end_time = pd.to_datetime(end_time)
+    # CORREÇÃO: Converter para Pandas Timestamp para garantir métodos de fuso
+    start_time = pd.to_datetime(start_time)
+    end_time = pd.to_datetime(end_time)
 
-    start_time = start_time.tz_localize(None)
-    end_time = end_time.tz_localize(None)
+    # Remover timezone se presente (tz_localize(None) só funciona em Timestamps ou se checado antes)
+    if start_time.tzinfo is not None:
+        start_time = start_time.tz_localize(None)
+    
+    if end_time.tzinfo is not None:
+        end_time = end_time.tz_localize(None)
 
-    business_days = np.busday_count(start_time.date(), end_time.date())
+    # Arredondar para o dia mais próximo para evitar problemas de fuso horário
+    start_date = start_time.normalize().date()
+    end_date = end_time.normalize().date()
+
+    # Contagem de dias úteis completos (Mon-Fri)
+    business_days = np.busday_count(start_date, end_date)
 
     return business_days * 8
 

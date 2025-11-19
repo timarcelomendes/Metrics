@@ -11,6 +11,7 @@ from security import *
 from utils import *
 from config import *
 from pathlib import Path
+import plotly.express as px
 
 st.set_page_config(page_title="Métricas de Fluxo", page_icon="📊", layout="wide")
 
@@ -238,9 +239,33 @@ lead_time_avg = df_done['Lead Time (dias)'].mean() if not df_done.empty else 0
 cycle_time_avg = df_done['Cycle Time (dias)'].mean() if not df_done.empty else 0
 # --- FIM DA CORREÇÃO ---
 aging_df = get_aging_wip(issues_for_flow_calc) # 6. Usa 'issues_for_flow_calc'
-sla_metrics = {}
-if global_configs.get('sla_policies'):
-    sla_metrics = calculate_sla_metrics_for_issues(issues_for_flow_calc, global_configs) # 7. Usa 'issues_for_flow_calc'
+
+# --- CÁLCULO SLA COM FILTRO DE PERÍODO ---
+# Filtra as issues para incluir apenas aquelas Criadas OU Resolvidas dentro do período selecionado
+issues_for_sla_calc = []
+start_ts = pd.to_datetime(start_date).tz_localize(None)
+# Adiciona um dia ao end_date para cobrir o dia inteiro (até 23:59:59)
+end_ts = pd.to_datetime(end_date).tz_localize(None) + pd.Timedelta(days=1)
+
+for issue in issues_for_flow_calc:
+    # Verifica Data de Criação
+    created_date = pd.to_datetime(issue.fields.created).tz_localize(None)
+    created_in_period = start_ts <= created_date < end_ts
+    
+    # Verifica Data de Conclusão
+    completion_date = find_completion_date(issue, project_config)
+    resolved_in_period = False
+    if completion_date:
+        completion_date = pd.to_datetime(completion_date).tz_localize(None) if completion_date.tzinfo else pd.to_datetime(completion_date)
+        resolved_in_period = start_ts <= completion_date < end_ts
+    
+    # Se aconteceu alguma coisa relevante no período (Criação ou Resolução), incluímos na análise
+    if created_in_period or resolved_in_period:
+        issues_for_sla_calc.append(issue)
+
+# Agora passamos a lista filtrada por data para a função de cálculo
+sla_metrics = calculate_priority_sla_metrics(issues_for_sla_calc, project_config)
+# --- FIM NOVO CÁLCULO SLA ---
 
 completed_issue_keys = [issue.key for issue in completed_issues_in_period]
 
@@ -249,7 +274,7 @@ if 'ID' in filtered_df.columns:
 else:
     df_done = pd.DataFrame()
 
-tab_comum, tab_kanban, tab_scrum, tab_performance = st.tabs(["Métricas de Fluxo Comuns", "Análise Kanban", "Análise Scrum", "Análise de Performance"])
+tab_comum, tab_kanban, tab_scrum, tab_performance, tab_sla = st.tabs(["Métricas de Fluxo Comuns", "Análise Kanban", "Análise Scrum", "Análise de Performance", "Análise de SLA"]) # <--- NOVO TAB
 
 with tab_comum:
     st.subheader("Visão Geral do Fluxo")
@@ -509,3 +534,132 @@ with tab_performance:
                     
             else:
                 st.markdown("<p style='text-align: center; padding: 10px;'>Não há dados de estimativa e tempo gasto para exibir o gráfico.</p>", unsafe_allow_html=True)
+
+# --- INÍCIO DA NOVA ABA: ANÁLISE DE SLA ---
+with tab_sla:
+    st.subheader("2. Análise de SLA (Service Level Agreement)")
+    st.caption("Métricas calculadas em horas/minutos úteis (Seg-Sex, 8h/dia) com base na Prioridade da Issue.")
+
+    if sla_metrics.get('total_issues_with_sla', 0) == 0:
+        st.info("Nenhuma issue com Prioridade definida foi encontrada no período.")
+    else:
+        total_resolved = sla_metrics.get('total_resolved_with_sla', 0)
+        
+        # --- KPIs de Resposta e Resolução Global ---
+        col_res_met, col_res_vio, col_resp_met, col_resp_vio = st.columns(4)
+        
+        col_res_met.metric(
+            "✅ % Resolução no SLA", 
+            f"{sla_metrics['pct_resolution_met']:.1f}%", 
+            help=f"Percentagem de chamados concluídos ({total_resolved} total) dentro do tempo de Resolução SLA definido pela Prioridade."
+        )
+        col_res_vio.metric(
+            "❌ % Resolução Violada", 
+            f"{sla_metrics['pct_resolution_violated']:.1f}%", 
+            delta_color="inverse",
+            help="Percentagem de chamados concluídos que violaram o tempo de Resolução SLA."
+        )
+        
+        col_resp_met.metric(
+            "✅ % Resposta no SLA", 
+            f"{sla_metrics['pct_response_met']:.1f}%",
+            help=f"Percentagem de chamados ({sla_metrics['total_issues_with_sla']} total) que receberam o primeiro atendimento dentro do tempo de Resposta SLA."
+        )
+        col_resp_vio.metric(
+            "❌ % Resposta Violada", 
+            f"{sla_metrics['pct_response_violated']:.1f}%", 
+            delta_color="inverse",
+            help="Percentagem de chamados que violaram o tempo de Resposta SLA."
+        )
+
+        st.divider()
+        
+        # --- Tempo Médio de Primeiro Atendimento por Prioridade (Tabela) ---
+        st.markdown("#### ⏱️ Tempo Médio para Primeiro Atendimento")
+        
+        # Preparação dos dados de SLA
+        sla_rules_display = [
+            {'Prioridade': SLA_RULES[k]['priority_name'], 'SLA Resposta (min)': SLA_RULES[k]['response_minutes']}
+            for k in SLA_RULES
+        ]
+        
+        # Prepara a média de resposta
+        avg_resp_data = [
+            {'Prioridade': k, 'Tempo Médio (min úteis)': v}
+            for k, v in sla_metrics['avg_response_by_priority'].items()
+        ]
+
+        # Merge para combinar as regras e o resultado
+        rules_df_resp = pd.DataFrame(sla_rules_display)
+        
+        # CORREÇÃO: Cria o DataFrame com colunas explícitas para evitar KeyError no merge se estiver vazio
+        avg_resp_df = pd.DataFrame(avg_resp_data, columns=['Prioridade', 'Tempo Médio (min úteis)'])
+        
+        final_resp_df = pd.merge(rules_df_resp, avg_resp_df, on='Prioridade', how='left').fillna(0)
+        final_resp_df['Tempo Médio (min úteis)'] = final_resp_df['Tempo Médio (min úteis)'].round(1)
+        
+        st.dataframe(
+            final_resp_df,
+            column_order=['Prioridade', 'SLA Resposta (min)', 'Tempo Médio (min úteis)'],
+            column_config={
+                "Prioridade": "Prioridade",
+                "SLA Resposta (min)": "Meta de Resposta (min)",
+                "Tempo Médio (min úteis)": "Tempo Médio de Resposta (min úteis)",
+            },
+            hide_index=True
+        )
+
+        st.divider()
+
+        # --- Tempo Médio de Resolução por Criticidade (Tabela) ---
+        st.markdown("#### ⚙️ Tempo Médio de Resolução (Cycle Time) por Prioridade")
+        
+        # Preparação dos dados de SLA
+        sla_rules_display_res = [
+            {'Prioridade': SLA_RULES[k]['priority_name'], 'SLA Resolução (h)': SLA_RULES[k]['resolution_hours']}
+            for k in SLA_RULES
+        ]
+        
+        # Prepara a média de resolução
+        avg_res_data = [
+            {'Prioridade': k, 'Tempo Médio (h úteis)': v}
+            for k, v in sla_metrics['avg_resolution_by_priority'].items()
+        ]
+        
+        # Merge para combinar as regras e o resultado
+        rules_df_res = pd.DataFrame(sla_rules_display_res)
+        
+        # CORREÇÃO: Cria o DataFrame com colunas explícitas para evitar KeyError no merge se estiver vazio
+        avg_res_df = pd.DataFrame(avg_res_data, columns=['Prioridade', 'Tempo Médio (h úteis)'])
+        
+        final_res_df = pd.merge(rules_df_res, avg_res_df, on='Prioridade', how='left').fillna(0)
+        final_res_df['Tempo Médio (h úteis)'] = final_res_df['Tempo Médio (h úteis)'].round(1)
+        
+        st.dataframe(
+            final_res_df,
+            column_order=['Prioridade', 'SLA Resolução (h)', 'Tempo Médio (h úteis)'],
+            column_config={
+                "Prioridade": "Prioridade",
+                "SLA Resolução (h)": "Meta de Resolução (h úteis)",
+                "Tempo Médio (h úteis)": "Tempo Médio de Resolução (h úteis)",
+            },
+            hide_index=True
+        )
+        
+        st.divider()
+
+        # --- Tabela de Detalhes e Regras ---
+        st.markdown("#### 🗃️ Detalhes da Análise por Chamado")
+        
+        st.dataframe(
+            sla_metrics['data_table'],
+            column_order=['Issue', 'Prioridade', 'SLA Resposta (min)', 'Tempo Resposta (min)', 'Status Resposta', 'SLA Resolução (h úteis)', 'Tempo Resolução (h úteis)', 'Status Resolução'],
+            column_config={
+                'SLA Resposta (min)': st.column_config.NumberColumn("SLA Resposta (min)", format="%.0f"),
+                'Tempo Resposta (min)': st.column_config.NumberColumn("Tempo Resposta (min)", format="%.1f"),
+                'SLA Resolução (h úteis)': st.column_config.NumberColumn("SLA Resolução (h úteis)", format="%.0f"),
+                'Tempo Resolução (h úteis)': st.column_config.NumberColumn("Tempo Resolução (h úteis)", format="%.1f"),
+            },
+            height=300,
+            use_container_width=True
+        )

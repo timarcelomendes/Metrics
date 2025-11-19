@@ -260,12 +260,14 @@ def get_project_issues(_client, project_key, jql_filter="", standard_fields=None
         if jql_filter:
             jql += f" AND {jql_filter}"
         
-        # --- INÍCIO DA CORREÇÃO ---
+        # --- INÍCIO DA CORREÇÃO E ATUALIZAÇÃO PARA SLA ---
         # Lista de campos padrão que a aplicação SEMPRE precisa
         default_fields = [
             'summary', 'status', 'issuetype', 'created', 
             'resolutiondate', 'assignee', 'reporter', 'priority', 
-            'components', 'labels', 'project', 'statuscategory', 'parent'
+            'components', 'labels', 'project', 'statuscategory', 'parent',
+            'timespent', # Adicionado para a correção do erro anterior e análise de Performance
+            'comment' # Adicionado para análise de SLA (Tempo de Primeiro Atendimento)
         ]
         
         # Adiciona os campos padrão habilitados pelo usuário
@@ -278,7 +280,7 @@ def get_project_issues(_client, project_key, jql_filter="", standard_fields=None
         
         # Remove duplicados
         final_fields_list = list(set(default_fields))
-        # --- FIM DA CORREÇÃO ---
+        # --- FIM DA CORREÇÃO E ATUALIZAÇÃO PARA SLA ---
         
         issues = _client.search_issues(
             jql, 

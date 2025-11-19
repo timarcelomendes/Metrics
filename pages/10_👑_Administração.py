@@ -559,6 +559,92 @@ with main_tab_system:
                         st.rerun()
 
     with system_tab_users:
+        # Verifica se o utilizador atual está na lista de MASTER_USERS (definido no config/security)
+        if st.session_state['email'] in MASTER_USERS:
+            with st.expander("🕵️‍♂️ Acesso Master: Logar como outro Utilizador", expanded=False):
+                st.warning("⚠️ **Atenção:** Você assumirá a identidade e as conexões (API Keys) do utilizador selecionado.")
+                
+                all_users_for_login = get_all_users(exclude_email=st.session_state['email'])
+                
+                target_user_login = st.selectbox(
+                    "Selecione o utilizador para aceder:", 
+                    options=all_users_for_login,
+                    key="master_impersonate_select"
+                )
+                
+                if st.button("🚀 Entrar como este Utilizador", type="primary"):
+                    if target_user_login:
+                        # 1. Buscar dados COMPLETOS do utilizador alvo
+                        target_user_data = find_user(target_user_login)
+                        
+                        if target_user_data:
+                            # 2. Limpar a sessão do Administrador
+                            for k in list(st.session_state.keys()):
+                                # Mantém apenas configurações essenciais se necessário, mas limpa dados
+                                if k not in ['standard_fields_map']: 
+                                    del st.session_state[k]
+                            
+                            # 3. Definir a nova identidade
+                            st.session_state['email'] = target_user_data['email']
+                            st.session_state['user_data'] = target_user_data
+                            st.session_state['last_activity_time'] = datetime.now()
+                            
+                            # 4. --- LÓGICA CRÍTICA: CARREGAR A CHAVE DE API (CONEXÃO) DO ALVO ---
+                            # Precisamos conectar ao Jira usando as credenciais DELE, não as do Admin.
+                            
+                            from jira_connector import connect_to_jira, get_projects, validate_jira_connection
+                            
+                            last_conn_id = target_user_data.get('last_active_connection_id')
+                            user_connections = target_user_data.get('jira_connections', [])
+                            
+                            # Tenta encontrar a última conexão ativa ou usa a primeira disponível
+                            conn_details = None
+                            if last_conn_id:
+                                conn_details = next((c for c in user_connections if c.get('id') == last_conn_id), None)
+                            
+                            if not conn_details and user_connections:
+                                conn_details = user_connections[0] # Fallback para a primeira
+                                
+                            connection_success = False
+                            
+                            if conn_details:
+                                try:
+                                    # Decripta o token do utilizador alvo
+                                    token = decrypt_token(conn_details['encrypted_token'])
+                                    
+                                    # Conecta ao Jira
+                                    client = connect_to_jira(conn_details['jira_url'], conn_details['jira_email'], token)
+                                    
+                                    is_valid, reason = validate_jira_connection(client)
+                                    
+                                    if client and is_valid:
+                                        projects = get_projects(client)
+                                        if projects:
+                                            # Sucesso: Configura a sessão com a chave do utilizador
+                                            st.session_state.active_connection = conn_details
+                                            st.session_state.jira_client = client
+                                            st.session_state.projects = projects
+                                            connection_success = True
+                                        else:
+                                            st.error(f"Conexão estabelecida, mas sem permissão para ver projetos.")
+                                    else:
+                                        st.error(f"A conexão salva do utilizador falhou: {reason}")
+                                except Exception as e:
+                                    st.error(f"Erro ao processar a chave de API do utilizador: {e}")
+                            
+                            # 5. Redirecionamento Inteligente
+                            if connection_success:
+                                st.success(f"Identidade assumida com sucesso! Conectado ao Jira de {target_user_login}.")
+                                # Vai direto para o Dashboard, pois já inicializamos tudo
+                                st.switch_page("pages/2_🏠_Meu_Dashboard.py")
+                            else:
+                                st.warning(f"Logado como {target_user_login}, mas sem conexão Jira ativa.")
+                                # Vai para a tela de conexões para verificar/corrigir
+                                st.switch_page("pages/8_🔗_Conexões_Jira.py")
+                                
+                        else:
+                            st.error("Erro ao recuperar dados do utilizador selecionado.")
+
         st.markdown("##### 👥 Utilizadores Registados no Sistema")
         st.caption("Gira as permissões e contas dos utilizadores da plataforma.")
 
@@ -602,7 +688,7 @@ with main_tab_system:
                 st.button(
                     "Entendido, dispensar mensagem", 
                     key="dismiss_temp_pass", 
-                    on_click=clear_temp_password,  # <-- CHAMA A NOVA FUNÇÃO
+                    on_click=clear_temp_password, 
                     type="primary",
                     use_container_width=True
                 )

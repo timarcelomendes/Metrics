@@ -40,150 +40,103 @@ from stqdm import stqdm
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
-
+    # --- 1. Importações Locais (Para evitar erros de ciclo) ---
     from jira_connector import get_project_issues, get_jira_statuses
     from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
+    
     # Renomeia internamente para usar sem o underscore
     user_data = _user_data
     
     """
     Carrega, processa e enriquece os dados de um projeto Jira.
     """
+    # --- 2. Inicialização de Variáveis ---
     project_config = get_project_config(project_key) or {}
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
-        
-    # 1. Obter as listas de IDs habilitados pelo usuário
-    user_enabled_standard_fields_ids = user_data.get('standard_fields', [])
-    user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', []) # <-- LER A LISTA DE IDs
+    
+# Definimos os IDs aqui para estarem disponíveis em toda a função
+    estimation_field_id = estimation_config.get('id') if estimation_config else None
+    timespent_field_id = timespent_config.get('id') if timespent_config else None
+
+    # Estes campos são necessários para construir o DataFrame básico e calcular métricas.
+    MANDATORY_JIRA_FIELDS = [
+        'Issue Type', 'Status', 'Created', 'Summary', 'Resolution', 'Assignee'
+    ]
+
+    # Combina os campos que o usuário ativou com os campos mandatórios (usando set para evitar duplicados)
+    user_enabled_standard_fields_ids = list(
+        set(user_data.get('standard_fields', []) + MANDATORY_JIRA_FIELDS)
+    )
+    
+    # Mantém os custom fields como estavam
+    user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', [])
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
 
     if 'project_name' not in st.session_state or not st.session_state.project_name:
-        try: project_details = _jira_client.project(project_key); st.session_state.project_name = project_details.name
-        except Exception: st.session_state.project_name = project_key
+        try: 
+            project_details = _jira_client.project(project_key)
+            st.session_state.project_name = project_details.name
+        except Exception: 
+            st.session_state.project_name = project_key
 
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
-        # 2. Passar a lista de IDs de campos customizados para o conector
-        raw_issues_list = get_project_issues(
-            _jira_client, 
-            project_key,
-            standard_fields=user_enabled_standard_fields_ids, 
-            custom_fields=user_enabled_custom_field_ids # <-- Passa os IDs custom
-        )
-
-    # --- INÍCIO DO TRADUTOR DE CONFIGURAÇÃO CENTRAL ---
+        raw_issues_list = get_project_issues(_jira_client, project_key)
+        
+    # --- Tradutor de Configuração Central ---
     if 'status_category_mapping' in project_config and 'status_mapping' not in project_config:
         try:
-            with st.spinner("A traduzir mapeamento de categorias de status..."):
-                # A sua função 'get_jira_statuses' (linha 484) é a correta
-                all_statuses = get_jira_statuses(_jira_client, project_key) 
-                
-                cat_mapping = project_config['status_category_mapping']
-                initial_cats = [c.lower() for c in cat_mapping.get('initial', [])]
-                inprogress_cats = [c.lower() for c in cat_mapping.get('in_progress', [])]
-                done_cats = [c.lower() for c in cat_mapping.get('done', [])]
-                
-                new_status_mapping = {'initial': [], 'in_progress': [], 'done': []}
-                for s in all_statuses:
-                    if not hasattr(s, 'statusCategory') or not s.statusCategory:
-                        continue
-                        
-                    s_cat_name = s.statusCategory.name.lower()
-                    status_obj = {'id': s.id, 'name': s.name}
+            all_statuses = get_jira_statuses(_jira_client, project_key) 
+            
+            cat_mapping = project_config['status_category_mapping']
+            initial_cats = [c.lower() for c in cat_mapping.get('initial', [])]
+            inprogress_cats = [c.lower() for c in cat_mapping.get('in_progress', [])]
+            done_cats = [c.lower() for c in cat_mapping.get('done', [])]
+            
+            new_status_mapping = {'initial': [], 'in_progress': [], 'done': []}
+            for s in all_statuses:
+                if not hasattr(s, 'statusCategory') or not s.statusCategory:
+                    continue
                     
-                    if s_cat_name in initial_cats:
-                        new_status_mapping['initial'].append(status_obj)
-                    elif s_cat_name in inprogress_cats:
-                        new_status_mapping['in_progress'].append(status_obj)
-                    elif s_cat_name in done_cats:
-                        new_status_mapping['done'].append(status_obj)
+                s_cat_name = s.statusCategory.name.lower()
+                status_obj = {'id': s.id, 'name': s.name}
                 
-                # Injeta o mapeamento traduzido no project_config
-                project_config['status_mapping'] = new_status_mapping
+                if s_cat_name in initial_cats:
+                    new_status_mapping['initial'].append(status_obj)
+                elif s_cat_name in inprogress_cats:
+                    new_status_mapping['in_progress'].append(status_obj)
+                elif s_cat_name in done_cats:
+                    new_status_mapping['done'].append(status_obj)
+            
+            project_config['status_mapping'] = new_status_mapping
                 
         except Exception as e:
             st.error(f"Erro ao traduzir categorias de status: {e}")
 
-    # Agora o filter_ignored_issues funciona com o 'project_config' traduzido
+    # Filtragem de Issues Ignoradas
     issues = filter_ignored_issues(raw_issues_list, project_config)
 
-    if not issues: return pd.DataFrame(), [], project_config # Retorna a config mesmo se vazio
-    
-    # 3. Construir os mapas de tradução (ID -> Nome)
-    all_custom_field_id_to_name_map = { 
-        f['id']: f['name'] 
-        for f in global_configs.get('custom_fields', []) 
-        if isinstance(f, dict) and 'id' in f and 'name' in f 
-    }
-    
-    # 4. Criar o mapa reverso (Nome -> ID) APENAS para os campos habilitados
-    # Isto agora lida corretamente com nomes duplicados
-    user_custom_field_name_to_id_map = {
-        all_custom_field_id_to_name_map[fid]: fid
-        for fid in user_enabled_custom_field_ids
-        if fid in all_custom_field_id_to_name_map
-    }
-    
+    if not issues: 
+        return pd.DataFrame(), [], project_config
+
+    # Mapas para campos personalizados
+    all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
+    user_custom_field_name_to_id_map = { name: id for id, name in all_custom_field_id_to_name_map.items() if name in user_enabled_custom_fields_names }
     strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
-    
-    # --- FIM DA CORREÇÃO ---
 
-
-    # --- MAPEAMENTO PADRÃO ID -> ATRIBUTO JIRA (CORRIGIDO) ---
+    # Mapeamento Padrão
     standard_field_id_to_attribute_map = {
-        'summary': 'summary', 'issuetype': 'issuetype', 'status': 'status', 'priority': 'priority',
-        'resolution': 'resolution', 'assignee': 'assignee', 'reporter': 'reporter', 'creator': 'creator',
-        'created': 'created', 'updated': 'updated', 'duedate': 'duedate', 'components': 'components',
-        'versions': 'versions', # 'AffectedVersions' usa 'versions'
-        'fixVersions': 'fixVersions', 'labels': 'labels',
-        'description': 'description', 'environment': 'environment', 'security': 'security',
-        'timespent': 'timespent',
-        'timeestimate': 'timeestimate',
-        'timeoriginalestimate': 'timeoriginalestimate',
-        'statuscategory': 'statuscategory', 'parent': 'parent',
-        'AffectedVersions': 'versions',
-        'Assignee': 'assignee',
-        'Attachments': 'attachment',
-        'Category': 'projectCategory',
-        'Comment': 'comment',
-        'Components': 'components',
-        'Created': 'created',
-        'Creator': 'creator',
-        'Description': 'description',
-        'DueDate': 'duedate',
-        'Environment': 'environment',
-        'FixVersions': 'fixVersions',
-        'IssueType': 'issuetype',
-        'Labels': 'labels',
-        'LastViewed': 'lastViewed',
-        'LinkedIssues': 'issuelinks',
-        'Parent': 'parent',
-        'Priority': 'priority',
-        'Project': 'project',
-        'Reporter': 'reporter',
-        'Resolution': 'resolution',
-        'Resolved': 'resolutiondate',
-        'resolutiondate': 'resolutiondate',
-        'SecurityLevel': 'security',
-        'Status': 'status',
-        'StatusCategory': 'statuscategory',
-        'Summary': 'summary',
-        'subtasks': 'subtasks',
-        'issuelinks': 'issuelinks',
-        'TimeTracking': 'timetracking',
-        'aggregatetimespent': 'aggregatetimespent',
-        'aggregatetimeoriginalestimate': 'aggregatetimeoriginalestimate',
-        'aggregatetimeestimate': 'aggregatetimeestimate',
-        'aggregateprogress': 'aggregateprogress',
-        'workratio': 'workratio',
-        'Updated': 'updated',
-        'Votes': 'votes',
-        'Watchers': 'watches'
+        'Summary': 'summary', 'Issue Type': 'issuetype', 'Status': 'status', 'Priority': 'priority',
+        'Resolution': 'resolution', 'Assignee': 'assignee', 'Reporter': 'reporter', 'Creator': 'creator',
+        'Created': 'created', 'Updated': 'updated', 'DueDate': 'duedate', 'Components': 'components',
+        'Affects Versions': 'versions', 'Fix Versions': 'fixVersions', 'Labels': 'labels',
+        'Description': 'description', 'Environment': 'environment', 'Security Level': 'security',
+        'Time Spent': 'timespent', 'Time Estimate': 'timeestimate', 'Original Estimate': 'timeoriginalestimate',
+        'StatusCategory': 'statuscategory', 'Parent': 'parent',
     }
 
-    # --- EXTRACT_VALUE ROBUSTO ---
     def extract_value(raw_value, field_identifier_for_debug=""):
         if raw_value is None: return None
         try:
@@ -208,31 +161,26 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                     elif hasattr(item, 'displayName'): extracted_items.append(item.displayName)
                     elif isinstance(item, str): extracted_items.append(item)
                 return ', '.join(filter(None, extracted_items)) if extracted_items else None
-            return str(raw_value) # Fallback
+            return str(raw_value)
         except Exception as e:
-            print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}', Valor Bruto: '{raw_value}', Erro: {e}")
+            print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}': {e}")
             return None 
 
     processed_issues_data = []
-    try: _ = find_completion_date
-    except NameError: st.error("Erro: 'find_completion_date' não importada."); st.stop()
-
+    
     should_calc_time_in_status = project_config.get('calculate_time_in_status', False)
     all_project_statuses = []
     if should_calc_time_in_status:
         try: all_project_statuses = list(set([s.name for s in _jira_client.project_statuses(project_key)]))
         except Exception:
             try: all_project_statuses = list(set([s.name for s in _jira_client.statuses()]))
-            except Exception as e: 
-                print(f"Aviso: Falha ao buscar status: {e}")
+            except Exception: pass
 
     processed_by_default = {'ID', 'Issue', 'Tipo de Issue', 'Status', 'Data de Criação',
                              'Data de Conclusão', 'Lead Time (dias)', 'Cycle Time (dias)'}
 
-    for issue_index, issue in enumerate(stqdm(issues, desc="A processar issues")):
+    for issue in stqdm(issues, desc="A processar issues"):
         fields = issue.fields
-
-        # Campos Base
         issue_data = {
             'ID': issue.key,
             'Issue': getattr(fields, 'summary', None),
@@ -241,8 +189,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             'Data de Criação': extract_value(getattr(fields, 'created', None), f"{issue.key}-DataCriacao"),
         }
         
-        # --- Cálculo de Datas e Métricas ---
-        # (find_completion_date agora usa o project_config traduzido)
         completion_date_raw = find_completion_date(issue, project_config)
         completion_date_dt = pd.to_datetime(completion_date_raw, errors='coerce')
         issue_data['Data de Conclusão'] = completion_date_dt.tz_localize(None).normalize() if pd.notna(completion_date_dt) else pd.NaT
@@ -255,89 +201,45 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                 issue_data['Lead Time (dias)'] = (dt_conclusao_ts - dt_criacao_ts).days
             else:
                 issue_data['Lead Time (dias)'] = None
-        except Exception as e:
-            print(f"DEBUG Lead Time ERROR para {issue.key}: {e}")
+        except Exception:
             issue_data['Lead Time (dias)'] = None
             
-        # (calculate_cycle_time agora usa o project_config traduzido)
         issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
-        # --- PROCESSAMENTO CAMPOS PADRÃO ---
         for field_id in user_enabled_standard_fields_ids:
-            if field_id in processed_by_default:
+            if field_id in processed_by_default or field_id in [estimation_field_id, timespent_field_id]:
                 continue
 
             attribute_name = standard_field_id_to_attribute_map.get(field_id)
             raw_value = None 
-            extracted_value = None 
-            debug_source = "" 
-
             if attribute_name:
                 try:
                     if field_id == 'StatusCategory':
                         raw_value = getattr(getattr(fields, 'status', None), 'statusCategory', 'NÃO ENCONTRADO')
                     else:
                         raw_value = getattr(fields, attribute_name, 'NÃO ENCONTRADO')
-                    extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
-                    issue_data[field_id] = extracted_value 
-                except Exception as e:
-                    print(f"DEBUG Padrão Getattr ERROR para ID '{field_id}', Atributo '{attribute_name}', Erro: {e}")
+                    issue_data[field_id] = extract_value(raw_value, f"{issue.key}-{field_id}") 
+                except Exception:
                     issue_data[field_id] = None
             else:
                 try:
                     raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
-                    extracted_value = extract_value(raw_value, f"{issue.key}-{field_id}")
-                    issue_data[field_id] = extracted_value
-                except Exception as e:
-                    print(f"DEBUG Padrão Fallback Getattr ERROR para ID '{field_id}', Erro: {e}")
+                    issue_data[field_id] = extract_value(raw_value, f"{issue.key}-{field_id}")
+                except Exception:
                     issue_data[field_id] = None
 
-        # --- PROCESSAMENTO CAMPOS PERSONALIZADOS (AGORA CORRETO) ---
         for field_name, field_id in user_custom_field_name_to_id_map.items():
-            raw_value = None
-            extracted_value = None
             try:
                 raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
-                extracted_value = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
-                
-                # --- CORREÇÃO IMPORTANTE PARA NOMES DUPLICADOS ---
-                # Se dois campos (ex: 10042 e 10117) têm o *mesmo nome* (ex: "Story Points"),
-                # o DataFrame final deve ter colunas distintas se elas forem usadas
-                # para coisas diferentes (Previsto vs Realizado).
-                
-                estimation_field_id = estimation_config.get('id')
-                timespent_field_id = timespent_config.get('id')
-                
-                final_field_name = field_name
-                
-                # Se este campo NÃO é o campo de estimativa E 
-                # o campo de estimativa TEM o mesmo nome, 
-                # então anexa o ID a este campo.
-                if (field_id != estimation_field_id and 
-                    estimation_config.get('name') == field_name):
-                    final_field_name = f"{field_name} ({field_id})"
-                
-                # Faz o mesmo para o campo de tempo gasto
-                elif (field_id != timespent_field_id and 
-                      timespent_config.get('name') == field_name and
-                      estimation_field_id != timespent_field_id): # Evita renomear duas vezes
-                    final_field_name = f"{field_name} ({field_id})"
-                
-                issue_data[final_field_name] = extracted_value
-                # --- FIM DA CORREÇÃO DE NOMES DUPLICADOS ---
-
-            except Exception as e:
-                print(f"DEBUG Custom Getattr ERROR para Nome '{field_name}', ID '{field_id}', Erro: {e}")
+                issue_data[field_name] = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
+            except Exception:
                 issue_data[field_name] = None
-        
-        # Campo Estratégico
+
         if strategic_field_name and strategic_field_id:
                 if strategic_field_name not in issue_data:
                     raw_value = getattr(fields, strategic_field_id, 'NÃO ENCONTRADO')
-                    extracted_value = extract_value(raw_value, f"{issue.key}-{strategic_field_name}({strategic_field_id})")
-                    issue_data[strategic_field_name] = extracted_value
+                    issue_data[strategic_field_name] = extract_value(raw_value, f"{issue.key}-{strategic_field_name}")
 
-        # Tempo em Status
         if should_calc_time_in_status and all_project_statuses:
             time_in_status_data = calculate_time_in_status(issue, all_project_statuses, issue_data['Data de Conclusão'])
             for status_name, time_days in time_in_status_data.items():
@@ -345,18 +247,40 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
         processed_issues_data.append(issue_data)
         
-    # 1. Cria o DataFrame PRIMEIRO
     df = pd.DataFrame(processed_issues_data)
-    
-    # Obter os nomes corretos para a verificação final
+
+    # Lógica de rename de Estimativa/Tempo Gasto
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
+    rename_map_specific = {}
+    ids_to_drop_specific = [] 
 
-    # --- GARANTIR COLUNAS E RENOMEAR ---
+    if estimation_field_id and estimation_name and estimation_field_id in df.columns and estimation_name != estimation_field_id:
+            if estimation_name not in df.columns:
+                rename_map_specific[estimation_field_id] = estimation_name
+            else:
+                ids_to_drop_specific.append(estimation_field_id)
+
+    if timespent_field_id and timespent_name and timespent_field_id in df.columns and timespent_name != timespent_field_id:
+            if timespent_name not in df.columns:
+                rename_map_specific[timespent_field_id] = timespent_name
+            else:
+                ids_to_drop_specific.append(timespent_field_id)
+
+    if rename_map_specific:
+        df.rename(columns=rename_map_specific, inplace=True)
+
+    if ids_to_drop_specific:
+        df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
+
+    # --- 3. Definição de Colunas Esperadas (BLOCO FINAL) ---
+    
+    # As variáveis são definidas corretamente a partir da correção anterior (user_data)
     all_expected_standard_ids = user_enabled_standard_fields_ids
-    all_expected_custom_names = list(user_custom_field_name_to_id_map.keys())
+    all_expected_custom_names = user_enabled_custom_fields_names
+    
     expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
-    expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
+    
     if strategic_field_name: expected_cols_before_rename.add(strategic_field_name)
     
     if estimation_field_id: 
@@ -367,7 +291,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     if timespent_field_id: 
         if isinstance(timespent_field_id, list): 
-            # Se for lista, pega o primeiro item
             timespent_field_id = str(timespent_field_id[0]) if timespent_field_id else None
         if timespent_field_id:
             expected_cols_before_rename.add(timespent_field_id)
@@ -403,7 +326,6 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
 
-    # Retorna o DF, as issues filtradas E a configuração traduzida
     return df, issues, project_config
 
 def apply_filters(df, filters):
