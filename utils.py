@@ -104,7 +104,6 @@ def get_user_id(auth) -> str:
 
 # --- Funções de Persistência MongoDB Compartilhada ---
 
-# CORREÇÃO: Atualizado para 'Entregas' para coincidir com o mock de dados do dashboard
 DEFAULT_CONFIG = {"title": "Gráfico Padrão (Edite para Personalizar)", "x_col": "Mês", "y_col": "Entregas", "color": "#1f77b4"}
 CHART_DOC_ID = "main_flow_chart_config" # ID fixo para o documento
 
@@ -168,11 +167,10 @@ def save_shared_chart_config(new_config: Dict[str, Any]):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
-    # --- 1. Importações Locais (Para evitar erros de ciclo) ---
+    # --- 1. Importações Locais ---
     from jira_connector import get_project_issues, get_jira_statuses
     from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
     
-    # Renomeia internamente para usar sem o underscore
     user_data = _user_data
     
     """
@@ -183,22 +181,21 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     estimation_config = project_config.get('estimation_field', {})
     timespent_config = project_config.get('timespent_field', {})
     
-# Definimos os IDs aqui para estarem disponíveis em toda a função
     estimation_field_id = estimation_config.get('id') if estimation_config else None
     timespent_field_id = timespent_config.get('id') if timespent_config else None
 
-    # Estes campos são necessários para construir o DataFrame básico e calcular métricas.
     MANDATORY_JIRA_FIELDS = [
         'Issue Type', 'Status', 'Created', 'Summary', 'Resolution', 'Assignee'
     ]
 
-    # Combina os campos que o usuário ativou com os campos mandatórios (usando set para evitar duplicados)
+    # Combina campos padrão habilitados + obrigatórios
     user_enabled_standard_fields_ids = list(
         set(user_data.get('standard_fields', []) + MANDATORY_JIRA_FIELDS)
     )
     
-    # Mantém os custom fields como estavam
+    # --- CORREÇÃO CRÍTICA: Ler Nomes E IDs dos campos customizados ---
     user_enabled_custom_fields_names = user_data.get('enabled_custom_fields', [])
+    user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', []) 
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
@@ -211,13 +208,18 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             st.session_state.project_name = project_key
 
     with st.spinner(f"A carregar issues do projeto '{st.session_state.project_name}'..."):
-        raw_issues_list = get_project_issues(_jira_client, project_key)
+        # Agora passamos explicitamente os IDs dos campos customizados para o conector
+        raw_issues_list = get_project_issues(
+            _jira_client, 
+            project_key, 
+            standard_fields=user_enabled_standard_fields_ids,
+            custom_fields=user_enabled_custom_field_ids
+        )
         
-    # --- Tradutor de Configuração Central ---
+    # --- Tradutor de Status (Mantido) ---
     if 'status_category_mapping' in project_config and 'status_mapping' not in project_config:
         try:
             all_statuses = get_jira_statuses(_jira_client, project_key) 
-            
             cat_mapping = project_config['status_category_mapping']
             initial_cats = [c.lower() for c in cat_mapping.get('initial', [])]
             inprogress_cats = [c.lower() for c in cat_mapping.get('in_progress', [])]
@@ -225,36 +227,39 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             
             new_status_mapping = {'initial': [], 'in_progress': [], 'done': []}
             for s in all_statuses:
-                if not hasattr(s, 'statusCategory') or not s.statusCategory:
-                    continue
-                    
+                if not hasattr(s, 'statusCategory') or not s.statusCategory: continue
                 s_cat_name = s.statusCategory.name.lower()
                 status_obj = {'id': s.id, 'name': s.name}
-                
-                if s_cat_name in initial_cats:
-                    new_status_mapping['initial'].append(status_obj)
-                elif s_cat_name in inprogress_cats:
-                    new_status_mapping['in_progress'].append(status_obj)
-                elif s_cat_name in done_cats:
-                    new_status_mapping['done'].append(status_obj)
-            
+                if s_cat_name in initial_cats: new_status_mapping['initial'].append(status_obj)
+                elif s_cat_name in inprogress_cats: new_status_mapping['in_progress'].append(status_obj)
+                elif s_cat_name in done_cats: new_status_mapping['done'].append(status_obj)
             project_config['status_mapping'] = new_status_mapping
-                
-        except Exception as e:
-            st.error(f"Erro ao traduzir categorias de status: {e}")
+        except Exception as e: st.error(f"Erro ao traduzir categorias de status: {e}")
 
-    # Filtragem de Issues Ignoradas
     issues = filter_ignored_issues(raw_issues_list, project_config)
+    if not issues: return pd.DataFrame(), [], project_config
 
-    if not issues: 
-        return pd.DataFrame(), [], project_config
-
-    # Mapas para campos personalizados
+    # --- CORREÇÃO CRÍTICA: Mapeamento de Campos por ID ---
+    # Isto garante que o 'customfield_10276' ganhe o nome 'Nível de Atendimento'
     all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
-    user_custom_field_name_to_id_map = { name: id for id, name in all_custom_field_id_to_name_map.items() if name in user_enabled_custom_fields_names }
+    
+    user_custom_field_name_to_id_map = {}
+    
+    # 1. Prioridade: Campos habilitados pelo ID (resolve o seu caso)
+    for cf_id in user_enabled_custom_field_ids:
+        if cf_id in all_custom_field_id_to_name_map:
+            name = all_custom_field_id_to_name_map[cf_id]
+            user_custom_field_name_to_id_map[name] = cf_id
+            
+    # 2. Fallback: Campos habilitados pelo Nome
+    for name in user_enabled_custom_fields_names:
+        if name not in user_custom_field_name_to_id_map:
+            found_id = next((id for id, n in all_custom_field_id_to_name_map.items() if n == name), None)
+            if found_id:
+                user_custom_field_name_to_id_map[name] = found_id
+
     strategic_field_id = next((fid for fid, fname in all_custom_field_id_to_name_map.items() if fname == strategic_field_name), None)
 
-    # Mapeamento Padrão
     standard_field_id_to_attribute_map = {
         'Summary': 'summary', 'Issue Type': 'issuetype', 'Status': 'status', 'Priority': 'priority',
         'Resolution': 'resolution', 'Assignee': 'assignee', 'Reporter': 'reporter', 'Creator': 'creator',
@@ -290,8 +295,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
                     elif isinstance(item, str): extracted_items.append(item)
                 return ', '.join(filter(None, extracted_items)) if extracted_items else None
             return str(raw_value)
-        except Exception as e:
-            print(f"DEBUG extract_value ERROR para Campo '{field_identifier_for_debug}': {e}")
+        except Exception:
             return None 
 
     processed_issues_data = []
@@ -334,38 +338,41 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             
         issue_data['Cycle Time (dias)'] = calculate_cycle_time(issue, completion_date_raw, project_config)
 
+        # Processamento de Campos Padrão
         for field_id in user_enabled_standard_fields_ids:
             if field_id in processed_by_default or field_id in [estimation_field_id, timespent_field_id]:
                 continue
 
             attribute_name = standard_field_id_to_attribute_map.get(field_id)
-            raw_value = None 
             if attribute_name:
                 try:
                     if field_id == 'StatusCategory':
-                        raw_value = getattr(getattr(fields, 'status', None), 'statusCategory', 'NÃO ENCONTRADO')
+                        raw_value = getattr(getattr(fields, 'status', None), 'statusCategory', None)
                     else:
-                        raw_value = getattr(fields, attribute_name, 'NÃO ENCONTRADO')
+                        raw_value = getattr(fields, attribute_name, None)
                     issue_data[field_id] = extract_value(raw_value, f"{issue.key}-{field_id}") 
                 except Exception:
                     issue_data[field_id] = None
             else:
                 try:
-                    raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
+                    # CORREÇÃO: Usa None em vez de 'NÃO ENCONTRADO'
+                    raw_value = getattr(fields, field_id, None)
                     issue_data[field_id] = extract_value(raw_value, f"{issue.key}-{field_id}")
                 except Exception:
                     issue_data[field_id] = None
 
+        # Processamento de Campos Customizados
         for field_name, field_id in user_custom_field_name_to_id_map.items():
             try:
-                raw_value = getattr(fields, field_id, 'NÃO ENCONTRADO')
+                # CORREÇÃO: Usa None em vez de 'NÃO ENCONTRADO'
+                raw_value = getattr(fields, field_id, None)
                 issue_data[field_name] = extract_value(raw_value, f"{issue.key}-{field_name}({field_id})")
             except Exception:
                 issue_data[field_name] = None
 
         if strategic_field_name and strategic_field_id:
                 if strategic_field_name not in issue_data:
-                    raw_value = getattr(fields, strategic_field_id, 'NÃO ENCONTRADO')
+                    raw_value = getattr(fields, strategic_field_id, None)
                     issue_data[strategic_field_name] = extract_value(raw_value, f"{issue.key}-{strategic_field_name}")
 
         if should_calc_time_in_status and all_project_statuses:
@@ -377,7 +384,7 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         
     df = pd.DataFrame(processed_issues_data)
 
-    # Lógica de rename de Estimativa/Tempo Gasto
+    # Renomeações e Limpezas Finais
     estimation_name = estimation_config.get('name') if estimation_config else None
     timespent_name = timespent_config.get('name') if timespent_config else None
     rename_map_specific = {}
@@ -401,27 +408,20 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     if ids_to_drop_specific:
         df.drop(columns=ids_to_drop_specific, errors='ignore', inplace=True)
 
-    # --- 3. Definição de Colunas Esperadas (BLOCO FINAL) ---
-    
-    # As variáveis são definidas corretamente a partir da correção anterior (user_data)
+    # Definição Final de Colunas
     all_expected_standard_ids = user_enabled_standard_fields_ids
-    all_expected_custom_names = user_enabled_custom_fields_names
+    # IMPORTANTE: Usamos os NOMES mapeados, não os IDs
+    all_expected_custom_names = list(user_custom_field_name_to_id_map.keys())
     
     expected_cols_before_rename = set(list(processed_by_default) + all_expected_standard_ids + all_expected_custom_names)
     
     if strategic_field_name: expected_cols_before_rename.add(strategic_field_name)
-    
     if estimation_field_id: 
-        if isinstance(estimation_field_id, list): 
-            estimation_field_id = str(estimation_field_id[0]) if estimation_field_id else None
-        if estimation_field_id:
-            expected_cols_before_rename.add(estimation_field_id)
-
+        if isinstance(estimation_field_id, list): estimation_field_id = str(estimation_field_id[0]) if estimation_field_id else None
+        if estimation_field_id: expected_cols_before_rename.add(estimation_field_id)
     if timespent_field_id: 
-        if isinstance(timespent_field_id, list): 
-            timespent_field_id = str(timespent_field_id[0]) if timespent_field_id else None
-        if timespent_field_id:
-            expected_cols_before_rename.add(timespent_field_id)
+        if isinstance(timespent_field_id, list): timespent_field_id = str(timespent_field_id[0]) if timespent_field_id else None
+        if timespent_field_id: expected_cols_before_rename.add(timespent_field_id)
 
     for col in expected_cols_before_rename:
         if col not in df.columns:
@@ -453,9 +453,8 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
-
-    # Remove colunas duplicadas, mantendo a primeira ocorrência.
-    # Isso previne o erro "Duplicate column names found" se um campo customizado tiver o mesmo nome de um campo padrão renomeado.
+    
+    # Remove duplicados
     df = df.loc[:, ~df.columns.duplicated()]
 
     return df, issues, project_config

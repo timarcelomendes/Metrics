@@ -59,6 +59,10 @@
         {
             "id": "customfield_11010",
             "name": "Tipo de Atividade"
+        },
+        {
+            "id": "customfield_10276",
+            "name": "N\u00edvel de atendimento"
         }
     ],
     "strategic_grouping_field": "Cliente",
