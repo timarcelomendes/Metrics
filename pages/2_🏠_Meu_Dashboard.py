@@ -113,6 +113,32 @@ def move_chart_callback(charts_list, tab_name, from_index, to_index, project_key
                 save_user_dashboard(target_email, all_layouts)
                 st.session_state.needs_rerun = True
 
+def duplicate_chart_callback(chart_id, tab_name, project_key, dashboard_id, owner_email):
+    """Duplica um gráfico existente na mesma aba."""
+    target_email = owner_email if owner_email else st.session_state['email']
+    target_user_data = find_user(target_email)
+    
+    if target_user_data:
+        layouts = target_user_data.get('dashboard_layout', {})
+        if project_key in layouts and dashboard_id in layouts[project_key].get('dashboards', {}):
+            tabs = layouts[project_key]['dashboards'][dashboard_id]['tabs']
+            if tab_name in tabs:
+                source_list = tabs[tab_name]
+                # Encontra o índice pelo ID para garantir precisão
+                idx = next((i for i, c in enumerate(source_list) if c.get('id') == chart_id), -1)
+                
+                if idx != -1:
+                    new_chart = copy.deepcopy(source_list[idx])
+                    new_chart['id'] = str(uuid.uuid4())
+                    new_chart['title'] = f"{new_chart.get('title', 'Gráfico')} (Cópia)"
+                    
+                    # Insere logo após o original
+                    source_list.insert(idx + 1, new_chart)
+                    
+                    save_user_dashboard(target_email, layouts)
+                    st.success("Gráfico duplicado com sucesso!")
+                    st.session_state.needs_rerun = True
+
 def on_layout_change():
     num_cols = st.session_state.dashboard_layout_radio
     save_dashboard_column_preference(st.session_state.project_key, num_cols)
@@ -279,15 +305,7 @@ with st.expander("Opções do Dashboard", expanded=False):
                 insights = get_ai_insights(st.session_state.project_name, summaries, provider)
                 st.session_state.ai_dashboard_insights = insights
     with cols[4]:
-        # No add_chart, se for compartilhado, o novo gráfico deve ir para o dashboard do owner?
-        # A lógica atual do add_chart usa 'chart_to_edit' e redireciona.
-        # Na página 5, ao salvar, precisaremos garantir que ele salva no lugar certo.
-        # (Por enquanto, a página 5 salva no 'current active dashboard' do usuário. 
-        # Se o usuário for editor, ele salvará na sua cópia local, e a sincronização acima 
-        # pode sobrescrever. *Idealmente*, a página 5 também precisaria de ajuste, 
-        # mas focaremos aqui na organização e exclusão primeiro conforme pedido*)
         if st.button("➕ Gráfico", width='stretch', type="primary", disabled=not can_edit, help="Adicionar um novo gráfico a este dashboard."):
-            # Para garantir integridade, se for editor, avisamos que a criação completa depende da pág 5
             add_chart_callback()
 
 # Se o modo edição não estiver ativo, garante que a variável `edit_mode` seja False
@@ -325,11 +343,14 @@ def render_dashboard_view(is_edit_mode):
                                     original_index = charts_in_tab.index(chart_config)
                                     if is_edit_mode and can_edit:
                                         st.markdown('<div class="card-actions">', unsafe_allow_html=True)
-                                        b_cols = st.columns(4)
+                                        # Alterado para 5 colunas para acomodar o botão de duplicar
+                                        b_cols = st.columns(5)
                                         b_cols[0].button("🔼", key=f"up_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index == 0))
                                         b_cols[1].button("🔽", key=f"down_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index >= len(charts_in_tab) - 1))
                                         if b_cols[2].button("✏️", key=f"edit_{chart_config['id']}"): edit_chart_callback(chart_config)
-                                        b_cols[3].button("❌", key=f"del_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
+                                        # Novo botão de duplicar
+                                        b_cols[3].button("📥", key=f"dup_{chart_config['id']}", on_click=duplicate_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner), help="Duplicar")
+                                        b_cols[4].button("❌", key=f"del_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
                                         st.markdown('</div>', unsafe_allow_html=True)
                                     render_chart(chart_config, df, f"chart_{chart_config['id']}")
                     if other_charts: st.divider()
@@ -342,12 +363,15 @@ def render_dashboard_view(is_edit_mode):
                             with st.container(border=True):
                                 original_index = charts_in_tab.index(chart_config)
                                 if is_edit_mode and can_edit:
-                                    header_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1])
+                                    # Alterado para acomodar o botão de duplicar
+                                    header_cols = st.columns([0.5, 0.1, 0.1, 0.1, 0.1, 0.1])
                                     header_cols[0].markdown(f"**📊 {chart_config.get('title', 'Visualização')}**")
                                     header_cols[1].button("🔼", key=f"up_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index - 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index == 0))
                                     header_cols[2].button("🔽", key=f"down_other_{chart_config['id']}", on_click=move_chart_callback, args=(charts_in_tab, tab_name, original_index, original_index + 1, current_project_key, active_dashboard_id, cb_owner), disabled=(original_index >= len(charts_in_tab) - 1))
                                     if header_cols[3].button("✏️", key=f"edit_other_{chart_config['id']}"): edit_chart_callback(chart_config)
-                                    header_cols[4].button("❌", key=f"del_other_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
+                                    # Novo botão de duplicar
+                                    header_cols[4].button("📥", key=f"dup_other_{chart_config['id']}", on_click=duplicate_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner), help="Duplicar")
+                                    header_cols[5].button("❌", key=f"del_other_{chart_config['id']}", on_click=remove_chart_callback, args=(chart_config['id'], tab_name, current_project_key, active_dashboard_id, cb_owner))
                                 else:
                                     st.markdown(f"**📊 {chart_config.get('title', 'Visualização')}**")
                                 render_chart(chart_config, df, f"chart_other_{chart_config['id']}")
