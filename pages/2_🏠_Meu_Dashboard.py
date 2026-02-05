@@ -267,9 +267,18 @@ if dashboard_owner_email and dashboard_owner_email != current_user_email:
 # Extrai dados para renderização
 tabs_layout = active_dashboard_config.get('tabs', {"Geral": []})
 active_dashboard_name = active_dashboard_config.get('name', 'Dashboard')
-dashboard_permission = active_dashboard_config.get('permission', 'owner')
 
-is_owner = (dashboard_permission == 'owner')
+owns_dashboard = (dashboard_owner_email is None or dashboard_owner_email == current_user_email)
+if owns_dashboard and active_dashboard_config.get('permission', 'owner') != 'owner':
+    active_dashboard_config['permission'] = 'owner'
+    if current_project_key in all_layouts and active_dashboard_id in all_layouts[current_project_key].get('dashboards', {}):
+        all_layouts[current_project_key]['dashboards'][active_dashboard_id]['permission'] = 'owner'
+        if all_layouts[current_project_key]['dashboards'][active_dashboard_id].get('owner_email') == current_user_email:
+            del all_layouts[current_project_key]['dashboards'][active_dashboard_id]['owner_email']
+        save_user_dashboard(current_user_email, all_layouts)
+
+dashboard_permission = active_dashboard_config.get('permission', 'owner')
+is_owner = owns_dashboard
 can_edit = is_owner or (dashboard_permission == 'edit')
 
 # Validação básica de gráficos
