@@ -664,6 +664,18 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     )
     return fig
 
+def get_theme_colors(theme_name="Padrão Gauge"):
+    """Retorna o dicionário de cores de um tema com fallback seguro."""
+    default_theme_key = list(COLOR_THEMES.keys())[0]
+    theme_dict = COLOR_THEMES.get(theme_name, COLOR_THEMES[default_theme_key])
+    return theme_dict if isinstance(theme_dict, dict) else COLOR_THEMES[default_theme_key]
+
+def get_theme_color_sequence(theme_name="Padrão Gauge"):
+    """Retorna a sequência de cores de um tema em formato de lista."""
+    theme_dict = get_theme_colors(theme_name)
+    color_sequence = theme_dict.get('color_sequence', [])
+    return color_sequence if isinstance(color_sequence, list) and color_sequence else px.colors.qualitative.Plotly
+
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
@@ -812,28 +824,31 @@ def render_chart(chart_config, df, chart_key):
                      agg_df[agg_col] = 0 
 
             fig = None
-            theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
-            if not isinstance(theme_colors, dict):
-                theme_colors = COLOR_THEMES[default_theme]
+            theme_colors = get_theme_colors(color_theme)
+            theme_sequence = get_theme_color_sequence(color_theme)
 
             # Criação da Figura (passando agg_col via 'text=')
             if chart_type == 'barra':
                 fig = px.bar(agg_df, x=dimension, y=agg_col, color=secondary_dimension,
+                             color_discrete_sequence=theme_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'barra_horizontal':
                 fig = px.bar(agg_df, y=dimension, x=agg_col, orientation='h', color=secondary_dimension,
+                             color_discrete_sequence=theme_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'linha_agregada':
                 fig = px.line(agg_df, x=dimension, y=agg_col, markers=True, color=secondary_dimension,
+                             color_discrete_sequence=theme_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'pizza':
-                fig = px.pie(agg_df, names=dimension, values=agg_col)
+                fig = px.pie(agg_df, names=dimension, values=agg_col, color_discrete_sequence=theme_sequence)
             elif chart_type == 'treemap':
                 path = [dimension]
                 if secondary_dimension: path.append(secondary_dimension)
-                fig = px.treemap(agg_df, path=path, values=agg_col)
+                fig = px.treemap(agg_df, path=path, values=agg_col, color_discrete_sequence=theme_sequence)
             elif chart_type == 'funil':
                 fig = px.funnel(agg_df, x=agg_col, y=dimension,
+                                color_discrete_sequence=theme_sequence,
                                 text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'tabela':
                  header_color = theme_colors.get('primary_color', '#1f77b4')
@@ -981,6 +996,7 @@ def render_chart(chart_config, df, chart_key):
             plot_args = {
                 "data_frame": plot_df, "x": x_axis_col_for_plotting, "y": y,
                 "color": color_by if color_by and color_by != "Nenhum" else None,
+                "color_discrete_sequence": get_theme_color_sequence(color_theme),
                 "text": y if chart_config.get('show_data_labels') else None,
             }
 
@@ -1014,9 +1030,7 @@ def render_chart(chart_config, df, chart_key):
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
         elif chart_type == 'indicator':
-            theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
-            if not isinstance(theme_colors, dict):
-                theme_colors = COLOR_THEMES[default_theme]
+            theme_colors = get_theme_colors(color_theme)
             
             title_color = theme_colors.get('title_color', '#3D3D3D')
             number_color = theme_colors.get('primary_color', '#0068C9')
@@ -1099,9 +1113,7 @@ def render_chart(chart_config, df, chart_key):
             if rows and values:
                 pivot_df = pd.pivot_table(df_chart_filtered, values=values, index=rows, columns=cols, aggfunc=agg_map.get(aggfunc, 'sum')).reset_index()
 
-                theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
-                if not isinstance(theme_colors, dict):
-                    theme_colors = COLOR_THEMES[default_theme]
+                theme_colors = get_theme_colors(color_theme)
                 header_color = theme_colors.get('primary_color', '#1f77b4')
                 fig = go.Figure(data=[go.Table(
                     header=dict(values=list(pivot_df.columns), fill_color=header_color, align='left', font=dict(color='white')), 
