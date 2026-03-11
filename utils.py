@@ -815,25 +815,32 @@ def render_chart(chart_config, df, chart_key):
             theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
             if not isinstance(theme_colors, dict):
                 theme_colors = COLOR_THEMES[default_theme]
+            theme_color_sequence = theme_colors.get('color_sequence', px.colors.qualitative.Plotly)
 
             # Criação da Figura (passando agg_col via 'text=')
             if chart_type == 'barra':
                 fig = px.bar(agg_df, x=dimension, y=agg_col, color=secondary_dimension,
+                             color_discrete_sequence=theme_color_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'barra_horizontal':
                 fig = px.bar(agg_df, y=dimension, x=agg_col, orientation='h', color=secondary_dimension,
+                             color_discrete_sequence=theme_color_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'linha_agregada':
                 fig = px.line(agg_df, x=dimension, y=agg_col, markers=True, color=secondary_dimension,
+                             color_discrete_sequence=theme_color_sequence,
                              text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'pizza':
-                fig = px.pie(agg_df, names=dimension, values=agg_col)
+                fig = px.pie(agg_df, names=dimension, values=agg_col,
+                             color_discrete_sequence=theme_color_sequence)
             elif chart_type == 'treemap':
                 path = [dimension]
                 if secondary_dimension: path.append(secondary_dimension)
-                fig = px.treemap(agg_df, path=path, values=agg_col)
+                fig = px.treemap(agg_df, path=path, values=agg_col,
+                                 color_discrete_sequence=theme_color_sequence)
             elif chart_type == 'funil':
                 fig = px.funnel(agg_df, x=agg_col, y=dimension,
+                                color_discrete_sequence=theme_color_sequence,
                                 text=agg_col if chart_config.get('show_data_labels') else None)
             elif chart_type == 'tabela':
                  header_color = theme_colors.get('primary_color', '#1f77b4')
@@ -978,9 +985,15 @@ def render_chart(chart_config, df, chart_key):
                 plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 3600.0
                 y_axis_title = y_axis_title.replace(y, f"{y} (horas)") if y in y_axis_title else f"{y} (horas)"
             
+            xy_theme_dict = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
+            if not isinstance(xy_theme_dict, dict):
+                xy_theme_dict = COLOR_THEMES[default_theme]
+            xy_color_sequence = xy_theme_dict.get('color_sequence', px.colors.qualitative.Plotly)
+
             plot_args = {
                 "data_frame": plot_df, "x": x_axis_col_for_plotting, "y": y,
                 "color": color_by if color_by and color_by != "Nenhum" else None,
+                "color_discrete_sequence": xy_color_sequence,
                 "text": y if chart_config.get('show_data_labels') else None,
             }
 
