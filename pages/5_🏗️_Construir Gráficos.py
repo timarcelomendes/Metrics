@@ -110,13 +110,25 @@ st.info("ℹ️ Se você alterou suas preferências de campos na página 'Minha 
 st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
 
 global_configs = st.session_state.get('global_configs', {}); user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
-user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+user_enabled_standard_fields = user_data.get('standard_fields', [])
+user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
 
 master_field_list = []
+# Compatibilidade: prioriza seleção por ID (novo formato) com fallback para nome (formato legado)
+enabled_custom_fields_by_id = {field_id for field_id in user_enabled_custom_field_ids if field_id}
+enabled_custom_fields_by_name = {field_name for field_name in user_enabled_custom_fields if field_name}
+
 for field in all_available_custom:
-    if field.get('name') in user_enabled_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
+    field_id = field.get('id')
+    field_name = field.get('name')
+    if not field_name:
+        continue
+
+    if field_id in enabled_custom_fields_by_id or field_name in enabled_custom_fields_by_name:
+        master_field_list.append({'name': field_name, 'type': field.get('type', 'Texto')})
 for field_name in user_enabled_standard_fields:
     details = all_available_standard.get(field_name, {})
     if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
