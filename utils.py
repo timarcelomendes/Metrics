@@ -270,6 +270,33 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
         'StatusCategory': 'statuscategory', 'Parent': 'parent',
     }
 
+    def _parse_localized_numeric(raw_str: str):
+        """Converte strings numéricas em formatos locais (ex: 25.049, 25,049, 1.234,56)."""
+        if not isinstance(raw_str, str):
+            return None
+
+        cleaned = raw_str.strip().replace(' ', '')
+        if not cleaned:
+            return None
+
+        if not re.fullmatch(r"[-+]?\d+[\d\.,]*", cleaned):
+            return None
+
+        # Caso clássico pt-BR: milhares com ponto e decimal com vírgula (1.234,56)
+        if '.' in cleaned and ',' in cleaned:
+            return float(cleaned.replace('.', '').replace(',', '.'))
+
+        # Heurística para valores com apenas ponto: 25.049 -> 25049 (milhares)
+        # Se houver exatamente 3 dígitos após o ponto e não houver vírgula, trata como milhar.
+        if ',' not in cleaned and re.fullmatch(r"[-+]?\d+\.\d{3}", cleaned):
+            return float(cleaned.replace('.', ''))
+
+        # Caso com apenas vírgula: 25,5 -> 25.5
+        if ',' in cleaned and '.' not in cleaned:
+            return float(cleaned.replace(',', '.'))
+
+        return float(cleaned)
+
     def extract_value(raw_value, field_identifier_for_debug=""):
         if raw_value is None: return None
         try:
@@ -277,6 +304,10 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             if isinstance(raw_value, str) and raw_value.isdigit():
                 try: return int(raw_value)
                 except ValueError: pass
+            if isinstance(raw_value, str):
+                numeric_value = _parse_localized_numeric(raw_value)
+                if numeric_value is not None:
+                    return numeric_value
             if hasattr(raw_value, 'displayName'): return raw_value.displayName
             if hasattr(raw_value, 'name'): return raw_value.name 
             if hasattr(raw_value, 'value'): return raw_value.value 
