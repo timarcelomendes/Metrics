@@ -666,6 +666,50 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
 
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
+
+    def coerce_localized_numeric_series(series, min_valid_ratio=0.7):
+        """Converte números em string (pt-BR/en-US) para float quando fizer sentido."""
+        if series is None:
+            return series
+
+        if pd.api.types.is_numeric_dtype(series):
+            return pd.to_numeric(series, errors='coerce')
+
+        as_str = series.astype(str).str.strip()
+        non_empty_mask = (~series.isna()) & (as_str != "") & (as_str.str.lower() != "nan")
+        if not non_empty_mask.any():
+            return pd.to_numeric(series, errors='coerce')
+
+        def parse_localized_number(value):
+            if pd.isna(value):
+                return np.nan
+
+            text = str(value).strip().replace("\u00a0", "").replace(" ", "")
+            if text == "" or text.lower() == "nan":
+                return np.nan
+
+            has_dot = "." in text
+            has_comma = "," in text
+
+            if has_dot and has_comma:
+                if text.rfind(",") > text.rfind("."):
+                    text = text.replace(".", "").replace(",", ".")
+                else:
+                    text = text.replace(",", "")
+            elif has_comma:
+                text = text.replace(",", ".")
+
+            text = re.sub(r"[^0-9.\-+]", "", text)
+
+            try:
+                return float(text)
+            except ValueError:
+                return np.nan
+
+        converted = series.map(parse_localized_number)
+        valid_ratio = converted[non_empty_mask].notna().mean()
+        return converted if valid_ratio >= min_valid_ratio else series
+
     try:
         if not isinstance(chart_config, dict):
             st.error(f"Erro: A configuração deste gráfico é inválida e não pode ser renderizada.")
@@ -934,6 +978,14 @@ def render_chart(chart_config, df, chart_key):
                 st.warning("Não há dados para exibir com as colunas e filtros selecionados.")
                 return
 
+            if y in plot_df.columns:
+                plot_df[y] = coerce_localized_numeric_series(plot_df[y])
+
+            if x in plot_df.columns and (x in numeric_cols or pd.api.types.is_object_dtype(plot_df[x])):
+                parsed_x = coerce_localized_numeric_series(plot_df[x])
+                if pd.api.types.is_numeric_dtype(parsed_x):
+                    plot_df[x] = parsed_x
+
             x_axis_col_for_plotting = x 
             date_aggregation = chart_config.get('date_aggregation')
             if date_aggregation and date_aggregation != 'Nenhum' and x in plot_df.columns:
@@ -989,7 +1041,8 @@ def render_chart(chart_config, df, chart_key):
             if chart_type == 'dispersão':
                 size_col = size_by if size_by and size_by != "Nenhum" else None
                 if size_col and size_col in plot_df.columns:
-                    plot_df[size_col] = pd.to_numeric(plot_df[size_col], errors='coerce').dropna()
+                    plot_df[size_col] = coerce_localized_numeric_series(plot_df[size_col])
+                    plot_df[size_col] = pd.to_numeric(plot_df[size_col], errors='coerce')
                     
                     original_rows = len(plot_df)
                     plot_df = plot_df[plot_df[size_col] >= 0].copy()
