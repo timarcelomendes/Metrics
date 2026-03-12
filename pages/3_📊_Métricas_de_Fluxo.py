@@ -420,6 +420,12 @@ with tab_performance:
     # --- FIM DA CORREÇÃO ---
 
     else:
+        # Variáveis-base para garantir que campos de tempo (em segundos) tenham equivalente em horas.
+        estimado_valor_bruto = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0)
+        realizado_valor_bruto = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0)
+        estimado_valor_horas = estimado_valor_bruto / 3600.0
+        realizado_valor_horas = realizado_valor_bruto / 3600.0
+
         # --- PONTO DE ALTERAÇÃO 1: Lógica de verificação de unidade mais robusta ---
         estim_source = estimation_config.get('source')
         spent_source = timespent_config.get('source')
@@ -447,22 +453,19 @@ with tab_performance:
             )
             
             # Cálculo dos KPIs para exibição (mesmo incompatíveis)
-            # Usar os NOMES dos campos para ler o DataFrame
-            total_estimado = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0).sum()
-            total_realizado_segundos_ou_pontos = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0).sum()
+            total_estimado = estimado_valor_horas.sum() if estim_is_time else estimado_valor_bruto.sum()
+            total_realizado = realizado_valor_horas.sum() if spent_is_time else realizado_valor_bruto.sum()
 
-            # Converte para horas apenas se for um campo de tempo
-            if estim_is_time:
-                total_estimado = total_estimado / 3600.0
-            if spent_is_time:
-                total_realizado = total_realizado_segundos_ou_pontos / 3600.0
-            else:
-                total_realizado = total_realizado_segundos_ou_pontos
+            # A variável em horas é mantida explicitamente para evitar regressões de conversão.
+            total_realizado_horas = realizado_valor_horas.sum()
 
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Estimado (Concluídos)", f"{total_estimado:,.1f} {estim_unit_display}")
             col2.metric("Total Realizado (Concluídos)", f"{total_realizado:,.1f} {spent_unit_display}")
             col3.metric("Média (Incompatível)", "N/A")
+
+            if spent_is_time:
+                st.caption(f"Total Realizado convertido: **{total_realizado_horas:,.1f} hs** (origem em segundos).")
             
             st.caption("Gráfico comparativo oculto pois as unidades são incompatíveis.")
 
@@ -470,15 +473,16 @@ with tab_performance:
             # NÃO, as unidades são IGUAIS (ex: pts vs pts ou hs vs hs)
             
             # 5. Calcular os totais (usando os NOMES)
-            total_estimado = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0).sum()
-            total_realizado = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0).sum()
+            total_estimado = estimado_valor_bruto.sum()
+            total_realizado = realizado_valor_bruto.sum()
             
             unit_display = "pts" # Padrão
+            total_realizado_horas = realizado_valor_horas.sum()
             
             # 6. CONVERSÃO-CHAVE (Se ambos forem campos de tempo em segundos)
             if estim_is_time: # (sabemos que spent_is_time também é True)
-                total_estimado = total_estimado / 3600.0
-                total_realizado = total_realizado / 3600.0
+                total_estimado = estimado_valor_horas.sum()
+                total_realizado = total_realizado_horas
                 unit_display = "hs"
 
             # 7. Exibir as Métricas (Agora compatíveis)
