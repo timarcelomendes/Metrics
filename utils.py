@@ -697,7 +697,15 @@ def render_chart(chart_config, df, chart_key):
                 else:
                     text = text.replace(",", "")
             elif has_comma:
-                text = text.replace(",", ".")
+                comma_parts = text.split(",")
+                # Ex.: "1,234" ou "12,345,678" (agrupamento de milhar sem decimal)
+                if len(comma_parts) > 1 and all(part.isdigit() for part in comma_parts):
+                    if all(len(part) == 3 for part in comma_parts[1:]):
+                        text = "".join(comma_parts)
+                    else:
+                        text = text.replace(",", ".")
+                else:
+                    text = text.replace(",", ".")
 
             text = re.sub(r"[^0-9.\-+]", "", text)
 
@@ -981,7 +989,7 @@ def render_chart(chart_config, df, chart_key):
             if y in plot_df.columns:
                 plot_df[y] = coerce_localized_numeric_series(plot_df[y])
 
-            if x in plot_df.columns and (x in numeric_cols or pd.api.types.is_object_dtype(plot_df[x])):
+            if x in plot_df.columns and not pd.api.types.is_numeric_dtype(plot_df[x]):
                 parsed_x = coerce_localized_numeric_series(plot_df[x])
                 if pd.api.types.is_numeric_dtype(parsed_x):
                     plot_df[x] = parsed_x
