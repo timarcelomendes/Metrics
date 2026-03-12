@@ -975,7 +975,7 @@ def render_chart(chart_config, df, chart_key):
 
             y_axis_title = chart_config.get('y_axis_title', y)
             if chart_config.get('y_axis_format') == 'hours' and y in plot_df.columns:
-                plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 3600.0
+                plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 60.0
                 y_axis_title = y_axis_title.replace(y, f"{y} (horas)") if y in y_axis_title else f"{y} (horas)"
             
             plot_args = {
