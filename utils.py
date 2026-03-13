@@ -1095,6 +1095,7 @@ def render_chart(chart_config, df, chart_key):
 
         elif chart_type == 'pivot_table':
             rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
+            values_format = chart_config.get('values_format')
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
                 if values == "Contagem de Issues":
@@ -1109,8 +1110,11 @@ def render_chart(chart_config, df, chart_key):
                         fill_value=0
                     ).reset_index()
                 else:
+                    df_pivot_source = df_chart_filtered.copy()
+                    if values_format == 'hours' and values in df_pivot_source.columns:
+                        df_pivot_source[values] = pd.to_numeric(df_pivot_source[values], errors='coerce') / 3600.0
                     pivot_df = pd.pivot_table(
-                        df_chart_filtered,
+                        df_pivot_source,
                         values=values,
                         index=rows,
                         columns=cols,

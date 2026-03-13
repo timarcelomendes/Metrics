@@ -126,6 +126,8 @@ if project_estimation_field and project_estimation_field.get('name') not in [f['
     est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
 
+hour_fields = {f['name'] for f in master_field_list if f.get('type') == 'Horas'}
+
 # Lógica de deteção automática para garantir que todos os campos sejam apanhados
 auto_numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
 auto_date_cols = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col]) or 'Data' in col]
@@ -795,6 +797,7 @@ if creation_mode == "Construtor Visual":
                     'columns': final_columns if final_columns else None,
                     'values': values_selection,
                     'aggfunc': aggfunc_selection,
+                    'values_format': 'hours' if values_selection in hour_fields else None,
                     'id': config.get('id') # Preserva o ID original durante a edição
                 }
 
