@@ -34,6 +34,8 @@ def on_chart_type_change():
     if editing_mode:
         new_config['title'] = current_config.get('title', '')
 
+    st.session_state.new_chart_config = new_config
+
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
 
@@ -764,9 +766,6 @@ if creation_mode == "Construtor Visual":
                     index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0,
                     key="pivot_aggfunc_selector_numeric" # Chave diferente
                  )
-            
-            agg_options = ['Soma', 'Média', 'Contagem']
-            aggfunc_selection = st.selectbox("Função de Agregação", options=agg_options, index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0)
 
             # Lógica de validação e criação do chart_config
             if not rows_selection or not values_selection:
@@ -786,6 +785,7 @@ if creation_mode == "Construtor Visual":
                     'columns': final_columns if final_columns else None,
                     'values': values_selection,
                     'aggfunc': aggfunc_selection,
+                    'color_theme': color_theme,
                     'id': config.get('id') # Preserva o ID original durante a edição
                 }
 
