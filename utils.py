@@ -453,6 +453,12 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]
+
+    # Garante consistência de unidade para o campo padrão do Jira "Estimativa Original (Horas)".
+    # O Jira retorna `timeoriginalestimate` em segundos, mas esta dimensão é exibida como horas.
+    original_estimate_col = estimation_name if estimation_field_id == 'timeoriginalestimate' else None
+    if original_estimate_col and original_estimate_col in df.columns:
+        df[original_estimate_col] = pd.to_numeric(df[original_estimate_col], errors='coerce') / 3600.0
     
     # Remove duplicados
     df = df.loc[:, ~df.columns.duplicated()]
