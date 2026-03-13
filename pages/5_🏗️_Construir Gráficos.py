@@ -741,12 +741,12 @@ if creation_mode == "Construtor Visual":
             all_row_col_options = [str(col) for col in (categorical_cols + date_cols)]
             all_options_set = set(all_row_col_options) # Mais rápido para verificação
 
-            saved_rows = config.get('rows', [])
+            saved_rows = config.get('rows') or []
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_rows = [row for row in saved_rows if row in all_options_set]
             rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=valid_default_rows)
 
-            saved_columns = config.get('columns', [])
+            saved_columns = config.get('columns') or []
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_columns = [col for col in saved_columns if col in all_options_set]
             columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=valid_default_columns)
