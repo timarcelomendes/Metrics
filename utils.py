@@ -1094,14 +1094,32 @@ def render_chart(chart_config, df, chart_key):
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
 
         elif chart_type == 'pivot_table':
-            rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
+            rows = chart_config.get('rows') or []
+            cols = chart_config.get('columns') or []
+            values = chart_config.get('values')
+            aggfunc = chart_config.get('aggfunc', 'Soma').lower()
+
+            rows = [r for r in rows if isinstance(r, str) and r in df_chart_filtered.columns]
+            cols = [c for c in cols if isinstance(c, str) and c in df_chart_filtered.columns]
+
+            # Evita duplicidades e sobreposição entre index/columns, que causam erro no pandas pivot_table.
+            rows = list(dict.fromkeys(rows))
+            cols = list(dict.fromkeys(cols))
+            overlapping_fields = [c for c in cols if c in rows]
+            if overlapping_fields:
+                cols = [c for c in cols if c not in set(overlapping_fields)]
+                st.warning(
+                    "Na Tabela Dinâmica, os campos não podem estar simultaneamente em 'Linhas' e 'Colunas'. "
+                    f"Removidos de 'Colunas': {', '.join(overlapping_fields)}"
+                )
+
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
                 if values == "Contagem de Issues":
                     pivot_df = pd.pivot_table(
                         df_chart_filtered,
                         index=rows,
-                        columns=cols,
+                        columns=cols or None,
                         aggfunc='size',
                         fill_value=0
                     ).reset_index()
@@ -1120,7 +1138,7 @@ def render_chart(chart_config, df, chart_key):
                         pivot_source_df,
                         values=values,
                         index=rows,
-                        columns=cols,
+                        columns=cols or None,
                         aggfunc=agg_map.get(aggfunc, 'sum')
                     ).reset_index()
 
