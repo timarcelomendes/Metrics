@@ -1097,7 +1097,32 @@ def render_chart(chart_config, df, chart_key):
             rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
-                pivot_df = pd.pivot_table(df_chart_filtered, values=values, index=rows, columns=cols, aggfunc=agg_map.get(aggfunc, 'sum')).reset_index()
+                if values == "Contagem de Issues":
+                    pivot_df = pd.pivot_table(
+                        df_chart_filtered,
+                        index=rows,
+                        columns=cols,
+                        aggfunc='size',
+                        fill_value=0
+                    ).reset_index()
+                    if 0 in pivot_df.columns:
+                        pivot_df = pivot_df.rename(columns={0: values})
+                else:
+                    if values not in df_chart_filtered.columns:
+                        st.warning(f"O campo '{values}' não foi encontrado para a Tabela Dinâmica.")
+                        return
+
+                    pivot_source_df = df_chart_filtered.copy()
+                    if aggfunc in ('soma', 'média'):
+                        pivot_source_df[values] = pd.to_numeric(pivot_source_df[values], errors='coerce')
+
+                    pivot_df = pd.pivot_table(
+                        pivot_source_df,
+                        values=values,
+                        index=rows,
+                        columns=cols,
+                        aggfunc=agg_map.get(aggfunc, 'sum')
+                    ).reset_index()
 
                 theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
                 if not isinstance(theme_colors, dict):
