@@ -780,6 +780,7 @@ if creation_mode == "Construtor Visual":
                     disabled=True, # Desabilita a seleção
                     key="pivot_aggfunc_selector_count" # Chave diferente
                  )
+                convert_to_hours = False
             else:
                  # Comportamento normal para campos numéricos
                  aggfunc_selection = st.selectbox(
@@ -787,6 +788,14 @@ if creation_mode == "Construtor Visual":
                     options=agg_options,
                     index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0,
                     key="pivot_aggfunc_selector_numeric" # Chave diferente
+                 )
+
+                 value_field_details = next((item for item in master_field_list if item['name'] == values_selection), None)
+                 default_convert_to_hours = config.get('y_axis_format') == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
+                 convert_to_hours = st.toggle(
+                    "Exibir valores em horas (÷ 3600)",
+                    value=default_convert_to_hours,
+                    key="pivot_values_in_hours_toggle"
                  )
 
             # Lógica de validação e criação do chart_config
@@ -808,6 +817,7 @@ if creation_mode == "Construtor Visual":
                     'values': values_selection,
                     'aggfunc': aggfunc_selection,
                     'color_theme': color_theme,
+                    'y_axis_format': 'hours' if convert_to_hours else None,
                     'id': config.get('id') # Preserva o ID original durante a edição
                 }
 

@@ -1137,6 +1137,8 @@ def render_chart(chart_config, df, chart_key):
                     pivot_source_df = pivot_input_df.copy()
                     if aggfunc in ('soma', 'média'):
                         pivot_source_df[values] = pd.to_numeric(pivot_source_df[values], errors='coerce')
+                        if chart_config.get('y_axis_format') == 'hours':
+                            pivot_source_df[values] = pivot_source_df[values] / 3600.0
 
                     pivot_df = pd.pivot_table(
                         pivot_source_df,
