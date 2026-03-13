@@ -34,6 +34,8 @@ def on_chart_type_change():
     if editing_mode:
         new_config['title'] = current_config.get('title', '')
 
+    st.session_state.new_chart_config = new_config
+
 editing_mode = 'chart_to_edit' in st.session_state and st.session_state.chart_to_edit is not None
 chart_data = st.session_state.get('chart_to_edit', {})
 
@@ -720,12 +722,22 @@ if creation_mode == "Construtor Visual":
             saved_rows = config.get('rows', [])
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_rows = [row for row in saved_rows if row in all_options_set]
-            rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=valid_default_rows)
+            rows_selection = st.multiselect(
+                "Linhas",
+                options=all_row_col_options,
+                default=valid_default_rows,
+                placeholder="Selecione as linhas"
+            )
 
             saved_columns = config.get('columns', [])
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_columns = [col for col in saved_columns if col in all_options_set]
-            columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=valid_default_columns)
+            columns_selection = st.multiselect(
+                "Colunas",
+                options=all_row_col_options,
+                default=valid_default_columns,
+                placeholder="Selecione as colunas"
+            )
             
             # --- Usar measure_options_numeric_only (sem a opção "Tempo em Status" por enquanto) ---
 
@@ -765,9 +777,6 @@ if creation_mode == "Construtor Visual":
                     key="pivot_aggfunc_selector_numeric" # Chave diferente
                  )
             
-            agg_options = ['Soma', 'Média', 'Contagem']
-            aggfunc_selection = st.selectbox("Função de Agregação", options=agg_options, index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0)
-
             # Lógica de validação e criação do chart_config
             if not rows_selection or not values_selection:
                 chart_config = {}
