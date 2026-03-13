@@ -114,6 +114,26 @@ user_enabled_standard_fields = user_data.get('standard_fields', []); user_enable
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
 
+
+def is_hours_based_field(field_name: str, field_details: dict | None = None) -> bool:
+    if not field_name:
+        return False
+
+    if field_details and field_details.get('type') == 'Horas':
+        return True
+
+    normalized_name = str(field_name).strip().lower()
+    explicit_hours_labels = {
+        'estimativa original (horas)',
+        'remaining estimate (horas)',
+        'time spent (horas)',
+        'original estimate (horas)',
+    }
+    if normalized_name in explicit_hours_labels:
+        return True
+
+    return '(horas)' in normalized_name or ' hora' in normalized_name
+
 master_field_list = []
 for field in all_available_custom:
     if field.get('name') in user_enabled_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
@@ -408,8 +428,9 @@ if creation_mode == "Construtor Visual":
             config['show_data_labels'] = label_c1.toggle("Exibir Rótulos de Dados", key="xy_labels", value=config.get('show_data_labels', False))
             config['trendline'] = label_c2.toggle("Exibir Reta de Tendência", key="xy_trendline", value=config.get('trendline', False), help="Disponível apenas para gráficos de dispersão.")
 
-            y_field_details = next((item for item in master_field_list if item['name'] == config.get('y')), None)
-            config['y_axis_format'] = 'hours' if y_field_details and y_field_details.get('type') == 'Horas' else None
+            y_field_name = config.get('y')
+            y_field_details = next((item for item in master_field_list if item['name'] == y_field_name), None)
+            config['y_axis_format'] = 'hours' if is_hours_based_field(y_field_name, y_field_details) else None
             
             chart_config = config.copy()
             if chart_config.get('size_by') == "Nenhum": chart_config['size_by'] = None
@@ -518,8 +539,9 @@ if creation_mode == "Construtor Visual":
                 
                 config['show_data_labels'] = st.toggle("Exibir Rótulos de Dados", key="agg_labels", value=config.get('show_data_labels', False))
 
-                measure_field_details = next((item for item in master_field_list if item['name'] == config.get('measure_selection')), None)
-                config['y_axis_format'] = 'hours' if (measure_field_details and measure_field_details.get('type') == 'Horas') or config.get('measure_selection') == "Tempo em Status" else None
+                measure_field_name = config.get('measure_selection')
+                measure_field_details = next((item for item in master_field_list if item['name'] == measure_field_name), None)
+                config['y_axis_format'] = 'hours' if is_hours_based_field(measure_field_name, measure_field_details) or config.get('measure_selection') == "Tempo em Status" else None
                 
                 if config.get('type') == 'tabela':
                     config['columns'] = [config.get('dimension'), config.get('measure')]
