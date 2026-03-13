@@ -113,6 +113,7 @@ global_configs = st.session_state.get('global_configs', {}); user_data = find_us
 user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
+time_based_standard_field_ids = {'timeoriginalestimate', 'timeestimate', 'timespent'}
 
 master_field_list = []
 for field in all_available_custom:
@@ -121,7 +122,12 @@ for field_name in user_enabled_standard_fields:
     details = all_available_standard.get(field_name, {})
     if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
 if project_estimation_field and project_estimation_field.get('name') not in [f['name'] for f in master_field_list]:
-    est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
+    estimation_field_id = project_estimation_field.get('id')
+    is_time_based_estimation = (
+        project_estimation_field.get('source') == 'standard_time'
+        or estimation_field_id in time_based_standard_field_ids
+    )
+    est_type = 'Horas' if is_time_based_estimation else 'Numérico'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
 
 # Lógica de deteção automática para garantir que todos os campos sejam apanhados

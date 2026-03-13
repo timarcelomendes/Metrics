@@ -1422,7 +1422,11 @@ def calculate_estimation_accuracy(completed_issues, estimation_config):
     if not completed_issues:
         return {'total_estimated': 0, 'total_actual': 0, 'accuracy_ratio': 100}
 
-    is_time_based_estimation = estimation_config.get('source') == 'standard_time'
+    time_based_standard_field_ids = {'timeoriginalestimate', 'timeestimate', 'timespent'}
+    is_time_based_estimation = (
+        estimation_config.get('source') == 'standard_time'
+        or estimation_config.get('id') in time_based_standard_field_ids
+    )
 
     for issue in completed_issues:
         estimated_value = get_issue_estimation(issue, estimation_config) or 0
