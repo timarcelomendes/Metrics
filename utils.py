@@ -1099,8 +1099,12 @@ def render_chart(chart_config, df, chart_key):
             values = chart_config.get('values')
             aggfunc = chart_config.get('aggfunc', 'Soma').lower()
 
-            rows = [r for r in rows if isinstance(r, str) and r in df_chart_filtered.columns]
-            cols = [c for c in cols if isinstance(c, str) and c in df_chart_filtered.columns]
+            pivot_input_df = df_chart_filtered.loc[:, ~df_chart_filtered.columns.duplicated()].copy()
+            if len(pivot_input_df.columns) != len(df_chart_filtered.columns):
+                st.warning("Foram encontradas colunas duplicadas na fonte de dados. A Tabela Dinâmica usará apenas a primeira ocorrência de cada coluna.")
+
+            rows = [r for r in rows if isinstance(r, str) and r in pivot_input_df.columns]
+            cols = [c for c in cols if isinstance(c, str) and c in pivot_input_df.columns]
 
             # Evita duplicidades e sobreposição entre index/columns, que causam erro no pandas pivot_table.
             rows = list(dict.fromkeys(rows))
@@ -1117,7 +1121,7 @@ def render_chart(chart_config, df, chart_key):
             if rows and values:
                 if values == "Contagem de Issues":
                     pivot_df = pd.pivot_table(
-                        df_chart_filtered,
+                        pivot_input_df,
                         index=rows,
                         columns=cols or None,
                         aggfunc='size',
@@ -1126,11 +1130,11 @@ def render_chart(chart_config, df, chart_key):
                     if 0 in pivot_df.columns:
                         pivot_df = pivot_df.rename(columns={0: values})
                 else:
-                    if values not in df_chart_filtered.columns:
+                    if values not in pivot_input_df.columns:
                         st.warning(f"O campo '{values}' não foi encontrado para a Tabela Dinâmica.")
                         return
 
-                    pivot_source_df = df_chart_filtered.copy()
+                    pivot_source_df = pivot_input_df.copy()
                     if aggfunc in ('soma', 'média'):
                         pivot_source_df[values] = pd.to_numeric(pivot_source_df[values], errors='coerce')
 
