@@ -1097,7 +1097,26 @@ def render_chart(chart_config, df, chart_key):
             rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
-                pivot_df = pd.pivot_table(df_chart_filtered, values=values, index=rows, columns=cols, aggfunc=agg_map.get(aggfunc, 'sum')).reset_index()
+                if values == "Contagem de Issues":
+                    df_pivot_source = df_chart_filtered.copy()
+                    df_pivot_source["__issue_count"] = 1
+                    pivot_df = pd.pivot_table(
+                        df_pivot_source,
+                        values="__issue_count",
+                        index=rows,
+                        columns=cols,
+                        aggfunc='sum',
+                        fill_value=0
+                    ).reset_index()
+                else:
+                    pivot_df = pd.pivot_table(
+                        df_chart_filtered,
+                        values=values,
+                        index=rows,
+                        columns=cols,
+                        aggfunc=agg_map.get(aggfunc, 'sum'),
+                        fill_value=0
+                    ).reset_index()
 
                 theme_colors = COLOR_THEMES.get(color_theme, COLOR_THEMES[default_theme])
                 if not isinstance(theme_colors, dict):
