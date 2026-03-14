@@ -432,7 +432,7 @@ if creation_mode == "Construtor Visual":
 
             y_field_name = config.get('y')
             y_field_details = next((item for item in master_field_list if item['name'] == y_field_name), None)
-            config['y_axis_format'] = 'hours' if is_hours_based_field(y_field_name, y_field_details) else None
+            config['value_format'] = 'hours' if is_hours_based_field(y_field_name, y_field_details) else None
             
             chart_config = config.copy()
             if chart_config.get('size_by') == "Nenhum": chart_config['size_by'] = None
@@ -543,7 +543,7 @@ if creation_mode == "Construtor Visual":
 
                 measure_field_name = config.get('measure_selection')
                 measure_field_details = next((item for item in master_field_list if item['name'] == measure_field_name), None)
-                config['y_axis_format'] = 'hours' if is_hours_based_field(measure_field_name, measure_field_details) or config.get('measure_selection') == "Tempo em Status" else None
+                config['value_format'] = 'hours' if is_hours_based_field(measure_field_name, measure_field_details) or config.get('measure_selection') == "Tempo em Status" else None
                 
                 if config.get('type') == 'tabela':
                     config['columns'] = [config.get('dimension'), config.get('measure')]
@@ -791,7 +791,7 @@ if creation_mode == "Construtor Visual":
                  )
 
                  value_field_details = next((item for item in master_field_list if item['name'] == values_selection), None)
-                 default_convert_to_hours = config.get('y_axis_format') == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
+                 default_convert_to_hours = (config.get('value_format') or config.get('y_axis_format')) == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
                  convert_to_hours = st.toggle(
                     "Exibir valores em horas (÷ 3600)",
                     value=default_convert_to_hours,
@@ -817,7 +817,7 @@ if creation_mode == "Construtor Visual":
                     'values': values_selection,
                     'aggfunc': aggfunc_selection,
                     'color_theme': color_theme,
-                    'y_axis_format': 'hours' if convert_to_hours else None,
+                    'value_format': 'hours' if convert_to_hours else None,
                     'id': config.get('id') # Preserva o ID original durante a edição
                 }
 
