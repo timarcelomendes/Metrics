@@ -823,7 +823,7 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-            # RESOLUÇÃO: usa formato explícito quando existir e fallback heurístico para campos Jira em configs legadas.
+            # Regra única de conversão: respeita value/y_axis_format e, em legado, aplica heurística de campos Jira em segundos.
             is_hours_measure = should_convert_seconds_to_hours(chart_config, measure, is_time_in_status_measure)
 
             # Define o título do eixo Y ANTES de qualquer conversão
