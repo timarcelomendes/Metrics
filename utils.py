@@ -823,7 +823,7 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-            # Suporta tanto configurações novas (`value_format`) quanto antigas (`y_axis_format`).
+            # Prioriza config explícita (value/y_axis_format) e aplica fallback por heurística de campo de tempo.
             is_hours_measure = should_convert_seconds_to_hours(chart_config, measure, is_time_in_status_measure)
 
             # Define o título do eixo Y ANTES de qualquer conversão
@@ -1082,7 +1082,6 @@ def render_chart(chart_config, df, chart_key):
             decimal_places = int(chart_config.get('kpi_decimal_places', 2))
             format_as_pct = chart_config.get('kpi_format_as_percentage', False)
             valueformat = f".{decimal_places}f"
-            value_format = get_chart_value_format(chart_config)
             kpi_hours_measure = should_convert_seconds_to_hours(chart_config, chart_config.get('num_field'))
             suffix = "%" if format_as_pct else ("h" if kpi_hours_measure else "")
             
