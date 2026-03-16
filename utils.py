@@ -1042,7 +1042,8 @@ def render_chart(chart_config, df, chart_key):
             decimal_places = int(chart_config.get('kpi_decimal_places', 2))
             format_as_pct = chart_config.get('kpi_format_as_percentage', False)
             valueformat = f".{decimal_places}f"
-            suffix = "%" if format_as_pct else ""
+            value_format = get_chart_value_format(chart_config)
+            suffix = "%" if format_as_pct else ("h" if value_format == 'hours' else "")
             
             main_value = None
             baseline = None
@@ -1092,6 +1093,9 @@ def render_chart(chart_config, df, chart_key):
             if format_as_pct:
                 if isinstance(main_value, (int, float)): main_value *= 100
                 if isinstance(baseline, (int, float)): baseline *= 100
+            elif value_format == 'hours':
+                if isinstance(main_value, (int, float)): main_value /= 3600.0
+                if isinstance(baseline, (int, float)): baseline /= 3600.0
             
             fig = go.Figure(go.Indicator(
                 mode="number" + ("+delta" if baseline is not None else ""),
@@ -1204,6 +1208,9 @@ def render_chart(chart_config, df, chart_key):
                  return
 
             chart_data_values = df_chart[measure_col_for_plotting].tolist()
+            if get_chart_value_format(chart_config) == 'hours' and measure_col_for_plotting in df_chart.columns:
+                chart_data_values = pd.to_numeric(pd.Series(chart_data_values), errors='coerce').fillna(0).tolist()
+                chart_data_values = [v / 3600.0 for v in chart_data_values]
             
             main_value = 0
             if main_value_agg == "Último valor da série":
@@ -1220,10 +1227,11 @@ def render_chart(chart_config, df, chart_key):
                 elif delta_agg == "Variação (último - penúltimo)":
                     delta = chart_data_values[-1] - chart_data_values[-2]
 
+            metric_suffix = "h" if get_chart_value_format(chart_config) == 'hours' else ""
             st.metric(
                 label=title,
-                value=f"{main_value:,.2f}",
-                delta=f"{delta:,.2f}" if delta is not None else None
+                value=f"{main_value:,.2f}{metric_suffix}",
+                delta=(f"{delta:,.2f}{metric_suffix}" if delta is not None else None)
             )
 
             spark_df = pd.DataFrame({

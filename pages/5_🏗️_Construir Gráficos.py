@@ -711,6 +711,20 @@ if creation_mode == "Construtor Visual":
                             config['base_op'] = "Soma"
                             if new_measure_col: st.caption(f"Medida da Linha de Base: {new_measure_col}")
 
+            # Formato unificado para indicador (quando aplicável)
+            if config.get('source_type') == 'visual':
+                candidate_fields = [config.get('num_field')]
+                if config.get('use_den'):
+                    candidate_fields.append(config.get('den_field'))
+                if config.get('use_baseline'):
+                    candidate_fields.append(config.get('base_field'))
+
+                has_time_field = any(
+                    f and f != 'Contagem de Issues' and is_hours_based_field(f, next((item for item in master_field_list if item['name'] == f), None))
+                    for f in candidate_fields
+                )
+                config['value_format'] = 'hours' if has_time_field else None
+
             # Lógica de validação e atribuição final
             is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
             # Validação: num_field não pode ser None (o que acontece se o multiselect estiver vazio)
@@ -870,6 +884,9 @@ if creation_mode == "Construtor Visual":
             delta_agg_options = ["Variação (último - primeiro)", "Variação (último - penúltimo)"]
             delta_agg_idx = delta_agg_options.index(config.get('mc_delta_agg')) if config.get('mc_delta_agg') in delta_agg_options else 0
             config['mc_delta_agg'] = mv_cols2.selectbox("Valor do Delta (Comparação)", delta_agg_options, index=delta_agg_idx)
+
+            mc_measure_field_details = next((item for item in master_field_list if item['name'] == config.get('mc_measure')), None)
+            config['value_format'] = 'hours' if is_hours_based_field(config.get('mc_measure'), mc_measure_field_details) else None
             
             chart_config = config.copy()
 
