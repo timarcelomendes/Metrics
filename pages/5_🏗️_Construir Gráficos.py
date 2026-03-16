@@ -432,7 +432,7 @@ if creation_mode == "Construtor Visual":
 
             y_field_name = config.get('y')
             y_field_details = next((item for item in master_field_list if item['name'] == y_field_name), None)
-            config['y_axis_format'] = 'hours' if is_hours_based_field(y_field_name, y_field_details) else None
+            config['value_format'] = 'hours' if is_hours_based_field(y_field_name, y_field_details) else None
             
             chart_config = config.copy()
             if chart_config.get('size_by') == "Nenhum": chart_config['size_by'] = None
@@ -543,7 +543,7 @@ if creation_mode == "Construtor Visual":
 
                 measure_field_name = config.get('measure_selection')
                 measure_field_details = next((item for item in master_field_list if item['name'] == measure_field_name), None)
-                config['y_axis_format'] = 'hours' if is_hours_based_field(measure_field_name, measure_field_details) or config.get('measure_selection') == "Tempo em Status" else None
+                config['value_format'] = 'hours' if is_hours_based_field(measure_field_name, measure_field_details) or config.get('measure_selection') == "Tempo em Status" else None
                 
                 if config.get('type') == 'tabela':
                     config['columns'] = [config.get('dimension'), config.get('measure')]
@@ -711,6 +711,20 @@ if creation_mode == "Construtor Visual":
                             config['base_op'] = "Soma"
                             if new_measure_col: st.caption(f"Medida da Linha de Base: {new_measure_col}")
 
+            # Formato unificado para indicador (quando aplicável)
+            if config.get('source_type') == 'visual':
+                candidate_fields = [config.get('num_field')]
+                if config.get('use_den'):
+                    candidate_fields.append(config.get('den_field'))
+                if config.get('use_baseline'):
+                    candidate_fields.append(config.get('base_field'))
+
+                has_time_field = any(
+                    f and f != 'Contagem de Issues' and is_hours_based_field(f, next((item for item in master_field_list if item['name'] == f), None))
+                    for f in candidate_fields
+                )
+                config['value_format'] = 'hours' if has_time_field else None
+
             # Lógica de validação e atribuição final
             is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
             # Validação: num_field não pode ser None (o que acontece se o multiselect estiver vazio)
@@ -741,12 +755,12 @@ if creation_mode == "Construtor Visual":
             all_row_col_options = [str(col) for col in (categorical_cols + date_cols)]
             all_options_set = set(all_row_col_options) # Mais rápido para verificação
 
-            saved_rows = config.get('rows', [])
+            saved_rows = config.get('rows') or []
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_rows = [row for row in saved_rows if row in all_options_set]
             rows_selection = st.multiselect("Linhas", options=all_row_col_options, default=valid_default_rows)
 
-            saved_columns = config.get('columns', [])
+            saved_columns = config.get('columns') or []
             # Filtra a lista 'default' para incluir apenas opções que ainda existem
             valid_default_columns = [col for col in saved_columns if col in all_options_set]
             columns_selection = st.multiselect("Colunas", options=all_row_col_options, default=valid_default_columns)
@@ -780,6 +794,7 @@ if creation_mode == "Construtor Visual":
                     disabled=True, # Desabilita a seleção
                     key="pivot_aggfunc_selector_count" # Chave diferente
                  )
+                convert_to_hours = False
             else:
                  # Comportamento normal para campos numéricos
                  aggfunc_selection = st.selectbox(
@@ -787,6 +802,14 @@ if creation_mode == "Construtor Visual":
                     options=agg_options,
                     index=agg_options.index(config.get('aggfunc')) if config.get('aggfunc') in agg_options else 0,
                     key="pivot_aggfunc_selector_numeric" # Chave diferente
+                 )
+
+                 value_field_details = next((item for item in master_field_list if item['name'] == values_selection), None)
+                 default_convert_to_hours = (config.get('value_format') or config.get('y_axis_format')) == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
+                 convert_to_hours = st.toggle(
+                    "Exibir valores em horas (÷ 3600)",
+                    value=default_convert_to_hours,
+                    key="pivot_values_in_hours_toggle"
                  )
 
             # Lógica de validação e criação do chart_config
@@ -808,6 +831,7 @@ if creation_mode == "Construtor Visual":
                     'values': values_selection,
                     'aggfunc': aggfunc_selection,
                     'color_theme': color_theme,
+                    'value_format': 'hours' if convert_to_hours else None,
                     'id': config.get('id') # Preserva o ID original durante a edição
                 }
 
@@ -860,6 +884,9 @@ if creation_mode == "Construtor Visual":
             delta_agg_options = ["Variação (último - primeiro)", "Variação (último - penúltimo)"]
             delta_agg_idx = delta_agg_options.index(config.get('mc_delta_agg')) if config.get('mc_delta_agg') in delta_agg_options else 0
             config['mc_delta_agg'] = mv_cols2.selectbox("Valor do Delta (Comparação)", delta_agg_options, index=delta_agg_idx)
+
+            mc_measure_field_details = next((item for item in master_field_list if item['name'] == config.get('mc_measure')), None)
+            config['value_format'] = 'hours' if is_hours_based_field(config.get('mc_measure'), mc_measure_field_details) else None
             
             chart_config = config.copy()
 
