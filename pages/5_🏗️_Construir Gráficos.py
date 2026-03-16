@@ -125,11 +125,41 @@ def is_hours_based_field(field_name: str, field_details: dict | None = None) -> 
         return True
 
     normalized_name = str(field_name).strip().lower()
+
+    # IDs padrão do Jira para campos de duração que chegam em segundos.
+    standard_second_ids = {
+        'timespent', 'timeestimate', 'timeoriginalestimate',
+        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate'
+    }
+    if normalized_name in standard_second_ids:
+        return True
+
+    # Se o nome exibido vier de um campo padrão conhecido de duração, também é tempo.
+    standard_fields_map = st.session_state.get('standard_fields_map', {})
+    reverse_standard_map = {str(v).strip().lower(): str(k).strip().lower() for k, v in standard_fields_map.items()}
+    mapped_field_id = reverse_standard_map.get(normalized_name)
+    if mapped_field_id in standard_second_ids:
+        return True
+
+    # Campos configuráveis por projeto: quando a origem é `standard_time`, os valores são segundos.
+    estimation_cfg = project_config.get('estimation_field', {})
+    timespent_cfg = project_config.get('timespent_field', {})
+    if estimation_cfg.get('name') == field_name and estimation_cfg.get('source') == 'standard_time':
+        return True
+    if timespent_cfg.get('name') == field_name and timespent_cfg.get('source') == 'standard_time':
+        return True
+
     explicit_hours_labels = {
         'estimativa original (horas)',
         'remaining estimate (horas)',
         'time spent (horas)',
         'original estimate (horas)',
+        'tempo gasto',
+        'estimativa original',
+        'remaining estimate',
+        'time spent',
+        'time estimate',
+        'original estimate',
     }
     if normalized_name in explicit_hours_labels:
         return True
