@@ -669,12 +669,15 @@ def get_chart_value_format(chart_config):
     return chart_config.get('value_format') or chart_config.get('y_axis_format')
 
 
+KNOWN_JIRA_SECOND_TIME_IDS = {
+    'timespent', 'timeestimate', 'timeoriginalestimate',
+    'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
+}
+
+
 def _get_configured_seconds_field_names() -> set[str]:
     """Coleta nomes/ids de campos de duração em segundos configurados no projeto/sessão."""
-    fields = {
-        'timespent', 'timeestimate', 'timeoriginalestimate',
-        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
-    }
+    fields = set(KNOWN_JIRA_SECOND_TIME_IDS)
 
     try:
         standard_fields_map = st.session_state.get('standard_fields_map', {}) or {}
@@ -709,13 +712,8 @@ def is_seconds_based_time_measure(measure_name: str | None) -> bool:
 
     normalized = str(measure_name).strip().lower()
 
-    known_second_ids = {
-        'timespent', 'timeestimate', 'timeoriginalestimate',
-        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
-    }
-
     configured_seconds_fields = _get_configured_seconds_field_names()
-    if normalized in known_second_ids or normalized in configured_seconds_fields:
+    if normalized in KNOWN_JIRA_SECOND_TIME_IDS or normalized in configured_seconds_fields:
         return True
 
     # Rótulos comuns (PT/EN) usados na aplicação para campos padrão de tempo do Jira.
