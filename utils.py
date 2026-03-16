@@ -826,6 +826,20 @@ def render_chart(chart_config, df, chart_key):
             if is_time_in_status_measure:
                  y_axis_title_text = f"{agg_col} (dias)"
 
+            # Converte medidas temporais para horas nos gráficos agregados/tabela.
+            # Mantém contagens e percentuais sem conversão.
+            value_format_for_agg = get_chart_value_format(chart_config, [measure, original_measure_selection])
+            if (
+                value_format_for_agg == 'hours'
+                and agg_col in agg_df.columns
+                and pd.api.types.is_numeric_dtype(agg_df[agg_col])
+                and not chart_config.get('show_as_percentage')
+                and agg not in ('Contagem', 'Contagem Distinta')
+                and measure != "Contagem de Issues"
+            ):
+                agg_df[agg_col] = pd.to_numeric(agg_df[agg_col], errors='coerce') / 3600.0
+                y_axis_title_text = f"{agg_col} (horas)"
+
             # Lógica de Ordenação e Top N (sem alterações)
             sort_by = chart_config.get('sort_by')
             if sort_by and agg_col in agg_df.columns: # Garante que agg_col existe
