@@ -785,7 +785,8 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-            is_hours_measure = chart_config.get('y_axis_format') == 'hours' and not is_time_in_status_measure
+            # Suporta tanto configurações novas (`value_format`) quanto antigas (`y_axis_format`).
+            is_hours_measure = get_chart_value_format(chart_config) == 'hours' and not is_time_in_status_measure
 
             # Define o título do eixo Y ANTES de qualquer conversão
             y_axis_title_text = agg_col
