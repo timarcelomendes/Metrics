@@ -703,14 +703,19 @@ def _get_configured_seconds_field_names() -> set[str]:
 
 
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
-    """Heurística robusta para campos Jira de duração em segundos."""
+    """Heurística para campos de tempo do Jira que chegam em segundos e devem virar horas na visualização."""
     if not measure_name:
         return False
 
     normalized = str(measure_name).strip().lower()
-    configured_seconds_fields = _get_configured_seconds_field_names()
 
-    if normalized in configured_seconds_fields:
+    known_second_ids = {
+        'timespent', 'timeestimate', 'timeoriginalestimate',
+        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
+    }
+
+    configured_seconds_fields = _get_configured_seconds_field_names()
+    if normalized in known_second_ids or normalized in configured_seconds_fields:
         return True
 
     # Rótulos comuns (PT/EN) usados na aplicação para campos padrão de tempo do Jira.
