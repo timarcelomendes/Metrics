@@ -785,12 +785,19 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
+            is_hours_measure = chart_config.get('y_axis_format') == 'hours' and not is_time_in_status_measure
+
             # Define o título do eixo Y ANTES de qualquer conversão
             y_axis_title_text = agg_col
 
             # Se for Tempo em Status, o título deve indicar dias por padrão
             if is_time_in_status_measure:
                  y_axis_title_text = f"{agg_col} (dias)"
+
+            # Converte os valores agregados de segundos para horas quando o campo é baseado em tempo
+            if is_hours_measure and agg_col in agg_df.columns:
+                agg_df[agg_col] = pd.to_numeric(agg_df[agg_col], errors='coerce') / 3600.0
+                y_axis_title_text = f"{agg_col} (horas)"
 
             # Lógica de Ordenação e Top N (sem alterações)
             sort_by = chart_config.get('sort_by')
@@ -870,6 +877,8 @@ def render_chart(chart_config, df, chart_key):
                     # Define o template base
                     if is_time_in_status_measure:
                         text_template = '%{text:.1f}d'
+                    elif is_hours_measure:
+                        text_template = '%{text:.2f}h'
                     else:
                         text_template = '%{text:.2s}'
 
@@ -890,6 +899,8 @@ def render_chart(chart_config, df, chart_key):
                              fig.update_traces(texttemplate='%{label}<br>%{percentRoot:.1%}', textinfo='text')
                         elif is_time_in_status_measure:
                              fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text')
+                        elif is_hours_measure:
+                             fig.update_traces(texttemplate='%{label}<br>%{value:.2f}h', textinfo='text')
                         else:
                              fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text')
 
@@ -898,6 +909,8 @@ def render_chart(chart_config, df, chart_key):
                          fig.update_traces(textinfo='percent+label')
                      elif is_time_in_status_measure:
                           fig.update_traces(texttemplate='%{label}<br>%{value:.1f}d', textinfo='text+percent')
+                     elif is_hours_measure:
+                          fig.update_traces(texttemplate='%{label}<br>%{value:.2f}h', textinfo='text+percent')
                      else:
                           fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}', textinfo='text+percent')
 
