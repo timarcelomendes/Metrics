@@ -664,6 +664,10 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     )
     return fig
 
+def get_chart_value_format(chart_config):
+    """Formato unificado de valores no chart config (compatível com configs legadas)."""
+    return chart_config.get('value_format') or chart_config.get('y_axis_format')
+
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
@@ -974,7 +978,7 @@ def render_chart(chart_config, df, chart_key):
                             plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str)
 
             y_axis_title = chart_config.get('y_axis_title', y)
-            if chart_config.get('y_axis_format') == 'hours' and y in plot_df.columns:
+            if get_chart_value_format(chart_config) == 'hours' and y in plot_df.columns:
                 plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 3600.0
                 y_axis_title = y_axis_title.replace(y, f"{y} (horas)") if y in y_axis_title else f"{y} (horas)"
             
@@ -1007,7 +1011,7 @@ def render_chart(chart_config, df, chart_key):
             fig = apply_chart_theme(fig, color_theme)
             
             if chart_config.get('show_data_labels'):
-                text_template = '%{text:.2f}h' if chart_config.get('y_axis_format') == 'hours' else '%{text:.2s}'
+                text_template = '%{text:.2f}h' if get_chart_value_format(chart_config) == 'hours' else '%{text:.2s}'
                 fig.update_traces(textposition='top center', texttemplate=text_template)
             
             fig.update_layout(title_text=None, xaxis_title=chart_config.get('x_axis_title', x), yaxis_title=y_axis_title)
@@ -1025,7 +1029,8 @@ def render_chart(chart_config, df, chart_key):
             decimal_places = int(chart_config.get('kpi_decimal_places', 2))
             format_as_pct = chart_config.get('kpi_format_as_percentage', False)
             valueformat = f".{decimal_places}f"
-            suffix = "%" if format_as_pct else ""
+            value_format = get_chart_value_format(chart_config)
+            suffix = "%" if format_as_pct else ("h" if value_format == 'hours' else "")
             
             main_value = None
             baseline = None
@@ -1075,6 +1080,9 @@ def render_chart(chart_config, df, chart_key):
             if format_as_pct:
                 if isinstance(main_value, (int, float)): main_value *= 100
                 if isinstance(baseline, (int, float)): baseline *= 100
+            elif value_format == 'hours':
+                if isinstance(main_value, (int, float)): main_value /= 3600.0
+                if isinstance(baseline, (int, float)): baseline /= 3600.0
             
             fig = go.Figure(go.Indicator(
                 mode="number" + ("+delta" if baseline is not None else ""),
@@ -1094,33 +1102,57 @@ def render_chart(chart_config, df, chart_key):
                 st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_indicator")
 
         elif chart_type == 'pivot_table':
-            rows = chart_config.get('rows'); cols = chart_config.get('columns'); values = chart_config.get('values'); aggfunc = chart_config.get('aggfunc', 'Soma').lower()
+            rows = chart_config.get('rows') or []
+            cols = chart_config.get('columns') or []
+            values = chart_config.get('values')
+            aggfunc = chart_config.get('aggfunc', 'Soma').lower()
+
+            pivot_input_df = df_chart_filtered.loc[:, ~df_chart_filtered.columns.duplicated()].copy()
+            if len(pivot_input_df.columns) != len(df_chart_filtered.columns):
+                st.warning("Foram encontradas colunas duplicadas na fonte de dados. A Tabela Dinâmica usará apenas a primeira ocorrência de cada coluna.")
+
+            rows = [r for r in rows if isinstance(r, str) and r in pivot_input_df.columns]
+            cols = [c for c in cols if isinstance(c, str) and c in pivot_input_df.columns]
+
+            # Evita duplicidades e sobreposição entre index/columns, que causam erro no pandas pivot_table.
+            rows = list(dict.fromkeys(rows))
+            cols = list(dict.fromkeys(cols))
+            overlapping_fields = [c for c in cols if c in rows]
+            if overlapping_fields:
+                cols = [c for c in cols if c not in set(overlapping_fields)]
+                st.warning(
+                    "Na Tabela Dinâmica, os campos não podem estar simultaneamente em 'Linhas' e 'Colunas'. "
+                    f"Removidos de 'Colunas': {', '.join(overlapping_fields)}"
+                )
+
             agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count'}
             if rows and values:
                 if values == "Contagem de Issues":
                     pivot_df = pd.pivot_table(
-                        df_chart_filtered,
+                        pivot_input_df,
                         index=rows,
-                        columns=cols,
+                        columns=cols or None,
                         aggfunc='size',
                         fill_value=0
                     ).reset_index()
                     if 0 in pivot_df.columns:
                         pivot_df = pivot_df.rename(columns={0: values})
                 else:
-                    if values not in df_chart_filtered.columns:
+                    if values not in pivot_input_df.columns:
                         st.warning(f"O campo '{values}' não foi encontrado para a Tabela Dinâmica.")
                         return
 
-                    pivot_source_df = df_chart_filtered.copy()
+                    pivot_source_df = pivot_input_df.copy()
                     if aggfunc in ('soma', 'média'):
                         pivot_source_df[values] = pd.to_numeric(pivot_source_df[values], errors='coerce')
+                        if get_chart_value_format(chart_config) == 'hours':
+                            pivot_source_df[values] = pivot_source_df[values] / 3600.0
 
                     pivot_df = pd.pivot_table(
                         pivot_source_df,
                         values=values,
                         index=rows,
-                        columns=cols,
+                        columns=cols or None,
                         aggfunc=agg_map.get(aggfunc, 'sum')
                     ).reset_index()
 
@@ -1163,6 +1195,9 @@ def render_chart(chart_config, df, chart_key):
                  return
 
             chart_data_values = df_chart[measure_col_for_plotting].tolist()
+            if get_chart_value_format(chart_config) == 'hours' and measure_col_for_plotting in df_chart.columns:
+                chart_data_values = pd.to_numeric(pd.Series(chart_data_values), errors='coerce').fillna(0).tolist()
+                chart_data_values = [v / 3600.0 for v in chart_data_values]
             
             main_value = 0
             if main_value_agg == "Último valor da série":
@@ -1179,10 +1214,11 @@ def render_chart(chart_config, df, chart_key):
                 elif delta_agg == "Variação (último - penúltimo)":
                     delta = chart_data_values[-1] - chart_data_values[-2]
 
+            metric_suffix = "h" if get_chart_value_format(chart_config) == 'hours' else ""
             st.metric(
                 label=title,
-                value=f"{main_value:,.2f}",
-                delta=f"{delta:,.2f}" if delta is not None else None
+                value=f"{main_value:,.2f}{metric_suffix}",
+                delta=(f"{delta:,.2f}{metric_suffix}" if delta is not None else None)
             )
 
             spark_df = pd.DataFrame({
