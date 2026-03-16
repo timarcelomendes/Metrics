@@ -668,6 +668,44 @@ def get_chart_value_format(chart_config):
     """Formato unificado de valores no chart config (compatível com configs legadas)."""
     return chart_config.get('value_format') or chart_config.get('y_axis_format')
 
+
+def is_seconds_based_time_measure(measure_name: str | None) -> bool:
+    """Heurística para campos de tempo do Jira que chegam em segundos e devem virar horas na visualização."""
+    if not measure_name:
+        return False
+
+    normalized = str(measure_name).strip().lower()
+
+    known_second_ids = {
+        'timespent', 'timeestimate', 'timeoriginalestimate',
+        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
+    }
+    if normalized in known_second_ids:
+        return True
+
+    # Rótulos comuns (PT/EN) usados na aplicação para campos padrão de tempo do Jira.
+    known_second_labels = (
+        'tempo gasto', 'time spent', 'remaining estimate', 'time estimate',
+        'estimativa original', 'original estimate',
+    )
+    return any(label in normalized for label in known_second_labels)
+
+
+def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None = None, is_time_in_status_measure: bool = False) -> bool:
+    """Decide se a série deve ser convertida de segundos para horas.
+
+    Prioriza a configuração explícita do gráfico e faz fallback seguro para campos clássicos
+    de tempo do Jira quando a configuração estiver ausente (caso comum em configs legadas).
+    """
+    if is_time_in_status_measure:
+        return False
+
+    value_format = get_chart_value_format(chart_config)
+    if value_format == 'hours':
+        return True
+
+    return is_seconds_based_time_measure(measure_name)
+
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
@@ -785,7 +823,8 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-            is_hours_measure = chart_config.get('y_axis_format') == 'hours' and not is_time_in_status_measure
+            # Prioriza config explícita (value/y_axis_format) e aplica fallback por heurística de campo de tempo.
+            is_hours_measure = should_convert_seconds_to_hours(chart_config, measure, is_time_in_status_measure)
 
             # Define o título do eixo Y ANTES de qualquer conversão
             y_axis_title_text = agg_col
@@ -991,7 +1030,8 @@ def render_chart(chart_config, df, chart_key):
                             plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str)
 
             y_axis_title = chart_config.get('y_axis_title', y)
-            if get_chart_value_format(chart_config) == 'hours' and y in plot_df.columns:
+            is_hours_measure_xy = should_convert_seconds_to_hours(chart_config, y)
+            if is_hours_measure_xy and y in plot_df.columns:
                 plot_df[y] = pd.to_numeric(plot_df[y], errors='coerce') / 3600.0
                 y_axis_title = y_axis_title.replace(y, f"{y} (horas)") if y in y_axis_title else f"{y} (horas)"
             
@@ -1024,7 +1064,7 @@ def render_chart(chart_config, df, chart_key):
             fig = apply_chart_theme(fig, color_theme)
             
             if chart_config.get('show_data_labels'):
-                text_template = '%{text:.2f}h' if get_chart_value_format(chart_config) == 'hours' else '%{text:.2s}'
+                text_template = '%{text:.2f}h' if is_hours_measure_xy else '%{text:.2s}'
                 fig.update_traces(textposition='top center', texttemplate=text_template)
             
             fig.update_layout(title_text=None, xaxis_title=chart_config.get('x_axis_title', x), yaxis_title=y_axis_title)
@@ -1042,8 +1082,8 @@ def render_chart(chart_config, df, chart_key):
             decimal_places = int(chart_config.get('kpi_decimal_places', 2))
             format_as_pct = chart_config.get('kpi_format_as_percentage', False)
             valueformat = f".{decimal_places}f"
-            value_format = get_chart_value_format(chart_config)
-            suffix = "%" if format_as_pct else ("h" if value_format == 'hours' else "")
+            kpi_hours_measure = should_convert_seconds_to_hours(chart_config, chart_config.get('num_field'))
+            suffix = "%" if format_as_pct else ("h" if kpi_hours_measure else "")
             
             main_value = None
             baseline = None
@@ -1093,7 +1133,7 @@ def render_chart(chart_config, df, chart_key):
             if format_as_pct:
                 if isinstance(main_value, (int, float)): main_value *= 100
                 if isinstance(baseline, (int, float)): baseline *= 100
-            elif value_format == 'hours':
+            elif kpi_hours_measure:
                 if isinstance(main_value, (int, float)): main_value /= 3600.0
                 if isinstance(baseline, (int, float)): baseline /= 3600.0
             
@@ -1158,7 +1198,7 @@ def render_chart(chart_config, df, chart_key):
                     pivot_source_df = pivot_input_df.copy()
                     if aggfunc in ('soma', 'média'):
                         pivot_source_df[values] = pd.to_numeric(pivot_source_df[values], errors='coerce')
-                        if get_chart_value_format(chart_config) == 'hours':
+                        if should_convert_seconds_to_hours(chart_config, values):
                             pivot_source_df[values] = pivot_source_df[values] / 3600.0
 
                     pivot_df = pd.pivot_table(
@@ -1208,7 +1248,8 @@ def render_chart(chart_config, df, chart_key):
                  return
 
             chart_data_values = df_chart[measure_col_for_plotting].tolist()
-            if get_chart_value_format(chart_config) == 'hours' and measure_col_for_plotting in df_chart.columns:
+            is_hours_measure_mc = should_convert_seconds_to_hours(chart_config, measure_col_for_plotting)
+            if is_hours_measure_mc and measure_col_for_plotting in df_chart.columns:
                 chart_data_values = pd.to_numeric(pd.Series(chart_data_values), errors='coerce').fillna(0).tolist()
                 chart_data_values = [v / 3600.0 for v in chart_data_values]
             
@@ -1227,7 +1268,7 @@ def render_chart(chart_config, df, chart_key):
                 elif delta_agg == "Variação (último - penúltimo)":
                     delta = chart_data_values[-1] - chart_data_values[-2]
 
-            metric_suffix = "h" if get_chart_value_format(chart_config) == 'hours' else ""
+            metric_suffix = "h" if is_hours_measure_mc else ""
             st.metric(
                 label=title,
                 value=f"{main_value:,.2f}{metric_suffix}",
