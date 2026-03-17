@@ -666,6 +666,7 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
 
 def get_chart_value_format(chart_config):
     """Formato unificado de valores no chart config (compatível com configs legadas)."""
+    chart_config = chart_config or {}
     return chart_config.get('value_format') or chart_config.get('y_axis_format')
 
 
@@ -683,7 +684,7 @@ def _get_configured_seconds_field_names() -> set[str]:
         standard_fields_map = st.session_state.get('standard_fields_map', {}) or {}
         for fid, label in standard_fields_map.items():
             fid_norm = str(fid).strip().lower()
-            if fid_norm in fields and label:
+            if fid_norm in KNOWN_JIRA_SECOND_TIME_IDS and label:
                 fields.add(str(label).strip().lower())
     except Exception:
         pass
