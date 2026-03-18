@@ -665,8 +665,14 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     return fig
 
 def get_chart_value_format(chart_config):
-    """Formato unificado de valores no chart config (compatível com configs legadas)."""
-    return chart_config.get('value_format') or chart_config.get('y_axis_format')
+    """Formato unificado de valores no chart config, preservando overrides explícitos."""
+    if not isinstance(chart_config, dict):
+        return None
+
+    if 'value_format' in chart_config:
+        return chart_config.get('value_format')
+
+    return chart_config.get('y_axis_format')
 
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""

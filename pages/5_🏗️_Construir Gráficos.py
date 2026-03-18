@@ -724,6 +724,8 @@ if creation_mode == "Construtor Visual":
                     for f in candidate_fields
                 )
                 config['value_format'] = 'hours' if has_time_field else None
+            else:
+                config['value_format'] = None
 
             # Lógica de validação e atribuição final
             is_jql_valid = config.get('source_type') == 'jql' and config.get('jql_a', '').strip()
@@ -805,7 +807,8 @@ if creation_mode == "Construtor Visual":
                  )
 
                  value_field_details = next((item for item in master_field_list if item['name'] == values_selection), None)
-                 default_convert_to_hours = (config.get('value_format') or config.get('y_axis_format')) == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
+                 existing_value_format = get_chart_value_format(config) if config.get('values') == values_selection else None
+                 default_convert_to_hours = existing_value_format == 'hours' if config.get('values') == values_selection else is_hours_based_field(values_selection, value_field_details)
                  convert_to_hours = st.toggle(
                     "Exibir valores em horas (÷ 3600)",
                     value=default_convert_to_hours,
