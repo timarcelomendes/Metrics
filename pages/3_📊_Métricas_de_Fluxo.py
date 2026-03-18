@@ -453,9 +453,9 @@ with tab_performance:
 
             # Converte para horas apenas se for um campo de tempo
             if estim_is_time:
-                total_estimado = total_estimado / 60.0
+                total_estimado = total_estimado / 3600.0
             if spent_is_time:
-                total_realizado = total_realizado_segundos_ou_pontos / 60.0
+                total_realizado = total_realizado_segundos_ou_pontos / 3600.0
             else:
                 total_realizado = total_realizado_segundos_ou_pontos
 
@@ -477,8 +477,8 @@ with tab_performance:
             
             # 6. CONVERSÃO-CHAVE (Se ambos forem campos de tempo em segundos)
             if estim_is_time: # (sabemos que spent_is_time também é True)
-                total_estimado = total_estimado / 60.0
-                total_realizado = total_realizado / 60.0
+                total_estimado = total_estimado / 3600.0
+                total_realizado = total_realizado / 3600.0
                 unit_display = "hs"
 
             # 7. Exibir as Métricas (Agora compatíveis)
