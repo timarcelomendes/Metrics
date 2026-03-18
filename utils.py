@@ -669,6 +669,11 @@ def get_chart_value_format(chart_config):
     return chart_config.get('value_format') or chart_config.get('y_axis_format')
 
 
+def has_explicit_chart_value_format(chart_config: dict | None) -> bool:
+    """Indica se o gráfico já persistiu um formato explícito, inclusive opt-out com None."""
+    return isinstance(chart_config, dict) and 'value_format' in chart_config
+
+
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
     """Heurística para campos de tempo do Jira que chegam em segundos e devem virar horas na visualização."""
     if not measure_name:
@@ -699,6 +704,9 @@ def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None
     """
     if is_time_in_status_measure:
         return False
+
+    if has_explicit_chart_value_format(chart_config):
+        return chart_config.get('value_format') == 'hours'
 
     value_format = get_chart_value_format(chart_config)
     if value_format == 'hours':
