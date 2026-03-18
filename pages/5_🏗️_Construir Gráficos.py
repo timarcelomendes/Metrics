@@ -132,7 +132,9 @@ def is_hours_based_field(field_name: str, field_details: dict | None = None) -> 
     if normalized_name in explicit_hours_labels:
         return True
 
-    return '(horas)' in normalized_name or ' hora' in normalized_name
+    # Restrict the fallback heuristic to explicit parenthetical hour suffixes so
+    # non-duration metrics such as "Custo por hora" are not rescaled as seconds.
+    return normalized_name.endswith('(horas)')
 
 master_field_list = []
 for field in all_available_custom:
