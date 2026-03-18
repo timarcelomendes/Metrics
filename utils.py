@@ -676,6 +676,12 @@ KNOWN_JIRA_SECOND_TIME_IDS = {
 }
 
 
+KNOWN_JIRA_SECOND_TIME_LABEL_HINTS = (
+    'tempo gasto', 'time spent', 'remaining estimate', 'time estimate',
+    'estimativa original', 'original estimate',
+)
+
+
 def _get_configured_seconds_field_names() -> set[str]:
     """Coleta nomes/ids de campos de duração em segundos configurados no projeto/sessão."""
     fields = set(KNOWN_JIRA_SECOND_TIME_IDS)
@@ -719,11 +725,7 @@ def is_seconds_based_time_measure(measure_name: str | None) -> bool:
         return True
 
     # Rótulos comuns (PT/EN) usados na aplicação para campos padrão de tempo do Jira.
-    known_second_labels = (
-        'tempo gasto', 'time spent', 'remaining estimate', 'time estimate',
-        'estimativa original', 'original estimate',
-    )
-    return any(label in normalized for label in known_second_labels)
+    return any(label in normalized for label in KNOWN_JIRA_SECOND_TIME_LABEL_HINTS)
 
 
 def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None = None, is_time_in_status_measure: bool = False) -> bool:
