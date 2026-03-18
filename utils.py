@@ -713,13 +713,13 @@ def _get_configured_seconds_field_names() -> set[str]:
 
 
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
-    """Heurística unificada: IDs padrão Jira + campos configurados no projeto/sessão."""
+    """Detecta campos Jira de duração em segundos por ID padrão, config do projeto/sessão ou rótulo conhecido."""
     if not measure_name:
         return False
 
     normalized = str(measure_name).strip().lower()
 
-    # Consolidação da revisão: combina IDs Jira padrão com nomes/ids configurados (fallback legado).
+    # Combina IDs Jira padrão com nomes/ids configurados para cobrir cenários legados.
     configured_seconds_fields = _get_configured_seconds_field_names()
     if normalized in KNOWN_JIRA_SECOND_TIME_IDS or normalized in configured_seconds_fields:
         return True
@@ -860,7 +860,7 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-            # Regra única de conversão: respeita value/y_axis_format e, em legado, aplica heurística de campos Jira em segundos.
+            # Aplica conversão quando o gráfico explicita horas ou quando o campo é um tempo Jira em segundos.
             is_hours_measure = should_convert_seconds_to_hours(chart_config, measure, is_time_in_status_measure)
 
             # Define o título do eixo Y ANTES de qualquer conversão
