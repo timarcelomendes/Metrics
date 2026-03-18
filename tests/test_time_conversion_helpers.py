@@ -37,7 +37,8 @@ should_convert_seconds_to_hours = helpers['should_convert_seconds_to_hours']
     [
         ({'value_format': None}, 'Tempo Gasto', False),
         ({'value_format': 'hours'}, 'Tempo Gasto', True),
-        ({'y_axis_format': None}, 'timespent', False),
+        ({'y_axis_format': None}, 'timespent', True),
+        ({'y_axis_format': 'hours'}, 'timespent', True),
         ({}, 'timespent', True),
         ({}, 'Tempo Gasto', True),
         ({}, 'story points', False),
@@ -45,6 +46,12 @@ should_convert_seconds_to_hours = helpers['should_convert_seconds_to_hours']
 )
 def test_should_convert_seconds_to_hours_respects_explicit_preferences(chart_config, measure_name, expected):
     assert should_convert_seconds_to_hours(chart_config, measure_name) is expected
+
+
+def test_has_explicit_chart_value_format_treats_legacy_y_axis_none_as_unset():
+    assert has_explicit_chart_value_format({'y_axis_format': None}) is False
+    assert has_explicit_chart_value_format({'y_axis_format': 'hours'}) is True
+    assert has_explicit_chart_value_format({'value_format': None}) is True
 
 
 def test_should_convert_seconds_to_hours_skips_time_in_status_even_if_hours_requested():

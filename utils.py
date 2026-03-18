@@ -672,8 +672,18 @@ def get_chart_value_format(chart_config):
 
 
 def has_explicit_chart_value_format(chart_config: dict) -> bool:
-    """Indica se o gráfico já definiu o formato explicitamente (incluindo None)."""
-    return 'value_format' in chart_config or 'y_axis_format' in chart_config
+    """Indica se o gráfico já definiu o formato explicitamente.
+
+    `value_format` sempre representa uma preferência explícita, inclusive quando é
+    `None` (opt-out salvo após a migração). Já `y_axis_format` só deve ser tratado
+    como explícito quando tem valor não-nulo, porque configs legadas costumavam
+    persistir a chave com `None` por padrão e ainda dependem da heurística para
+    campos de duração do Jira em segundos.
+    """
+    if 'value_format' in chart_config:
+        return True
+
+    return chart_config.get('y_axis_format') is not None
 
 
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
