@@ -682,6 +682,9 @@ KNOWN_JIRA_SECOND_TIME_LABEL_HINTS = (
 )
 
 
+PROJECT_SECOND_TIME_CONFIG_KEYS = ('estimation_field', 'timespent_field')
+
+
 def _get_configured_seconds_field_names() -> set[str]:
     """Coleta nomes/ids de campos de duração em segundos configurados no projeto/sessão."""
     fields = set(KNOWN_JIRA_SECOND_TIME_IDS)
@@ -699,7 +702,7 @@ def _get_configured_seconds_field_names() -> set[str]:
         project_key = st.session_state.get('project_key')
         if project_key:
             project_config = get_project_config(project_key) or {}
-            for cfg_key in ('estimation_field', 'timespent_field'):
+            for cfg_key in PROJECT_SECOND_TIME_CONFIG_KEYS:
                 cfg = project_config.get(cfg_key, {}) or {}
                 if cfg.get('source') == 'standard_time':
                     if cfg.get('id'):
