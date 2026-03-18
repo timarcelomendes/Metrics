@@ -707,12 +707,13 @@ def _get_configured_seconds_field_names() -> set[str]:
 
 
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
-    """Heurística para campos de tempo do Jira que chegam em segundos e devem virar horas na visualização."""
+    """Heurística unificada: IDs padrão Jira + campos configurados no projeto/sessão."""
     if not measure_name:
         return False
 
     normalized = str(measure_name).strip().lower()
 
+    # Consolidação da revisão: combina IDs Jira padrão com nomes/ids configurados (fallback legado).
     configured_seconds_fields = _get_configured_seconds_field_names()
     if normalized in KNOWN_JIRA_SECOND_TIME_IDS or normalized in configured_seconds_fields:
         return True
