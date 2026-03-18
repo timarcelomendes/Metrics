@@ -430,6 +430,9 @@ with tab_performance:
         # A unidade é "tempo" se a fonte for 'standard_time' OU se o ID for um campo de tempo padrão
         estim_is_time = (estim_source == 'standard_time') or (estimation_field_id in time_field_ids_padrao) # <-- Agora funciona
         spent_is_time = (spent_source == 'standard_time') or (timespent_field_id in time_field_ids_padrao) # <-- Agora funciona
+
+        # `timeoriginalestimate` já chega em horas após a normalização feita no utils.py.
+        estim_already_in_hours = estimation_field_id == 'timeoriginalestimate'
         # --- FIM DA ALTERAÇÃO 1 ---
 
         # VERIFICAÇÃO PRINCIPAL: As unidades são diferentes?
@@ -451,8 +454,8 @@ with tab_performance:
             total_estimado = pd.to_numeric(df_done[estimation_field_name], errors='coerce').fillna(0).sum()
             total_realizado_segundos_ou_pontos = pd.to_numeric(df_done[timespent_field_name], errors='coerce').fillna(0).sum()
 
-            # Converte para horas apenas se for um campo de tempo
-            if estim_is_time:
+            # Converte para horas apenas se o valor ainda estiver em segundos.
+            if estim_is_time and not estim_already_in_hours:
                 total_estimado = total_estimado / 3600.0
             if spent_is_time:
                 total_realizado = total_realizado_segundos_ou_pontos / 3600.0
@@ -475,9 +478,10 @@ with tab_performance:
             
             unit_display = "pts" # Padrão
             
-            # 6. CONVERSÃO-CHAVE (Se ambos forem campos de tempo em segundos)
+            # 6. CONVERSÃO-CHAVE (Se ambos forem campos de tempo)
             if estim_is_time: # (sabemos que spent_is_time também é True)
-                total_estimado = total_estimado / 3600.0
+                if not estim_already_in_hours:
+                    total_estimado = total_estimado / 3600.0
                 total_realizado = total_realizado / 3600.0
                 unit_display = "hs"
 
