@@ -665,8 +665,25 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
     return fig
 
 def get_chart_value_format(chart_config):
-    """Formato unificado de valores no chart config (compatível com configs legadas)."""
-    return chart_config.get('value_format') or chart_config.get('y_axis_format')
+    """Retorna o formato configurado para valores, preservando opt-outs explícitos."""
+    if 'value_format' in chart_config:
+        return chart_config.get('value_format')
+    return chart_config.get('y_axis_format')
+
+
+def has_explicit_chart_value_format(chart_config: dict) -> bool:
+    """Indica se o gráfico já definiu o formato explicitamente.
+
+    `value_format` sempre representa uma preferência explícita, inclusive quando é
+    `None` (opt-out salvo após a migração). Já `y_axis_format` só deve ser tratado
+    como explícito quando tem valor não-nulo, porque configs legadas costumavam
+    persistir a chave com `None` por padrão e ainda dependem da heurística para
+    campos de duração do Jira em segundos.
+    """
+    if 'value_format' in chart_config:
+        return True
+
+    return chart_config.get('y_axis_format') is not None
 
 
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
@@ -694,15 +711,15 @@ def is_seconds_based_time_measure(measure_name: str | None) -> bool:
 def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None = None, is_time_in_status_measure: bool = False) -> bool:
     """Decide se a série deve ser convertida de segundos para horas.
 
-    Prioriza a configuração explícita do gráfico e faz fallback seguro para campos clássicos
-    de tempo do Jira quando a configuração estiver ausente (caso comum em configs legadas).
+    Prioriza a configuração explícita do gráfico e só faz fallback heurístico para campos
+    clássicos de tempo do Jira quando nenhuma preferência de formato foi salva
+    (caso comum em configs legadas).
     """
     if is_time_in_status_measure:
         return False
 
-    value_format = get_chart_value_format(chart_config)
-    if value_format == 'hours':
-        return True
+    if has_explicit_chart_value_format(chart_config):
+        return get_chart_value_format(chart_config) == 'hours'
 
     return is_seconds_based_time_measure(measure_name)
 
@@ -823,12 +840,8 @@ def render_chart(chart_config, df, chart_key):
             else:
                  return
             
-          codex/fix-seconds-to-hours-conversion-issue-fuvt8c
             # Regra única de conversão: respeita value/y_axis_format e, em legado, aplica heurística de campos Jira em segundos.
             is_hours_measure = should_convert_seconds_to_hours(chart_config, measure, is_time_in_status_measure)
-
-            # Suporta tanto configurações novas (`value_format`) quanto antigas (`y_axis_format`).
-            is_hours_measure = get_chart_value_format(chart_config) == 'hours' and not is_time_in_status_measure
 
             # Define o título do eixo Y ANTES de qualquer conversão
             y_axis_title_text = agg_col
