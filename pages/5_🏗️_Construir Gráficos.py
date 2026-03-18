@@ -895,6 +895,67 @@ def cleanup_editor_state_and_switch_page():
             del st.session_state[key]
     st.switch_page("pages/2_🏠_Meu_Dashboard.py")
 
+
+def validate_chart_config_for_save(chart_config):
+    """Valida a configuração antes de persistir no dashboard."""
+    if not isinstance(chart_config, dict) or not chart_config:
+        return False, "Configuração inválida."
+
+    if not chart_config.get('title') or not chart_config.get('id'):
+        return False, "Preencha o título da visualização antes de salvar."
+
+    chart_type = chart_config.get('type')
+    creator_type = chart_config.get('creator_type')
+
+    if creator_type == "Gráfico X-Y":
+        required_fields = ['type', 'x', 'y']
+    elif creator_type == "Gráfico Agregado":
+        required_fields = ['type', 'dimension', 'measure', 'agg']
+    elif creator_type == "Indicador (KPI)":
+        required_fields = ['type', 'source_type']
+        if chart_config.get('source_type') == 'jql':
+            required_fields.append('jql_a')
+        else:
+            required_fields.extend(['num_op', 'num_field'])
+    elif creator_type == "Tabela Dinâmica" or chart_type == 'pivot_table':
+        required_fields = ['type', 'rows', 'values', 'aggfunc']
+    elif creator_type == "Gráfico de Tendência":
+        required_fields = ['type', 'mc_chart_type', 'mc_dimension', 'mc_measure', 'mc_main_value_agg', 'mc_delta_agg']
+    else:
+        required_fields = ['type']
+
+    missing_fields = []
+    for field in required_fields:
+        value = chart_config.get(field)
+        if value is None or value == '' or value == []:
+            missing_fields.append(field)
+
+    if missing_fields:
+        field_labels = {
+            'type': 'formato/tipo',
+            'x': 'eixo X',
+            'y': 'eixo Y',
+            'dimension': 'dimensão',
+            'measure': 'medida',
+            'agg': 'agregação',
+            'source_type': 'fonte de dados',
+            'jql_a': 'Consulta JQL 1',
+            'num_op': 'operação do numerador',
+            'num_field': 'campo do numerador',
+            'rows': 'linhas',
+            'values': 'valores',
+            'aggfunc': 'função de agregação',
+            'mc_chart_type': 'tipo do gráfico',
+            'mc_dimension': 'dimensão do gráfico',
+            'mc_measure': 'medida do gráfico',
+            'mc_main_value_agg': 'valor principal',
+            'mc_delta_agg': 'delta da métrica'
+        }
+        missing_labels = ", ".join(field_labels.get(field, field) for field in missing_fields)
+        return False, f"Complete os campos obrigatórios antes de salvar: {missing_labels}."
+
+    return True, None
+
 # Função auxiliar para identificar o destino correto do salvamento
 def get_dashboard_target(current_email, current_project_key):
     """
@@ -932,8 +993,9 @@ if editing_mode:
         if st.button("Salvar Alterações", type="primary", width='stretch', icon="💾"):
             final_config = st.session_state.new_chart_config
             original_chart_id = final_config.get('id')
+            is_valid_config, validation_message = validate_chart_config_for_save(final_config)
 
-            if final_config and final_config.get('title') and original_chart_id:
+            if is_valid_config and original_chart_id:
                 final_config['filters'] = convert_dates_in_filters(st.session_state.get('creator_filters', []))
                 
                 # --- Lógica de Salvamento no Owner ---
@@ -976,7 +1038,7 @@ if editing_mode:
                 else:
                     st.error("Erro ao identificar o dashboard ativo.")
             else:
-                st.warning("Configuração inválida.")
+                st.warning(validation_message or "Configuração inválida.")
     with col2:
         if st.button("Cancelar Edição", width='stretch'):
             cleanup_editor_state_and_switch_page()
