@@ -19,6 +19,13 @@ def get_all_available_projects(_jira):
         # Lança o erro para ser apanhado pela interface
         raise e
 
+
+def build_project_in_jql(project_keys):
+    """Monta a cláusula JQL `project IN (...)` com escaping básico de aspas."""
+    sanitized_project_keys = [str(key).replace('"', '\\"') for key in project_keys]
+    quoted_project_keys = ", ".join(f'"{key}"' for key in sanitized_project_keys)
+    return f'project IN ({quoted_project_keys}) ORDER BY created DESC'
+
 @st.cache_data(ttl=3600, show_spinner="Buscando dados globais de issues...")
 def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
     """
@@ -54,9 +61,7 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
 
     project_keys = list(project_keys_tuple)
     
-    sanitized_project_keys = [str(key).replace('"', '\\"') for key in project_keys]
-    quoted_project_keys = ", ".join(f'"{key}"' for key in sanitized_project_keys)
-    jql_query = f'project IN ({quoted_project_keys}) ORDER BY created DESC'
+    jql_query = build_project_in_jql(project_keys)
     
     # --- CORREÇÃO: O 'try/except' foi removido daqui ---
     # A exceção será agora tratada na função 'run_dashboard_global'

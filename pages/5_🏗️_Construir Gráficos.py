@@ -135,18 +135,24 @@ def normalize_field_type(field_type):
         return 'Texto'
     return 'Texto'
 
-all_available_custom = []
-for field in all_available_custom_raw if isinstance(all_available_custom_raw, list) else []:
-    if isinstance(field, dict) and field.get('name'):
-        field_id = field.get('id')
-        field_type = field.get('type') or all_jira_custom_field_types.get(field_id)
-        all_available_custom.append({
-            'id': field_id,
-            'name': field['name'],
-            'type': normalize_field_type(field_type),
-        })
-    elif isinstance(field, str):
-        all_available_custom.append({'id': None, 'name': field, 'type': 'Texto'})
+
+def normalize_available_custom_fields(all_available_custom_raw, all_jira_custom_field_types):
+    normalized_fields = []
+    for field in all_available_custom_raw if isinstance(all_available_custom_raw, list) else []:
+        if isinstance(field, dict) and field.get('name'):
+            field_id = field.get('id')
+            field_type = field.get('type') or all_jira_custom_field_types.get(field_id)
+            normalized_fields.append({
+                'id': field_id,
+                'name': field['name'],
+                'type': normalize_field_type(field_type),
+            })
+        elif isinstance(field, str):
+            normalized_fields.append({'id': None, 'name': field, 'type': 'Texto'})
+    return normalized_fields
+
+
+all_available_custom = normalize_available_custom_fields(all_available_custom_raw, all_jira_custom_field_types)
 
 
 def is_hours_based_field(field_name: str, field_details: dict | None = None) -> bool:

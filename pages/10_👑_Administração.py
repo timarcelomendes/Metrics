@@ -66,6 +66,69 @@ def get_saved_custom_field_ids(saved_custom_fields, all_jira_custom_fields):
 
     return list(dict.fromkeys(normalized_ids))
 
+
+def build_custom_field_catalog(all_fields_raw):
+    """Filtra e normaliza os custom fields vindos do Jira."""
+    if not all_fields_raw:
+        return None
+
+    custom_fields = [
+        {
+            'id': field['id'],
+            'name': field['name'],
+            'type': map_jira_field_type_to_app_type(field.get('schema', {}).get('type'))
+        }
+        for field in all_fields_raw
+        if field['id'].startswith('customfield_')
+    ]
+    return sorted(custom_fields, key=lambda x: x['name'])
+
+
+def get_disabled_custom_field_metadata(previously_enabled_custom_fields, updated_custom_fields, selected_fields_by_id):
+    """Resolve IDs e nomes removidos considerando formatos legados e atuais."""
+    selected_field_ids_by_name = {
+        field['name']: field['id']
+        for field in selected_fields_by_id.values()
+        if field.get('id') and field.get('name')
+    }
+
+    previous_custom_ids = {
+        field_id
+        for field in previously_enabled_custom_fields
+        for field_id in (
+            [field.get('id')] if isinstance(field, dict) and field.get('id')
+            else [field] if isinstance(field, str) and field in selected_fields_by_id
+            else [selected_field_ids_by_name[field]] if isinstance(field, str) and field in selected_field_ids_by_name
+            else []
+        )
+        if field_id
+    }
+    new_custom_ids = {
+        field.get('id')
+        for field in updated_custom_fields
+        if isinstance(field, dict) and field.get('id')
+    }
+    disabled_custom_ids = list(previous_custom_ids - new_custom_ids)
+
+    disabled_custom_names = [
+        field_name
+        for field in previously_enabled_custom_fields
+        for field_name in (
+            [field.get('name')] if isinstance(field, dict) and field.get('id') in disabled_custom_ids and field.get('name')
+            else [field] if isinstance(field, str) and field in selected_field_ids_by_name and selected_field_ids_by_name[field] in disabled_custom_ids
+            else [selected_fields_by_id[field]['name']] if isinstance(field, str) and field in selected_fields_by_id and field in disabled_custom_ids
+            else []
+        )
+        if field_name
+    ]
+    disabled_custom_names.extend(
+        selected_fields_by_id[field_id]['name']
+        for field_id in disabled_custom_ids
+        if field_id in selected_fields_by_id
+    )
+
+    return disabled_custom_ids, list(dict.fromkeys(disabled_custom_names))
+
 def force_hub_reload():
     if 'hub_data_loaded' in st.session_state:
         del st.session_state['hub_data_loaded']
@@ -463,20 +526,7 @@ with main_tab_system:
         try:
             # 1. Usar a função existente do jira_connector para buscar TUDO
             all_fields_raw = get_jira_fields(st.session_state['jira_client'])
-            all_jira_custom_fields = None
-
-            if all_fields_raw:
-                # 2. Filtrar e formatar a lista APENAS para campos personalizados
-                all_jira_custom_fields = [
-                    {
-                        'id': field['id'],
-                        'name': field['name'],
-                        'type': map_jira_field_type_to_app_type(field.get('schema', {}).get('type'))
-                    }
-                    for field in all_fields_raw 
-                    if field['id'].startswith('customfield_')
-                ]
-                all_jira_custom_fields = sorted(all_jira_custom_fields, key=lambda x: x['name'])
+            all_jira_custom_fields = build_custom_field_catalog(all_fields_raw)
 
             if all_jira_custom_fields is not None:
                 saved_custom_fields = current_configs_for_display.get('custom_fields', [])
@@ -499,11 +549,6 @@ with main_tab_system:
                     if not isinstance(previously_enabled_custom_fields, list):
                         previously_enabled_custom_fields = []
                     selected_fields_by_id = {field['id']: field for field in all_jira_custom_fields}
-                    selected_field_ids_by_name = {
-                        field['name']: field['id']
-                        for field in all_jira_custom_fields
-                        if field.get('id') and field.get('name')
-                    }
                     updated_custom_fields = [
                         {
                             'id': field_id,
@@ -513,41 +558,11 @@ with main_tab_system:
                         for field_id in selected_field_ids
                         if field_id in selected_fields_by_id
                     ]
-
-                    previous_custom_ids = {
-                        field_id
-                        for field in previously_enabled_custom_fields
-                        for field_id in (
-                            [field.get('id')] if isinstance(field, dict) and field.get('id')
-                            else [field] if isinstance(field, str) and field in selected_fields_by_id
-                            else [selected_field_ids_by_name[field]] if isinstance(field, str) and field in selected_field_ids_by_name
-                            else []
-                        )
-                        if field_id
-                    }
-                    new_custom_ids = {
-                        field.get('id')
-                        for field in updated_custom_fields
-                        if isinstance(field, dict) and field.get('id')
-                    }
-                    disabled_custom_ids = list(previous_custom_ids - new_custom_ids)
-                    disabled_custom_names = [
-                        field_name
-                        for field in previously_enabled_custom_fields
-                        for field_name in (
-                            [field.get('name')] if isinstance(field, dict) and field.get('id') in disabled_custom_ids and field.get('name')
-                            else [field] if isinstance(field, str) and field in selected_field_ids_by_name and selected_field_ids_by_name[field] in disabled_custom_ids
-                            else [selected_fields_by_id[field]['name']] if isinstance(field, str) and field in selected_fields_by_id and field in disabled_custom_ids
-                            else []
-                        )
-                        if field_name
-                    ]
-                    disabled_custom_names.extend(
-                        selected_fields_by_id[field_id]['name']
-                        for field_id in disabled_custom_ids
-                        if field_id in selected_fields_by_id
+                    disabled_custom_ids, disabled_custom_names = get_disabled_custom_field_metadata(
+                        previously_enabled_custom_fields,
+                        updated_custom_fields,
+                        selected_fields_by_id,
                     )
-                    disabled_custom_names = list(dict.fromkeys(disabled_custom_names))
 
                     configs_to_save['custom_fields'] = updated_custom_fields
                     save_global_configs(configs_to_save)
