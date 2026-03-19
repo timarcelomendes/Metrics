@@ -408,7 +408,7 @@ if creation_mode == "Construtor Visual":
             
             if config['x'] in date_cols:
                 agg_c1, agg_c2 = st.columns(2)
-                agg_options = ['Nenhum'] + ['Dia', 'Semana', 'Mês', 'Trimestre', 'Ano']
+                agg_options = ['Nenhum'] + ['Dia', 'Semana', 'Quinzena', 'Mês', 'Trimestre', 'Semestre', 'Ano']
                 default_agg_index = agg_options.index(config.get('date_aggregation')) if config.get('date_aggregation') in agg_options else 0
                 config['date_aggregation'] = agg_c1.selectbox("Agrupar data do Eixo X por:", agg_options, index=default_agg_index)
 
