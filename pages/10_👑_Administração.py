@@ -27,6 +27,16 @@ if not is_admin(st.session_state['email']):
 
 configs = get_global_configs() # <-- Variável 'configs' definida aqui
 
+
+def map_jira_field_type_to_app_type(jira_schema_type):
+    """Traduz o tipo bruto do Jira para os tipos usados pelos seletores do app."""
+    normalized_type = str(jira_schema_type or "").lower()
+    if normalized_type in {"number", "float", "integer"}:
+        return "Numérico"
+    if normalized_type in {"date", "datetime"}:
+        return "Data"
+    return "Texto"
+
 def force_hub_reload():
     if 'hub_data_loaded' in st.session_state:
         del st.session_state['hub_data_loaded']
@@ -429,7 +439,11 @@ with main_tab_system:
             if all_fields_raw:
                 # 2. Filtrar e formatar a lista APENAS para campos personalizados
                 all_jira_custom_fields = [
-                    {'id': field['id'], 'name': field['name']} 
+                    {
+                        'id': field['id'],
+                        'name': field['name'],
+                        'type': map_jira_field_type_to_app_type(field.get('schema', {}).get('type'))
+                    }
                     for field in all_fields_raw 
                     if field['id'].startswith('customfield_')
                 ]
@@ -452,9 +466,51 @@ with main_tab_system:
 
                 if st.button("Salvar Campos Personalizados", key="save_custom_fields", width='stretch', type="primary"):
                     configs_to_save = get_global_configs()
-                    updated_custom_fields = [{'id': field_id, 'name': field_display_map[field_id].split(' (')[0]} for field_id in selected_field_ids]
+                    previously_enabled_custom_fields = configs_to_save.get('custom_fields', [])
+                    selected_fields_by_id = {field['id']: field for field in all_jira_custom_fields}
+                    updated_custom_fields = [
+                        {
+                            'id': field_id,
+                            'name': selected_fields_by_id[field_id]['name'],
+                            'type': selected_fields_by_id[field_id].get('type', 'Texto')
+                        }
+                        for field_id in selected_field_ids
+                        if field_id in selected_fields_by_id
+                    ]
+
+                    previous_custom_ids = {
+                        field.get('id')
+                        for field in previously_enabled_custom_fields
+                        if isinstance(field, dict) and field.get('id')
+                    }
+                    new_custom_ids = {
+                        field.get('id')
+                        for field in updated_custom_fields
+                        if isinstance(field, dict) and field.get('id')
+                    }
+                    disabled_custom_ids = list(previous_custom_ids - new_custom_ids)
+                    disabled_custom_names = [
+                        field.get('name')
+                        for field in previously_enabled_custom_fields
+                        if isinstance(field, dict) and field.get('id') in disabled_custom_ids and field.get('name')
+                    ]
+
                     configs_to_save['custom_fields'] = updated_custom_fields
                     save_global_configs(configs_to_save)
+
+                    if disabled_custom_ids:
+                        users_collection = get_users_collection()
+                        users_collection.update_many(
+                            {},
+                            {'$pull': {'enabled_custom_field_ids': {'$in': disabled_custom_ids}}}
+                        )
+                    if disabled_custom_names:
+                        users_collection = get_users_collection()
+                        users_collection.update_many(
+                            {},
+                            {'$pull': {'enabled_custom_fields': {'$in': disabled_custom_names}}}
+                        )
+
                     get_global_configs.clear()
                     st.success("Campos personalizados salvos com sucesso!")
                     st.rerun()

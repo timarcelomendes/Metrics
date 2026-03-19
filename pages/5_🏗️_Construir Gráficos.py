@@ -111,8 +111,8 @@ if df is None or df.empty or not current_project_key:
 st.info("ℹ️ Se você alterou suas preferências de campos na página 'Minha Conta', clique em 'Carregar/Atualizar Dados' na barra lateral para que os novos campos apareçam nas opções abaixo.", icon="🔄")
 st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
 
-global_configs = st.session_state.get('global_configs', {}); user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
-user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+global_configs = get_global_configs() or {}; user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
+user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', []); user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
 
@@ -168,7 +168,8 @@ def is_hours_based_field(field_name: str, field_details: dict | None = None) -> 
 
 master_field_list = []
 for field in all_available_custom:
-    if field.get('name') in user_enabled_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
+    if field.get('id') in user_enabled_custom_field_ids or field.get('name') in user_enabled_custom_fields:
+        master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
 for field_name in user_enabled_standard_fields:
     details = all_available_standard.get(field_name, {})
     if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
