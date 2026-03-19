@@ -115,11 +115,36 @@ global_configs = get_global_configs() or {}; user_data = find_user(st.session_st
 user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', []); user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom_raw = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
+all_jira_fields = get_jira_fields(st.session_state['jira_client']) or []
+all_jira_custom_field_types = {
+    field['id']: field.get('schema', {}).get('type', 'string')
+    for field in all_jira_fields
+    if isinstance(field, dict) and field.get('id', '').startswith('customfield_')
+}
+
+
+def normalize_field_type(field_type):
+    normalized_type = str(field_type or '').strip().lower()
+    if normalized_type in {'numérico', 'numeric', 'number', 'float', 'integer', 'double'}:
+        return 'Numérico'
+    if normalized_type in {'horas', 'hours'}:
+        return 'Horas'
+    if normalized_type in {'data', 'date', 'datetime'}:
+        return 'Data'
+    if normalized_type in {'texto (alfanumérico)', 'texto', 'string', 'option', 'array', 'user', 'status'}:
+        return 'Texto'
+    return 'Texto'
 
 all_available_custom = []
 for field in all_available_custom_raw if isinstance(all_available_custom_raw, list) else []:
     if isinstance(field, dict) and field.get('name'):
-        all_available_custom.append(field)
+        field_id = field.get('id')
+        field_type = field.get('type') or all_jira_custom_field_types.get(field_id)
+        all_available_custom.append({
+            'id': field_id,
+            'name': field['name'],
+            'type': normalize_field_type(field_type),
+        })
     elif isinstance(field, str):
         all_available_custom.append({'id': None, 'name': field, 'type': 'Texto'})
 
@@ -175,8 +200,10 @@ def is_hours_based_field(field_name: str, field_details: dict | None = None) -> 
 
 master_field_list = []
 for field in all_available_custom:
-    if field.get('id') in user_enabled_custom_field_ids or field.get('name') in user_enabled_custom_fields:
-        master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
+    field_id = field.get('id')
+    field_name = field.get('name')
+    if field_id in user_enabled_custom_field_ids or field_name in user_enabled_custom_fields:
+        master_field_list.append({'name': field_name, 'type': normalize_field_type(field.get('type'))})
 for field_name in user_enabled_standard_fields:
     details = all_available_standard.get(field_name, {})
     if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
