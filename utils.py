@@ -666,29 +666,67 @@ def apply_chart_theme(fig, theme_name="Padrão Gauge"):
 
 def get_chart_value_format(chart_config):
     """Formato unificado de valores no chart config (compatível com configs legadas)."""
+    chart_config = chart_config or {}
     return chart_config.get('value_format') or chart_config.get('y_axis_format')
 
 
+KNOWN_JIRA_SECOND_TIME_IDS = {
+    'timespent', 'timeestimate', 'timeoriginalestimate',
+    'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
+}
+
+
+KNOWN_JIRA_SECOND_TIME_LABEL_HINTS = (
+    'tempo gasto', 'time spent', 'remaining estimate', 'time estimate',
+    'estimativa original', 'original estimate',
+)
+
+
+PROJECT_SECOND_TIME_CONFIG_KEYS = ('estimation_field', 'timespent_field')
+
+
+def _get_configured_seconds_field_names() -> set[str]:
+    """Coleta nomes/ids de campos de duração em segundos configurados no projeto/sessão."""
+    fields = set(KNOWN_JIRA_SECOND_TIME_IDS)
+
+    try:
+        standard_fields_map = st.session_state.get('standard_fields_map', {}) or {}
+        for fid, label in standard_fields_map.items():
+            fid_norm = str(fid).strip().lower()
+            if fid_norm in KNOWN_JIRA_SECOND_TIME_IDS and label:
+                fields.add(str(label).strip().lower())
+    except Exception:
+        pass
+
+    try:
+        project_key = st.session_state.get('project_key')
+        if project_key:
+            project_config = get_project_config(project_key) or {}
+            for cfg_key in PROJECT_SECOND_TIME_CONFIG_KEYS:
+                cfg = project_config.get(cfg_key, {}) or {}
+                if cfg.get('source') == 'standard_time':
+                    if cfg.get('id'):
+                        fields.add(str(cfg.get('id')).strip().lower())
+                    if cfg.get('name'):
+                        fields.add(str(cfg.get('name')).strip().lower())
+    except Exception:
+        pass
+
+    return fields
+
+
 def is_seconds_based_time_measure(measure_name: str | None) -> bool:
-    """Heurística para campos de tempo do Jira que chegam em segundos e devem virar horas na visualização."""
+    """Detecta campos Jira de duração em segundos por ID padrão, config do projeto/sessão ou rótulo conhecido."""
     if not measure_name:
         return False
 
     normalized = str(measure_name).strip().lower()
 
-    known_second_ids = {
-        'timespent', 'timeestimate', 'timeoriginalestimate',
-        'aggregatetimespent', 'aggregatetimeestimate', 'aggregatetimeoriginalestimate',
-    }
-    if normalized in known_second_ids:
+    configured_seconds_fields = _get_configured_seconds_field_names()
+    if normalized in KNOWN_JIRA_SECOND_TIME_IDS or normalized in configured_seconds_fields:
         return True
 
-    # Rótulos comuns (PT/EN) usados na aplicação para campos padrão de tempo do Jira.
-    known_second_labels = (
-        'tempo gasto', 'time spent', 'remaining estimate', 'time estimate',
-        'estimativa original', 'original estimate',
-    )
-    return any(label in normalized for label in known_second_labels)
+    return any(label in normalized for label in KNOWN_JIRA_SECOND_TIME_LABEL_HINTS)
 
 
 def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None = None, is_time_in_status_measure: bool = False) -> bool:
