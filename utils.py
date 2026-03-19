@@ -1033,37 +1033,47 @@ def render_chart(chart_config, df, chart_key):
                 plot_df.dropna(subset=[x], inplace=True)
 
                 if pd.api.types.is_datetime64_any_dtype(plot_df[x]):
-                    freq_map = {'Dia': 'D', 'Semana': 'W-MON', 'Mês': 'MS', 'Trimestre': 'QS', 'Ano': 'AS'}
-                    freq = freq_map.get(date_aggregation)
+                    period_map = {'Dia': 'D', 'Semana': 'W-SUN', 'Mês': 'M', 'Trimestre': 'Q', 'Ano': 'Y'}
+                    selected_period = period_map.get(date_aggregation)
 
-                    if freq:
+                    if selected_period:
                         y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
                         agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count', 'contagem distinta': 'nunique'}
-                        
-                        grouping_cols = [pd.Grouper(key=x, freq=freq)]
-                        if color_by and color_by != "Nenhum": grouping_cols.append(color_by)
+                        agg_function_name = agg_map.get(y_agg_func, 'count')
 
-                        agg_function_name = agg_map.get(y_agg_func, 'count') 
+                        period_series = plot_df[x].dt.to_period(selected_period)
+                        period_start_col = f"__{x}_period_start"
+                        period_label_col = f"{x} ({date_aggregation})"
+
+                        plot_df[period_start_col] = period_series.dt.start_time
+
+                        if date_aggregation == 'Dia':
+                            plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                        elif date_aggregation == 'Semana':
+                            period_end = period_series.dt.end_time.dt.normalize()
+                            plot_df[period_label_col] = (
+                                plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                                + ' a ' +
+                                period_end.dt.strftime('%Y-%m-%d')
+                            )
+                        elif date_aggregation == 'Mês':
+                            plot_df[period_label_col] = period_series.astype(str)
+                        elif date_aggregation == 'Trimestre':
+                            plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
+                        elif date_aggregation == 'Ano':
+                            plot_df[period_label_col] = period_series.astype(str)
+
+                        grouping_cols = [period_start_col, period_label_col]
+                        if color_by and color_by != "Nenhum":
+                            grouping_cols.append(color_by)
 
                         agg_dict = {y: agg_function_name}
+                        if size_by and size_by != "Nenhum":
+                            agg_dict[size_by] = 'mean'
 
-                        if size_by and size_by != "Nenhum": 
-                            agg_dict[size_by] = 'mean' 
-
-                        plot_df = plot_df.groupby(grouping_cols, as_index=False).agg(agg_dict)
-                        plot_df = plot_df.sort_values(by=x)
-
-                        x_axis_col_for_plotting = f"{x} ({date_aggregation})"
-                        if date_aggregation == 'Dia':
-                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('%Y-%m-%d')
-                        elif date_aggregation == 'Semana':
-                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('Semana %U (%Y)')
-                        elif date_aggregation == 'Mês':
-                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.strftime('%Y-%m')
-                        elif date_aggregation == 'Trimestre':
-                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str) + '-T' + plot_df[x].dt.quarter.astype(str)
-                        elif date_aggregation == 'Ano':
-                            plot_df[x_axis_col_for_plotting] = plot_df[x].dt.year.astype(str)
+                        plot_df = plot_df.groupby(grouping_cols, as_index=False, dropna=False).agg(agg_dict)
+                        plot_df = plot_df.sort_values(by=period_start_col)
+                        x_axis_col_for_plotting = period_label_col
 
             y_axis_title = chart_config.get('y_axis_title', y)
             is_hours_measure_xy = should_convert_seconds_to_hours(chart_config, y)
