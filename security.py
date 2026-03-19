@@ -225,6 +225,31 @@ def update_user_configs(email, updates_dict):
         upsert=True
     )
 
+def remove_disabled_standard_fields_from_users(disabled_field_ids):
+    """Remove dos utilizadores os campos padrão que deixaram de estar disponíveis globalmente."""
+    disabled_field_ids = [field_id for field_id in set(disabled_field_ids) if field_id]
+    if not disabled_field_ids:
+        return
+
+    get_users_collection().update_many(
+        {},
+        {'$pull': {'standard_fields': {'$in': disabled_field_ids}}}
+    )
+
+def remove_disabled_custom_fields_from_users(disabled_field_ids, disabled_field_names=None):
+    """Remove dos utilizadores os campos customizados que deixaram de estar disponíveis globalmente."""
+    disabled_field_ids = [field_id for field_id in set(disabled_field_ids) if field_id]
+    disabled_field_names = [field_name for field_name in set(disabled_field_names or []) if field_name]
+
+    update_ops = {}
+    if disabled_field_ids:
+        update_ops.setdefault('$pull', {})['enabled_custom_field_ids'] = {'$in': disabled_field_ids}
+    if disabled_field_names:
+        update_ops.setdefault('$pull', {})['enabled_custom_fields'] = {'$in': disabled_field_names}
+
+    if update_ops:
+        get_users_collection().update_many({}, update_ops)
+
 # --- Funções de Gestão de Conexões Jira ---
 def add_jira_connection(user_email, conn_name, url, api_email, encrypted_token):
     get_connections_collection().insert_one({

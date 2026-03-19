@@ -168,7 +168,7 @@ def save_shared_chart_config(new_config: Dict[str, Any]):
 @st.cache_data(ttl=900, show_spinner=False)
 def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_data: dict):
     # --- 1. Importações Locais ---
-    from jira_connector import get_project_issues, get_jira_statuses
+    from jira_connector import get_project_issues, get_jira_statuses, get_jira_fields
     from metrics_calculator import find_completion_date, calculate_cycle_time, calculate_time_in_status, filter_ignored_issues
     
     user_data = _user_data
@@ -199,6 +199,22 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
 
     global_configs = get_global_configs()
     strategic_field_name = global_configs.get('strategic_grouping_field')
+    all_jira_fields = get_jira_fields(_jira_client) or []
+    all_jira_custom_field_types_by_id = {
+        field['id']: field.get('schema', {}).get('type', 'string')
+        for field in all_jira_fields
+        if isinstance(field, dict) and field.get('id', '').startswith('customfield_')
+    }
+
+    def normalize_jira_field_type(raw_type):
+        normalized = str(raw_type or '').strip().lower()
+        if normalized in {'number', 'float', 'integer', 'int', 'double', 'long', 'short', 'decimal', 'numeric'}:
+            return 'Numérico'
+        if normalized in {'date', 'datetime'}:
+            return 'Data'
+        if normalized in {'hours', 'horas'}:
+            return 'Horas'
+        return 'Texto'
 
     if 'project_name' not in st.session_state or not st.session_state.project_name:
         try: 
@@ -242,6 +258,11 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     # --- CORREÇÃO CRÍTICA: Mapeamento de Campos por ID ---
     # Isto garante que o 'customfield_10276' ganhe o nome 'Nível de Atendimento'
     all_custom_field_id_to_name_map = { f['id']: f['name'] for f in global_configs.get('custom_fields', []) if isinstance(f, dict) and 'id' in f and 'name' in f }
+    all_custom_field_name_to_type_map = {
+        f['name']: normalize_jira_field_type(f.get('type') or all_jira_custom_field_types_by_id.get(f.get('id')))
+        for f in global_configs.get('custom_fields', [])
+        if isinstance(f, dict) and 'name' in f
+    }
     
     user_custom_field_name_to_id_map = {}
     
@@ -277,6 +298,12 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
             if isinstance(raw_value, str) and raw_value.isdigit():
                 try: return int(raw_value)
                 except ValueError: pass
+            if isinstance(raw_value, str):
+                try:
+                    numeric_value = pd.to_numeric(raw_value.replace(',', '.'), errors='raise')
+                    return numeric_value.item() if hasattr(numeric_value, 'item') else numeric_value
+                except Exception:
+                    pass
             if hasattr(raw_value, 'displayName'): return raw_value.displayName
             if hasattr(raw_value, 'name'): return raw_value.name 
             if hasattr(raw_value, 'value'): return raw_value.value 
@@ -450,6 +477,14 @@ def load_and_process_project_data(_jira_client: JIRA, project_key: str, _user_da
     for col_name in final_expected_col_names:
             if col_name not in df.columns:
                 df[col_name] = None
+
+    numeric_custom_columns = [
+        field_name
+        for field_name in all_expected_custom_names
+        if all_custom_field_name_to_type_map.get(field_name) in ['Numérico', 'Horas'] and field_name in df.columns
+    ]
+    for col_name in numeric_custom_columns:
+        df[col_name] = pd.to_numeric(df[col_name], errors='coerce')
 
     final_columns_existing_and_expected = sorted([col for col in final_expected_col_names if col in df.columns])
     df = df[final_columns_existing_and_expected]

@@ -409,8 +409,11 @@ with main_tab_system:
         
         if st.button("Salvar Campos Padrão", key="save_standard_fields", width='stretch'):
             configs_to_save = get_global_configs()
+            previously_enabled_standard_fields = set(configs_to_save.get('available_standard_fields', {}).keys())
+            disabled_standard_fields = list(previously_enabled_standard_fields - set(selected_standard_fields))
             configs_to_save['available_standard_fields'] = {field: {} for field in selected_standard_fields}
             save_global_configs(configs_to_save)
+            remove_disabled_standard_fields_from_users(disabled_standard_fields)
             get_global_configs.clear()
             st.success("Campos padrão atualizados com sucesso!")
             st.rerun()
@@ -429,7 +432,11 @@ with main_tab_system:
             if all_fields_raw:
                 # 2. Filtrar e formatar a lista APENAS para campos personalizados
                 all_jira_custom_fields = [
-                    {'id': field['id'], 'name': field['name']} 
+                    {
+                        'id': field['id'],
+                        'name': field['name'],
+                        'type': field.get('schema', {}).get('type', 'string')
+                    }
                     for field in all_fields_raw 
                     if field['id'].startswith('customfield_')
                 ]
@@ -452,9 +459,38 @@ with main_tab_system:
 
                 if st.button("Salvar Campos Personalizados", key="save_custom_fields", width='stretch', type="primary"):
                     configs_to_save = get_global_configs()
-                    updated_custom_fields = [{'id': field_id, 'name': field_display_map[field_id].split(' (')[0]} for field_id in selected_field_ids]
+                    previously_enabled_custom_fields = configs_to_save.get('custom_fields', [])
+                    selected_fields_by_id = {field['id']: field for field in all_jira_custom_fields}
+                    updated_custom_fields = [
+                        {
+                            'id': field_id,
+                            'name': selected_fields_by_id[field_id]['name'],
+                            'type': selected_fields_by_id[field_id].get('type', 'string')
+                        }
+                        for field_id in selected_field_ids
+                        if field_id in selected_fields_by_id
+                    ]
+
+                    previous_custom_ids = {
+                        field.get('id')
+                        for field in previously_enabled_custom_fields
+                        if isinstance(field, dict) and field.get('id')
+                    }
+                    new_custom_ids = {
+                        field.get('id')
+                        for field in updated_custom_fields
+                        if isinstance(field, dict) and field.get('id')
+                    }
+                    disabled_custom_ids = list(previous_custom_ids - new_custom_ids)
+                    disabled_custom_names = [
+                        field.get('name')
+                        for field in previously_enabled_custom_fields
+                        if isinstance(field, dict) and field.get('id') in disabled_custom_ids and field.get('name')
+                    ]
+
                     configs_to_save['custom_fields'] = updated_custom_fields
                     save_global_configs(configs_to_save)
+                    remove_disabled_custom_fields_from_users(disabled_custom_ids, disabled_custom_names)
                     get_global_configs.clear()
                     st.success("Campos personalizados salvos com sucesso!")
                     st.rerun()

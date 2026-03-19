@@ -111,10 +111,28 @@ if df is None or df.empty or not current_project_key:
 st.info("ℹ️ Se você alterou suas preferências de campos na página 'Minha Conta', clique em 'Carregar/Atualizar Dados' na barra lateral para que os novos campos apareçam nas opções abaixo.", icon="🔄")
 st.caption(f"Utilizando dados do projeto: **{st.session_state.project_name}**")
 
-global_configs = st.session_state.get('global_configs', {}); user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
-user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', [])
+global_configs = get_global_configs(); user_data = find_user(st.session_state['email']); project_config = get_project_config(current_project_key) or {}
+user_enabled_standard_fields = user_data.get('standard_fields', []); user_enabled_custom_fields = user_data.get('enabled_custom_fields', []); user_enabled_custom_field_ids = user_data.get('enabled_custom_field_ids', [])
 all_available_standard = global_configs.get('available_standard_fields', {}); all_available_custom = global_configs.get('custom_fields', [])
 project_estimation_field = project_config.get('estimation_field', {})
+all_jira_fields = get_jira_fields(st.session_state['jira_client']) or []
+all_jira_custom_field_types = {
+    field['id']: field.get('schema', {}).get('type', 'string')
+    for field in all_jira_fields
+    if isinstance(field, dict) and field.get('id', '').startswith('customfield_')
+}
+
+
+def normalize_field_type(raw_type: str | None) -> str:
+    normalized = str(raw_type or '').strip().lower()
+
+    if normalized in {'number', 'float', 'integer', 'int', 'double', 'long', 'short', 'decimal', 'numeric'}:
+        return 'Numérico'
+    if normalized in {'date', 'datetime'}:
+        return 'Data'
+    if normalized in {'hours', 'horas'}:
+        return 'Horas'
+    return 'Texto'
 
 
 def is_hours_based_field(field_name: str, field_details: dict | None = None) -> bool:
@@ -167,14 +185,35 @@ def is_hours_based_field(field_name: str, field_details: dict | None = None) -> 
     return '(horas)' in normalized_name or ' hora' in normalized_name
 
 master_field_list = []
+enabled_custom_field_ids_set = set(user_enabled_custom_field_ids)
+enabled_custom_field_names_set = set(user_enabled_custom_fields)
+
 for field in all_available_custom:
-    if field.get('name') in user_enabled_custom_fields: master_field_list.append({'name': field['name'], 'type': field.get('type', 'Texto')})
+    field_id = field.get('id')
+    field_name = field.get('name')
+    if field_id in enabled_custom_field_ids_set or field_name in enabled_custom_field_names_set:
+        field_type = field.get('type') or all_jira_custom_field_types.get(field_id)
+        master_field_list.append({'name': field_name, 'type': normalize_field_type(field_type)})
 for field_name in user_enabled_standard_fields:
     details = all_available_standard.get(field_name, {})
     if details: master_field_list.append({'name': field_name, 'type': details.get('type', 'Texto')})
 if project_estimation_field and project_estimation_field.get('name') not in [f['name'] for f in master_field_list]:
     est_type = 'Numérico' if project_estimation_field.get('source') != 'standard_time' else 'Horas'
     master_field_list.append({'name': project_estimation_field['name'], 'type': est_type})
+
+field_types_by_name = {
+    field['name']: field['type']
+    for field in master_field_list
+    if field.get('name') and field.get('type')
+}
+
+for field_name, field_type in field_types_by_name.items():
+    if field_name not in df.columns:
+        continue
+    if field_type in ['Numérico', 'Horas']:
+        df[field_name] = pd.to_numeric(df[field_name], errors='coerce')
+    elif field_type == 'Data':
+        df[field_name] = pd.to_datetime(df[field_name], errors='coerce')
 
 # Lógica de deteção automática para garantir que todos os campos sejam apanhados
 auto_numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
