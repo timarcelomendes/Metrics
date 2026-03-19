@@ -429,7 +429,11 @@ with main_tab_system:
             if all_fields_raw:
                 # 2. Filtrar e formatar a lista APENAS para campos personalizados
                 all_jira_custom_fields = [
-                    {'id': field['id'], 'name': field['name']} 
+                    {
+                        'id': field['id'],
+                        'name': field['name'],
+                        'type': field.get('schema', {}).get('type', 'string')
+                    }
                     for field in all_fields_raw 
                     if field['id'].startswith('customfield_')
                 ]
@@ -452,7 +456,16 @@ with main_tab_system:
 
                 if st.button("Salvar Campos Personalizados", key="save_custom_fields", width='stretch', type="primary"):
                     configs_to_save = get_global_configs()
-                    updated_custom_fields = [{'id': field_id, 'name': field_display_map[field_id].split(' (')[0]} for field_id in selected_field_ids]
+                    selected_fields_by_id = {field['id']: field for field in all_jira_custom_fields}
+                    updated_custom_fields = [
+                        {
+                            'id': field_id,
+                            'name': selected_fields_by_id[field_id]['name'],
+                            'type': selected_fields_by_id[field_id].get('type', 'string')
+                        }
+                        for field_id in selected_field_ids
+                        if field_id in selected_fields_by_id
+                    ]
                     configs_to_save['custom_fields'] = updated_custom_fields
                     save_global_configs(configs_to_save)
                     get_global_configs.clear()
