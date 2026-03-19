@@ -54,7 +54,8 @@ def load_global_data(_jira_conn, project_keys_tuple, done_statuses_tuple):
 
     project_keys = list(project_keys_tuple)
     
-    quoted_project_keys = ", ".join(f'"{key}"' for key in project_keys)
+    sanitized_project_keys = [str(key).replace('"', '\\"') for key in project_keys]
+    quoted_project_keys = ", ".join(f'"{key}"' for key in sanitized_project_keys)
     jql_query = f'project IN ({quoted_project_keys}) ORDER BY created DESC'
     
     # --- CORREÇÃO: O 'try/except' foi removido daqui ---
