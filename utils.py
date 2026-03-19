@@ -1033,35 +1033,73 @@ def render_chart(chart_config, df, chart_key):
                 plot_df.dropna(subset=[x], inplace=True)
 
                 if pd.api.types.is_datetime64_any_dtype(plot_df[x]):
-                    period_map = {'Dia': 'D', 'Semana': 'W-SUN', 'Mês': 'M', 'Trimestre': 'Q', 'Ano': 'Y'}
-                    selected_period = period_map.get(date_aggregation)
+                    period_start_col = f"__{x}_period_start"
+                    period_label_col = f"{x} ({date_aggregation})"
+                    period_end_col = f"__{x}_period_end"
 
-                    if selected_period:
+                    if date_aggregation == 'Dia':
+                        plot_df[period_start_col] = plot_df[x].dt.floor('D')
+                        plot_df[period_end_col] = plot_df[period_start_col]
+                        plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                    elif date_aggregation == 'Semana':
+                        period_series = plot_df[x].dt.to_period('W-SUN')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = (
+                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                            + ' a ' +
+                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+                        )
+                    elif date_aggregation == 'Quinzena':
+                        month_start = plot_df[x].dt.to_period('M').dt.start_time
+                        is_second_half = plot_df[x].dt.day.gt(15)
+                        plot_df[period_start_col] = month_start + pd.to_timedelta(is_second_half.astype(int) * 15, unit='D')
+                        next_month_start = month_start + pd.offsets.MonthBegin(1)
+                        plot_df[period_end_col] = np.where(
+                            is_second_half,
+                            (next_month_start - pd.Timedelta(days=1)).to_numpy(dtype='datetime64[ns]'),
+                            (month_start + pd.Timedelta(days=14)).to_numpy(dtype='datetime64[ns]')
+                        )
+                        plot_df[period_end_col] = pd.to_datetime(plot_df[period_end_col])
+                        plot_df[period_label_col] = (
+                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                            + ' a ' +
+                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+                        )
+                    elif date_aggregation == 'Mês':
+                        period_series = plot_df[x].dt.to_period('M')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str)
+                    elif date_aggregation == 'Trimestre':
+                        period_series = plot_df[x].dt.to_period('Q')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
+                    elif date_aggregation == 'Semestre':
+                        semester_number = ((plot_df[x].dt.month - 1) // 6) + 1
+                        semester_start_month = (semester_number - 1) * 6 + 1
+                        plot_df[period_start_col] = pd.to_datetime({
+                            'year': plot_df[x].dt.year,
+                            'month': semester_start_month,
+                            'day': 1,
+                        })
+                        plot_df[period_end_col] = plot_df[period_start_col] + pd.DateOffset(months=6) - pd.Timedelta(days=1)
+                        plot_df[period_label_col] = (
+                            plot_df[x].dt.year.astype(str)
+                            + '-S' +
+                            semester_number.astype(str)
+                        )
+                    elif date_aggregation == 'Ano':
+                        period_series = plot_df[x].dt.to_period('Y')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str)
+
+                    if period_start_col in plot_df.columns:
                         y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
                         agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count', 'contagem distinta': 'nunique'}
                         agg_function_name = agg_map.get(y_agg_func, 'count')
-
-                        period_series = plot_df[x].dt.to_period(selected_period)
-                        period_start_col = f"__{x}_period_start"
-                        period_label_col = f"{x} ({date_aggregation})"
-
-                        plot_df[period_start_col] = period_series.dt.start_time
-
-                        if date_aggregation == 'Dia':
-                            plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                        elif date_aggregation == 'Semana':
-                            period_end = period_series.dt.end_time.dt.normalize()
-                            plot_df[period_label_col] = (
-                                plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                                + ' a ' +
-                                period_end.dt.strftime('%Y-%m-%d')
-                            )
-                        elif date_aggregation == 'Mês':
-                            plot_df[period_label_col] = period_series.astype(str)
-                        elif date_aggregation == 'Trimestre':
-                            plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
-                        elif date_aggregation == 'Ano':
-                            plot_df[period_label_col] = period_series.astype(str)
 
                         grouping_cols = [period_start_col, period_label_col]
                         if color_by and color_by != "Nenhum":
