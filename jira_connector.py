@@ -14,6 +14,63 @@ from security import get_project_config
 from metrics_calculator import find_completion_date, calculate_lead_time, calculate_cycle_time
 from pathlib import Path
 
+STANDARD_FIELD_API_MAP = {
+    'AffectedVersions': 'versions',
+    'aggregatetimeoriginalestimate': 'aggregatetimeoriginalestimate',
+    'aggregatetimeestimate': 'aggregatetimeestimate',
+    'aggregatetimespent': 'aggregatetimespent',
+    'aggregateprogress': 'aggregateprogress',
+    'Assignee': 'assignee',
+    'Attachments': 'attachment',
+    'Category': 'category',
+    'Comment': 'comment',
+    'Components': 'components',
+    'Created': 'created',
+    'Creator': 'creator',
+    'Description': 'description',
+    'DueDate': 'duedate',
+    'Environment': 'environment',
+    'FixVersions': 'fixVersions',
+    'IssueType': 'issuetype',
+    'issuelinks': 'issuelinks',
+    'Labels': 'labels',
+    'LastViewed': 'lastViewed',
+    'LinkedIssues': 'issuelinks',
+    'Parent': 'parent',
+    'Priority': 'priority',
+    'Project': 'project',
+    'progress': 'progress',
+    'Reporter': 'reporter',
+    'Resolution': 'resolution',
+    'resolutiondate': 'resolutiondate',
+    'Resolved': 'resolutiondate',
+    'SecurityLevel': 'security',
+    'Status': 'status',
+    'StatusCategory': 'statuscategory',
+    'subtasks': 'subtasks',
+    'Summary': 'summary',
+    'thumbnail': 'thumbnail',
+    'TimeTracking': 'timetracking',
+    'timespent': 'timespent',
+    'timeoriginalestimate': 'timeoriginalestimate',
+    'timeestimate': 'timeestimate',
+    'Updated': 'updated',
+    'Votes': 'votes',
+    'Watchers': 'watches',
+    'workratio': 'workratio',
+}
+
+
+def normalize_standard_fields_for_api(standard_fields):
+    """Converte IDs amigáveis/camel case da app para os nomes esperados pela API do Jira."""
+    normalized_fields = []
+    for field in standard_fields or []:
+        normalized_field = STANDARD_FIELD_API_MAP.get(field, field)
+        if normalized_field not in normalized_fields:
+            normalized_fields.append(normalized_field)
+    return normalized_fields
+
+
 @lru_cache(maxsize=32)
 def connect_to_jira(server, user_email, api_token):
     try:
@@ -272,7 +329,7 @@ def get_project_issues(_client, project_key, jql_filter="", standard_fields=None
         
         # Adiciona os campos padrão habilitados pelo usuário
         if standard_fields:
-            default_fields.extend(standard_fields)
+            default_fields.extend(normalize_standard_fields_for_api(standard_fields))
         
         # Adiciona os campos customizados habilitados pelo usuário
         if custom_fields:
