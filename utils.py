@@ -741,6 +741,89 @@ def should_convert_seconds_to_hours(chart_config: dict, measure_name: str | None
 
     return is_seconds_based_time_measure(measure_name)
 
+def build_date_aggregation_metadata(plot_df: pd.DataFrame, x_col: str, date_aggregation: str):
+    """Cria colunas auxiliares para agregação temporal e devolve metadados do eixo X."""
+    period_start_col = f"__{x_col}_period_start"
+    period_end_col = f"__{x_col}_period_end"
+    period_label_col = f"{x_col} ({date_aggregation})"
+    x_axis_time_settings = None
+
+    if date_aggregation == 'Dia':
+        plot_df[period_start_col] = plot_df[x_col].dt.normalize()
+        plot_df[period_end_col] = plot_df[period_start_col]
+        plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+        x_axis_time_settings = {'dtick': 86400000, 'tickformat': '%d/%m/%Y'}
+
+    elif date_aggregation == 'Semana':
+        period_series = plot_df[x_col].dt.to_period('W-SUN')
+        plot_df[period_start_col] = period_series.dt.start_time
+        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+        plot_df[period_label_col] = (
+            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+            + ' a ' +
+            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+        )
+        x_axis_time_settings = {'dtick': 7 * 24 * 60 * 60 * 1000, 'tickformat': '%d/%m/%Y'}
+
+    elif date_aggregation == 'Quinzena':
+        is_first_half = plot_df[x_col].dt.day.le(15)
+        plot_df[period_start_col] = pd.to_datetime({
+            'year': plot_df[x_col].dt.year,
+            'month': plot_df[x_col].dt.month,
+            'day': is_first_half.map({True: 1, False: 16})
+        })
+        plot_df[period_end_col] = pd.to_datetime({
+            'year': plot_df[x_col].dt.year,
+            'month': plot_df[x_col].dt.month,
+            'day': 15
+        })
+        month_end = plot_df[x_col] + pd.offsets.MonthEnd(0)
+        plot_df.loc[~is_first_half, period_end_col] = month_end[~is_first_half]
+        plot_df[period_label_col] = (
+            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+            + ' a ' +
+            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+        )
+        x_axis_time_settings = {'dtick': 15 * 24 * 60 * 60 * 1000, 'tickformat': '%d/%m/%Y'}
+
+    elif date_aggregation == 'Mês':
+        period_series = plot_df[x_col].dt.to_period('M')
+        plot_df[period_start_col] = period_series.dt.start_time
+        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+        plot_df[period_label_col] = period_series.astype(str)
+        x_axis_time_settings = {'dtick': 'M1', 'tickformat': '%m/%Y'}
+
+    elif date_aggregation == 'Trimestre':
+        period_series = plot_df[x_col].dt.to_period('Q')
+        plot_df[period_start_col] = period_series.dt.start_time
+        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+        plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
+        x_axis_time_settings = {'dtick': 'M3', 'tickformat': '%m/%Y'}
+
+    elif date_aggregation == 'Semestre':
+        semester_start_month = plot_df[x_col].dt.month.le(6).map({True: 1, False: 7})
+        plot_df[period_start_col] = pd.to_datetime({
+            'year': plot_df[x_col].dt.year,
+            'month': semester_start_month,
+            'day': 1
+        })
+        plot_df[period_end_col] = plot_df[period_start_col] + pd.offsets.MonthEnd(6)
+        plot_df[period_label_col] = (
+            plot_df[period_start_col].dt.strftime('%Y-%m')
+            + ' a ' +
+            plot_df[period_end_col].dt.strftime('%Y-%m')
+        )
+        x_axis_time_settings = {'dtick': 'M6', 'tickformat': '%m/%Y'}
+
+    elif date_aggregation == 'Ano':
+        period_series = plot_df[x_col].dt.to_period('Y')
+        plot_df[period_start_col] = period_series.dt.start_time
+        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+        plot_df[period_label_col] = period_series.astype(str)
+        x_axis_time_settings = {'dtick': 'M12', 'tickformat': '%Y'}
+
+    return plot_df, period_start_col, period_label_col, x_axis_time_settings
+
 def render_chart(chart_config, df, chart_key):
     """Renderiza um gráfico com base na configuração, com validação robusta e aplicação de tema de cores."""
     try:
@@ -1035,77 +1118,11 @@ def render_chart(chart_config, df, chart_key):
                 plot_df.dropna(subset=[x], inplace=True)
 
                 if pd.api.types.is_datetime64_any_dtype(plot_df[x]):
-                    period_start_col = f"__{x}_period_start"
-                    period_label_col = f"{x} ({date_aggregation})"
-                    period_end_col = f"__{x}_period_end"
-
-                    if date_aggregation == 'Dia':
-                        plot_df[period_start_col] = plot_df[x].dt.normalize()
-                        plot_df[period_end_col] = plot_df[period_start_col]
-                        plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                        x_axis_time_settings = {'dtick': 86400000, 'tickformat': '%d/%m/%Y'}
-                    elif date_aggregation == 'Semana':
-                        period_series = plot_df[x].dt.to_period('W-SUN')
-                        plot_df[period_start_col] = period_series.dt.start_time
-                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
-                        plot_df[period_label_col] = (
-                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                            + ' a ' +
-                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
-                        )
-                        x_axis_time_settings = {'dtick': 7 * 24 * 60 * 60 * 1000, 'tickformat': '%d/%m/%Y'}
-                    elif date_aggregation == 'Quinzena':
-                        is_first_half = plot_df[x].dt.day.le(15)
-                        plot_df[period_start_col] = pd.to_datetime({
-                            'year': plot_df[x].dt.year,
-                            'month': plot_df[x].dt.month,
-                            'day': is_first_half.map({True: 1, False: 16})
-                        })
-                        plot_df[period_end_col] = pd.to_datetime({
-                            'year': plot_df[x].dt.year,
-                            'month': plot_df[x].dt.month,
-                            'day': 15
-                        })
-                        month_end = plot_df[x] + pd.offsets.MonthEnd(0)
-                        plot_df.loc[~is_first_half, period_end_col] = month_end[~is_first_half]
-                        plot_df[period_label_col] = (
-                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                            + ' a ' +
-                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
-                        )
-                        x_axis_time_settings = {'dtick': 15 * 24 * 60 * 60 * 1000, 'tickformat': '%d/%m/%Y'}
-                    elif date_aggregation == 'Mês':
-                        period_series = plot_df[x].dt.to_period('M')
-                        plot_df[period_start_col] = period_series.dt.start_time
-                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
-                        plot_df[period_label_col] = period_series.astype(str)
-                        x_axis_time_settings = {'dtick': 'M1', 'tickformat': '%m/%Y'}
-                    elif date_aggregation == 'Trimestre':
-                        period_series = plot_df[x].dt.to_period('Q')
-                        plot_df[period_start_col] = period_series.dt.start_time
-                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
-                        plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
-                        x_axis_time_settings = {'dtick': 'M3', 'tickformat': '%m/%Y'}
-                    elif date_aggregation == 'Semestre':
-                        semester_start_month = plot_df[x].dt.month.le(6).map({True: 1, False: 7})
-                        plot_df[period_start_col] = pd.to_datetime({
-                            'year': plot_df[x].dt.year,
-                            'month': semester_start_month,
-                            'day': 1
-                        })
-                        plot_df[period_end_col] = plot_df[period_start_col] + pd.offsets.MonthEnd(6)
-                        plot_df[period_label_col] = (
-                            plot_df[period_start_col].dt.strftime('%Y-%m')
-                            + ' a ' +
-                            plot_df[period_end_col].dt.strftime('%Y-%m')
-                        )
-                        x_axis_time_settings = {'dtick': 'M6', 'tickformat': '%m/%Y'}
-                    elif date_aggregation == 'Ano':
-                        period_series = plot_df[x].dt.to_period('Y')
-                        plot_df[period_start_col] = period_series.dt.start_time
-                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
-                        plot_df[period_label_col] = period_series.astype(str)
-                        x_axis_time_settings = {'dtick': 'M12', 'tickformat': '%Y'}
+                    plot_df, period_start_col, period_label_col, x_axis_time_settings = build_date_aggregation_metadata(
+                        plot_df,
+                        x,
+                        date_aggregation
+                    )
 
                     if period_start_col in plot_df.columns:
                         y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
