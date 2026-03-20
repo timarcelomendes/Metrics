@@ -1027,41 +1027,81 @@ def render_chart(chart_config, df, chart_key):
                 return
 
             x_axis_col_for_plotting = x 
+            x_axis_layout_updates = {}
+            hover_data_config = None
             date_aggregation = chart_config.get('date_aggregation')
             if date_aggregation and date_aggregation != 'Nenhum' and x in plot_df.columns:
                 plot_df[x] = pd.to_datetime(plot_df[x], errors='coerce')
                 plot_df.dropna(subset=[x], inplace=True)
 
                 if pd.api.types.is_datetime64_any_dtype(plot_df[x]):
-                    period_map = {'Dia': 'D', 'Semana': 'W-SUN', 'Mês': 'M', 'Trimestre': 'Q', 'Ano': 'Y'}
-                    selected_period = period_map.get(date_aggregation)
+                    period_start_col = f"__{x}_period_start"
+                    period_label_col = f"{x} ({date_aggregation})"
+                    period_end_col = f"__{x}_period_end"
 
-                    if selected_period:
+                    if date_aggregation == 'Dia':
+                        plot_df[period_start_col] = plot_df[x].dt.floor('D')
+                        plot_df[period_end_col] = plot_df[period_start_col]
+                        plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                    elif date_aggregation == 'Semana':
+                        period_series = plot_df[x].dt.to_period('W-SUN')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = (
+                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                            + ' a ' +
+                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+                        )
+                    elif date_aggregation == 'Quinzena':
+                        month_start = plot_df[x].dt.to_period('M').dt.start_time
+                        is_second_half = plot_df[x].dt.day.gt(15)
+                        plot_df[period_start_col] = month_start + pd.to_timedelta(is_second_half.astype(int) * 15, unit='D')
+                        next_month_start = month_start + pd.offsets.MonthBegin(1)
+                        plot_df[period_end_col] = np.where(
+                            is_second_half,
+                            (next_month_start - pd.Timedelta(days=1)).to_numpy(dtype='datetime64[ns]'),
+                            (month_start + pd.Timedelta(days=14)).to_numpy(dtype='datetime64[ns]')
+                        )
+                        plot_df[period_end_col] = pd.to_datetime(plot_df[period_end_col])
+                        plot_df[period_label_col] = (
+                            plot_df[period_start_col].dt.strftime('%Y-%m-%d')
+                            + ' a ' +
+                            plot_df[period_end_col].dt.strftime('%Y-%m-%d')
+                        )
+                    elif date_aggregation == 'Mês':
+                        period_series = plot_df[x].dt.to_period('M')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str)
+                    elif date_aggregation == 'Trimestre':
+                        period_series = plot_df[x].dt.to_period('Q')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
+                    elif date_aggregation == 'Semestre':
+                        semester_number = ((plot_df[x].dt.month - 1) // 6) + 1
+                        semester_start_month = (semester_number - 1) * 6 + 1
+                        plot_df[period_start_col] = pd.to_datetime({
+                            'year': plot_df[x].dt.year,
+                            'month': semester_start_month,
+                            'day': 1,
+                        })
+                        plot_df[period_end_col] = plot_df[period_start_col] + pd.DateOffset(months=6) - pd.Timedelta(days=1)
+                        plot_df[period_label_col] = (
+                            plot_df[x].dt.year.astype(str)
+                            + '-S' +
+                            semester_number.astype(str)
+                        )
+                    elif date_aggregation == 'Ano':
+                        period_series = plot_df[x].dt.to_period('Y')
+                        plot_df[period_start_col] = period_series.dt.start_time
+                        plot_df[period_end_col] = period_series.dt.end_time.dt.normalize()
+                        plot_df[period_label_col] = period_series.astype(str)
+
+                    if period_start_col in plot_df.columns:
                         y_agg_func = chart_config.get('y_axis_aggregation', 'Média').lower()
                         agg_map = {'soma': 'sum', 'média': 'mean', 'contagem': 'count', 'contagem distinta': 'nunique'}
                         agg_function_name = agg_map.get(y_agg_func, 'count')
-
-                        period_series = plot_df[x].dt.to_period(selected_period)
-                        period_start_col = f"__{x}_period_start"
-                        period_label_col = f"{x} ({date_aggregation})"
-
-                        plot_df[period_start_col] = period_series.dt.start_time
-
-                        if date_aggregation == 'Dia':
-                            plot_df[period_label_col] = plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                        elif date_aggregation == 'Semana':
-                            period_end = period_series.dt.end_time.dt.normalize()
-                            plot_df[period_label_col] = (
-                                plot_df[period_start_col].dt.strftime('%Y-%m-%d')
-                                + ' a ' +
-                                period_end.dt.strftime('%Y-%m-%d')
-                            )
-                        elif date_aggregation == 'Mês':
-                            plot_df[period_label_col] = period_series.astype(str)
-                        elif date_aggregation == 'Trimestre':
-                            plot_df[period_label_col] = period_series.astype(str).str.replace('Q', '-T', regex=False)
-                        elif date_aggregation == 'Ano':
-                            plot_df[period_label_col] = period_series.astype(str)
 
                         grouping_cols = [period_start_col, period_label_col]
                         if color_by and color_by != "Nenhum":
@@ -1073,7 +1113,19 @@ def render_chart(chart_config, df, chart_key):
 
                         plot_df = plot_df.groupby(grouping_cols, as_index=False, dropna=False).agg(agg_dict)
                         plot_df = plot_df.sort_values(by=period_start_col)
-                        x_axis_col_for_plotting = period_label_col
+                        unique_periods = (
+                            plot_df[[period_start_col, period_label_col]]
+                            .drop_duplicates()
+                            .sort_values(by=period_start_col)
+                        )
+                        x_axis_col_for_plotting = period_start_col
+                        hover_data_config = {period_label_col: True, period_start_col: False}
+                        x_axis_layout_updates = {
+                            'type': 'date',
+                            'tickmode': 'array',
+                            'tickvals': unique_periods[period_start_col].tolist(),
+                            'ticktext': unique_periods[period_label_col].tolist(),
+                        }
 
             y_axis_title = chart_config.get('y_axis_title', y)
             is_hours_measure_xy = should_convert_seconds_to_hours(chart_config, y)
@@ -1085,6 +1137,7 @@ def render_chart(chart_config, df, chart_key):
                 "data_frame": plot_df, "x": x_axis_col_for_plotting, "y": y,
                 "color": color_by if color_by and color_by != "Nenhum" else None,
                 "text": y if chart_config.get('show_data_labels') else None,
+                "hover_data": hover_data_config,
             }
 
             fig_func = px.line if chart_type == 'linha' else px.scatter
@@ -1114,6 +1167,8 @@ def render_chart(chart_config, df, chart_key):
                 fig.update_traces(textposition='top center', texttemplate=text_template)
             
             fig.update_layout(title_text=None, xaxis_title=chart_config.get('x_axis_title', x), yaxis_title=y_axis_title)
+            if x_axis_layout_updates:
+                fig.update_xaxes(**x_axis_layout_updates)
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
         elif chart_type == 'indicator':
