@@ -1027,6 +1027,8 @@ def render_chart(chart_config, df, chart_key):
                 return
 
             x_axis_col_for_plotting = x 
+            x_axis_layout_updates = {}
+            hover_data_config = None
             date_aggregation = chart_config.get('date_aggregation')
             if date_aggregation and date_aggregation != 'Nenhum' and x in plot_df.columns:
                 plot_df[x] = pd.to_datetime(plot_df[x], errors='coerce')
@@ -1111,7 +1113,19 @@ def render_chart(chart_config, df, chart_key):
 
                         plot_df = plot_df.groupby(grouping_cols, as_index=False, dropna=False).agg(agg_dict)
                         plot_df = plot_df.sort_values(by=period_start_col)
-                        x_axis_col_for_plotting = period_label_col
+                        unique_periods = (
+                            plot_df[[period_start_col, period_label_col]]
+                            .drop_duplicates()
+                            .sort_values(by=period_start_col)
+                        )
+                        x_axis_col_for_plotting = period_start_col
+                        hover_data_config = {period_label_col: True, period_start_col: False}
+                        x_axis_layout_updates = {
+                            'type': 'date',
+                            'tickmode': 'array',
+                            'tickvals': unique_periods[period_start_col].tolist(),
+                            'ticktext': unique_periods[period_label_col].tolist(),
+                        }
 
             y_axis_title = chart_config.get('y_axis_title', y)
             is_hours_measure_xy = should_convert_seconds_to_hours(chart_config, y)
@@ -1123,6 +1137,7 @@ def render_chart(chart_config, df, chart_key):
                 "data_frame": plot_df, "x": x_axis_col_for_plotting, "y": y,
                 "color": color_by if color_by and color_by != "Nenhum" else None,
                 "text": y if chart_config.get('show_data_labels') else None,
+                "hover_data": hover_data_config,
             }
 
             fig_func = px.line if chart_type == 'linha' else px.scatter
@@ -1152,6 +1167,8 @@ def render_chart(chart_config, df, chart_key):
                 fig.update_traces(textposition='top center', texttemplate=text_template)
             
             fig.update_layout(title_text=None, xaxis_title=chart_config.get('x_axis_title', x), yaxis_title=y_axis_title)
+            if x_axis_layout_updates:
+                fig.update_xaxes(**x_axis_layout_updates)
             st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_xy")
 
         elif chart_type == 'indicator':
