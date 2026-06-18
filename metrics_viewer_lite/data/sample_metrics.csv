@@ -1,0 +1,25 @@
+date,project,owner,metric,value
+2026-01-05,Alpha,Time A,Throughput,24
+2026-01-12,Alpha,Time A,Throughput,28
+2026-01-19,Alpha,Time A,Throughput,31
+2026-01-26,Alpha,Time A,Throughput,26
+2026-02-02,Alpha,Time A,Throughput,35
+2026-02-09,Alpha,Time A,Throughput,33
+2026-01-05,Beta,Time B,Throughput,18
+2026-01-12,Beta,Time B,Throughput,21
+2026-01-19,Beta,Time B,Throughput,20
+2026-01-26,Beta,Time B,Throughput,25
+2026-02-02,Beta,Time B,Throughput,27
+2026-02-09,Beta,Time B,Throughput,29
+2026-01-05,Alpha,Time A,Lead Time,8
+2026-01-12,Alpha,Time A,Lead Time,7
+2026-01-19,Alpha,Time A,Lead Time,6
+2026-01-26,Alpha,Time A,Lead Time,6
+2026-02-02,Alpha,Time A,Lead Time,5
+2026-02-09,Alpha,Time A,Lead Time,5
+2026-01-05,Beta,Time B,Lead Time,12
+2026-01-12,Beta,Time B,Lead Time,11
+2026-01-19,Beta,Time B,Lead Time,10
+2026-01-26,Beta,Time B,Lead Time,9
+2026-02-02,Beta,Time B,Lead Time,8
+2026-02-09,Beta,Time B,Lead Time,8
